@@ -1388,6 +1388,33 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
 /* ============================================================
    Admin dashboard
    ============================================================ */
+/* A search box kept as its OWN small component with its own local state.
+   Typing a keystroke here only re-renders this tiny component — not the
+   whole Swimmers tab (which used to happen when the draft text lived in
+   AdminView's state directly). That was fast enough on a desktop CPU to be
+   invisible, but slow enough on a phone's CPU that fast typing could pile
+   up re-renders faster than the phone could keep up, freezing the page.
+   onSearch fires ~200ms after typing pauses — that's what actually
+   triggers the (cheap, small) query against the roster. */
+function SwimmerSearchInput({ onSearch }) {
+  const [value, setValue] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => onSearch(value), 200);
+    return () => clearTimeout(t);
+  }, [value, onSearch]);
+  return (
+    <div className="relative flex-1 min-w-[220px] max-w-2xl">
+      <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+      <input
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder="Search by name or phone"
+        className="w-full border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-sm outline-none focus:border-blue-900"
+      />
+    </div>
+  );
+}
+
 function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   const [authed, setAuthed] = useState(preAuthed);
   const [pass, setPass] = useState("");
@@ -1419,16 +1446,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   // marked paid yet because they still need a day/time assigned
   const [scheduleNeededNotice, setScheduleNeededNotice] = useState(null);
   const [search, setSearch] = useState("");
-  // The input itself updates instantly (searchDraft), but the value that
-  // actually drives filtering/re-rendering the swimmer list (search) only
-  // updates ~200ms after typing stops. Recomputing + re-rendering the whole
-  // list on every single keystroke is what made the search box feel
-  // sluggish with a large roster — this keeps typing itself snappy.
-  const [searchDraft, setSearchDraft] = useState("");
-  useEffect(() => {
-    const t = setTimeout(() => setSearch(searchDraft), 200);
-    return () => clearTimeout(t);
-  }, [searchDraft]);
+  // The search box is its own isolated component (SwimmerSearchInput,
+  // below) with its own local state — typing a keystroke only re-renders
+  // that tiny component, not this entire tab. Tying every keystroke
+  // directly to THIS component's state (as it used to) meant every
+  // character re-rendered the whole Swimmers tab, which was fast enough on
+  // a desktop CPU to go unnoticed but slow enough on a phone to pile up
+  // and freeze the page. `search` here only updates ~200ms after typing
+  // stops (handled inside SwimmerSearchInput), which is what actually
+  // drives the query.
   // Rendering hundreds of swimmer cards at once is the other big source of
   // lag on a large roster — only render a page at a time, with a "Show
   // more" button, and reset back to one page whenever the filtered set
@@ -2548,15 +2574,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         <div>
           <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
             <div className="flex items-center gap-2 flex-1 flex-wrap">
-              <div className="relative flex-1 min-w-[220px] max-w-2xl">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                <input
-                  value={searchDraft}
-                  onChange={(e) => setSearchDraft(e.target.value)}
-                  placeholder="Search by name or phone"
-                  className="w-full border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-sm outline-none focus:border-blue-900"
-                />
-              </div>
+              <SwimmerSearchInput onSearch={setSearch} />
               {BRANCHES.length > 1 && (
                 <select
                   value={branchFilter}
