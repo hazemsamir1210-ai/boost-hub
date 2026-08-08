@@ -2460,7 +2460,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         <div>
           <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
             <div className="flex items-center gap-2 flex-1 flex-wrap">
-              <div className="relative flex-1 max-w-md">
+              <div className="relative flex-1 min-w-[220px] max-w-2xl">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
                 <input
                   value={searchDraft}
@@ -2469,16 +2469,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                   className="w-full border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-sm outline-none focus:border-blue-900"
                 />
               </div>
-              <select
-                value={branchFilter}
-                onChange={(e) => setBranchFilter(e.target.value)}
-                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
-              >
-                <option value="all">All branches</option>
-                {BRANCHES.map((b) => (
-                  <option key={b.id} value={b.id}>{b.name}</option>
-                ))}
-              </select>
+              {BRANCHES.length > 1 && (
+                <select
+                  value={branchFilter}
+                  onChange={(e) => setBranchFilter(e.target.value)}
+                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                >
+                  <option value="all">All branches</option>
+                  {BRANCHES.map((b) => (
+                    <option key={b.id} value={b.id}>{b.name}</option>
+                  ))}
+                </select>
+              )}
               <select
                 value={levelFilter}
                 onChange={(e) => setLevelFilter(e.target.value)}
