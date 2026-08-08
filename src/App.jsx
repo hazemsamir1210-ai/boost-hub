@@ -4295,14 +4295,23 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   const loadSwimmers = useCallback(async () => {
     setLoading(true);
     try {
-      const items = await loadCollection(STORE_KEYS.swimmers);
-      setSwimmers(items);
+      // Only fetch swimmers in THIS exact session (branch/day/time, and
+      // level if this account is restricted to one) — a staff member is
+      // only ever looking at one session at a time, so there's no reason
+      // to load the whole roster to show it.
+      let query = supabase.from("swimmers").select("data").eq("branch", branch)
+        .filter("data->>day", "eq", dayGroup)
+        .filter("data->>time", "eq", time);
+      if (effectiveLevel) query = query.eq("level", effectiveLevel);
+      const { data, error } = await query;
+      if (error) throw error;
+      setSwimmers((data || []).map((r) => r.data));
     } catch (e) {
       console.warn("load swimmers failed", e);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [branch, dayGroup, time, effectiveLevel]);
 
   useEffect(() => {
     if (!authed) return;
@@ -4315,15 +4324,15 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   const todaysGroup = dayGroupForToday();
 
   const markAttendance = async (swimmer, status) => {
-    const attendance = { ...(swimmer.attendance || {}) };
-    if (attendance[today] === status) delete attendance[today];
-    else attendance[today] = status;
-    const trainingDates = Array.from(new Set([...(swimmer.trainingDates || []), today])).sort();
-    const updated = { ...swimmer, attendance, trainingDates };
-    const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
-    setSwimmers(nextSwimmers);
     try {
-      await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
+      const updated = await updateSwimmerById(swimmer.id, (s) => {
+        const attendance = { ...(s.attendance || {}) };
+        if (attendance[today] === status) delete attendance[today];
+        else attendance[today] = status;
+        const trainingDates = Array.from(new Set([...(s.trainingDates || []), today])).sort();
+        return { ...s, attendance, trainingDates };
+      });
+      setSwimmers((prev) => prev.map((s) => (s.id === swimmer.id ? updated : s)));
     } catch (e) {
       loadSwimmers();
     }
@@ -4331,16 +4340,15 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
 
   const saveNote = async (swimmer) => {
     const text = (noteDraft[swimmer.id] ?? swimmer.sessionNotes?.[today] ?? "").trim();
-    const sessionNotes = { ...(swimmer.sessionNotes || {}) };
-    if (text) sessionNotes[today] = text;
-    else delete sessionNotes[today];
-    const updated = { ...swimmer, sessionNotes };
-    const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
     setNoteStatus((prev) => ({ ...prev, [swimmer.id]: "saving" }));
-    setSwimmers(nextSwimmers);
     try {
-      const res = await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
-      if (!res) throw new Error("save failed");
+      const updated = await updateSwimmerById(swimmer.id, (s) => {
+        const sessionNotes = { ...(s.sessionNotes || {}) };
+        if (text) sessionNotes[today] = text;
+        else delete sessionNotes[today];
+        return { ...s, sessionNotes };
+      });
+      setSwimmers((prev) => prev.map((s) => (s.id === swimmer.id ? updated : s)));
       setNoteStatus((prev) => ({ ...prev, [swimmer.id]: "saved" }));
       setTimeout(() => setNoteStatus((prev) => ({ ...prev, [swimmer.id]: undefined })), 2000);
     } catch (e) {
@@ -4350,26 +4358,24 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   };
 
   const setSkillRating = async (swimmer, skill, rating) => {
-    const level = swimmer.level;
-    const levelSkills = { ...(swimmer.skills?.[level] || {}) };
-    levelSkills[skill] = rating;
-    const updated = { ...swimmer, skills: { ...(swimmer.skills || {}), [level]: levelSkills } };
-    const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
-    setSwimmers(nextSwimmers);
     try {
-      await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
+      const updated = await updateSwimmerById(swimmer.id, (s) => {
+        const level = s.level;
+        const levelSkills = { ...(s.skills?.[level] || {}) };
+        levelSkills[skill] = rating;
+        return { ...s, skills: { ...(s.skills || {}), [level]: levelSkills } };
+      });
+      setSwimmers((prev) => prev.map((s) => (s.id === swimmer.id ? updated : s)));
     } catch (e) {
       loadSwimmers();
     }
   };
 
   const levelUp = async (swimmer) => {
-    const updated = levelUpSwimmer(swimmer);
-    if (updated === swimmer) return; // already at the top level
-    const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
-    setSwimmers(nextSwimmers);
     try {
-      await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
+      const updated = await updateSwimmerById(swimmer.id, levelUpSwimmer);
+      if (updated === swimmer) return; // already at the top level
+      setSwimmers((prev) => prev.map((s) => (s.id === swimmer.id ? updated : s)));
     } catch (e) {
       loadSwimmers();
     }
@@ -4412,9 +4418,9 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
     );
   }
 
-  const sessionSwimmers = swimmers.filter(
-    (s) => s.branch === branch && s.day === dayGroup && s.time === time && (!effectiveLevel || s.level === effectiveLevel)
-  );
+  // `swimmers` is already scoped to this exact session by loadSwimmers,
+  // so no further filtering is needed here.
+  const sessionSwimmers = swimmers;
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
@@ -4638,16 +4644,23 @@ function CoachView({ onExit }) {
   }, []);
 
   const loadSwimmers = useCallback(async () => {
+    if (!authedCoach) return;
     setLoading(true);
     try {
-      const items = await loadCollection(STORE_KEYS.swimmers);
-      setSwimmers(items);
+      // Only fetch swimmers assigned to THIS coach — a coach never needs
+      // to see the whole roster, so there is no reason to load everyone.
+      const { data, error } = await supabase
+        .from("swimmers")
+        .select("data")
+        .filter("data->>coachId", "eq", authedCoach.id);
+      if (error) throw error;
+      setSwimmers((data || []).map((r) => r.data));
     } catch (e) {
       console.warn("load swimmers failed", e);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [authedCoach]);
 
   useEffect(() => {
     if (!authedCoach) return;
