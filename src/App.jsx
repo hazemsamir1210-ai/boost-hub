@@ -1383,7 +1383,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   // more" button, and reset back to one page whenever the filtered set
   // changes (new search, different filter) so it doesn't stay scrolled
   // deep into a now-irrelevant list.
-  const SWIMMERS_PAGE_SIZE = 40;
+  const SWIMMERS_PAGE_SIZE = 10;
   const [visibleSwimmerCount, setVisibleSwimmerCount] = useState(SWIMMERS_PAGE_SIZE);
   const [branchFilter, setBranchFilter] = useState("all");
   const [levelFilter, setLevelFilter] = useState("all");
@@ -2460,7 +2460,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         <div>
           <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
             <div className="flex items-center gap-2 flex-1 flex-wrap">
-              <div className="relative flex-1 max-w-xs">
+              <div className="relative flex-1 max-w-md">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
                 <input
                   value={searchDraft}
