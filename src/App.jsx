@@ -1483,6 +1483,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   // bulk import from Excel
   const [importPreview, setImportPreview] = useState(null); // { valid: [...], errors: [...] }
   const [importing, setImporting] = useState(false);
+  const [exportingSwimmers, setExportingSwimmers] = useState(false);
   const [importError, setImportError] = useState("");
   const fileInputRef = useRef(null);
   const [expandedId, setExpandedId] = useState(null);
@@ -1830,6 +1831,41 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   };
 
   // Bulk import: pick a file -> parse & preview -> confirm -> one single write
+  // Exports the FULL roster (every swimmer, not just the current
+  // page/search) to an .xlsx file the admin can open in Excel — fetched
+  // fresh for this one-off action rather than kept loaded all the time.
+  const exportSwimmersToExcel = async () => {
+    setExportingSwimmers(true);
+    try {
+      const all = await fetchAllSwimmers();
+      const rows = all
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((s) => ({
+          Name: s.name,
+          Age: s.age,
+          Phone: s.phone,
+          Branch: BRANCHES.find((b) => b.id === s.branch)?.name || s.branch || "",
+          Level: s.level || "",
+          Day: DAY_GROUPS.find((d) => d.id === s.day)?.label || "Not scheduled",
+          Time: s.time || "",
+          "Session type": SESSION_TYPES.find((t) => t.id === s.sessionType)?.label || s.sessionType || "",
+          Coach: coaches.find((c) => c.id === s.coachId)?.name || "",
+          "Paid this month": isPaidThisMonth(s) ? "Yes" : "No",
+          Frozen: isFrozen(s) ? `Until ${s.frozenUntil}` : "No",
+          Notes: s.notes || "",
+          "Registered on": (s.createdAt || "").slice(0, 10),
+        }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Swimmers");
+      XLSX.writeFile(wb, `swimmers-${todayISO()}.xlsx`);
+    } catch (e) {
+      console.warn("Export failed", e);
+    } finally {
+      setExportingSwimmers(false);
+    }
+  };
+
   const handleImportFile = async (file) => {
     if (!file) return;
     setImportError("");
@@ -2685,6 +2721,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                     className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-slate-200 text-slate-600 text-sm font-semibold hover:bg-slate-50"
                   >
                     <FileUp className="w-4 h-4" /> Import Excel
+                  </button>
+                  <button
+                    onClick={exportSwimmersToExcel}
+                    disabled={exportingSwimmers}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-slate-200 text-slate-600 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
+                  >
+                    {exportingSwimmers ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
+                    {exportingSwimmers ? "Exporting..." : "Export Excel"}
                   </button>
                   <button
                     onClick={() => { setEditingSwimmer(null); setPendingActivationId(null); setShowForm(true); }}
@@ -4996,6 +5040,76 @@ function StaffPortal({ onExit }) {
 /* ============================================================
    Home page
    ============================================================ */
+/* Shows one achievement photo at a time on the public homepage, advancing
+   to the next one automatically every 6 seconds (and looping back to the
+   start). Small dots below let a visitor jump to a specific photo, and
+   pause the auto-advance timer while they're doing that. */
+function AchievementsSlideshow({ achievements }) {
+  const [index, setIndex] = useState(0);
+  const [paused, setPaused] = useState(false);
+
+  // Keep the current index in range if the photo list itself changes
+  // (e.g. the admin adds/removes photos while someone has the page open).
+  useEffect(() => {
+    if (index >= achievements.length) setIndex(0);
+  }, [achievements.length, index]);
+
+  useEffect(() => {
+    if (paused || achievements.length <= 1) return;
+    const t = setInterval(() => {
+      setIndex((i) => (i + 1) % achievements.length);
+    }, 6000);
+    return () => clearInterval(t);
+  }, [paused, achievements.length]);
+
+  const current = achievements[index];
+  if (!current) return null;
+
+  return (
+    <section className="max-w-3xl mx-auto px-4 py-12">
+      <h2 className="text-2xl font-bold text-slate-900 text-center mb-2">Our Swimmers' Achievements</h2>
+      <p className="text-slate-500 text-center mb-8">Proud moments from the pool</p>
+      <div
+        className="relative rounded-2xl overflow-hidden border border-slate-200 bg-slate-50"
+        onMouseEnter={() => setPaused(true)}
+        onMouseLeave={() => setPaused(false)}
+      >
+        <img src={current.dataUri} alt="" className="w-full h-72 sm:h-96 object-contain bg-slate-50" />
+        {achievements.length > 1 && (
+          <>
+            <button
+              onClick={() => setIndex((i) => (i - 1 + achievements.length) % achievements.length)}
+              className="absolute left-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-white/80 hover:bg-white flex items-center justify-center shadow"
+              aria-label="Previous photo"
+            >
+              <ChevronLeft className="w-5 h-5 text-slate-700" />
+            </button>
+            <button
+              onClick={() => setIndex((i) => (i + 1) % achievements.length)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-white/80 hover:bg-white flex items-center justify-center shadow rotate-180"
+              aria-label="Next photo"
+            >
+              <ChevronLeft className="w-5 h-5 text-slate-700" />
+            </button>
+          </>
+        )}
+      </div>
+      {achievements.length > 1 && (
+        <div className="flex items-center justify-center gap-1.5 mt-4">
+          {achievements.map((a, i) => (
+            <button
+              key={a.id}
+              onClick={() => setIndex(i)}
+              aria-label={`Go to photo ${i + 1}`}
+              className={`w-2 h-2 rounded-full transition ${i === index ? "bg-blue-950 w-5" : "bg-slate-300"}`}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function HomeView({ onChoosePlan, onAdmin, onStaff, onCoach, onStaffPortal }) {
   const hasPhotos = CONFIG.heroPhotos && CONFIG.heroPhotos.length > 0;
   const [menuOpen, setMenuOpen] = useState(false);
@@ -5091,20 +5205,7 @@ function HomeView({ onChoosePlan, onAdmin, onStaff, onCoach, onStaffPortal }) {
       )}
 
       {achievements.length > 0 && (
-        <section className="max-w-5xl mx-auto px-4 py-12">
-          <h2 className="text-2xl font-bold text-slate-900 text-center mb-2">Our Swimmers' Achievements</h2>
-          <p className="text-slate-500 text-center mb-8">Proud moments from the pool</p>
-          <div className="flex gap-3 overflow-x-auto pb-2 snap-x snap-mandatory scroll-smooth" style={{ scrollbarWidth: "thin" }}>
-            {achievements.map((a) => (
-              <img
-                key={a.id}
-                src={a.dataUri}
-                alt=""
-                className="h-44 sm:h-56 w-auto shrink-0 object-cover rounded-xl border border-slate-200 snap-start"
-              />
-            ))}
-          </div>
-        </section>
+        <AchievementsSlideshow achievements={achievements} />
       )}
 
       <section className="py-16">
