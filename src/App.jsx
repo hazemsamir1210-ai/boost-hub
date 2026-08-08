@@ -1378,6 +1378,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     const t = setTimeout(() => setSearch(searchDraft), 200);
     return () => clearTimeout(t);
   }, [searchDraft]);
+  // Rendering hundreds of swimmer cards at once is the other big source of
+  // lag on a large roster — only render a page at a time, with a "Show
+  // more" button, and reset back to one page whenever the filtered set
+  // changes (new search, different filter) so it doesn't stay scrolled
+  // deep into a now-irrelevant list.
+  const SWIMMERS_PAGE_SIZE = 40;
+  const [visibleSwimmerCount, setVisibleSwimmerCount] = useState(SWIMMERS_PAGE_SIZE);
   const [branchFilter, setBranchFilter] = useState("all");
   const [levelFilter, setLevelFilter] = useState("all");
   const [dayFilter, setDayFilter] = useState("all");
@@ -1467,6 +1474,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     }
   }, []);
 
+  // Skip the state update (and the full-list re-render it triggers) when
+  // the data hasn't actually changed since the last poll — with a large
+  // roster, re-rendering hundreds of swimmer cards every 15s regardless of
+  // whether anything changed is what made the tab feel heavy.
+  const lastSwimmersJSONRef = useRef("");
+
   const loadSwimmers = useCallback(async () => {
     setSwimmersLoading(true);
     try {
@@ -1493,7 +1506,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         }
         resetCheckedForMonthRef.current = key;
       }
-      setSwimmers(finalItems.sort((a, b) => a.name.localeCompare(b.name)));
+      const sorted = finalItems.sort((a, b) => a.name.localeCompare(b.name));
+      const json = JSON.stringify(sorted);
+      if (json !== lastSwimmersJSONRef.current) {
+        lastSwimmersJSONRef.current = json;
+        setSwimmers(sorted);
+      }
     } catch (e) {
       console.warn("load swimmers failed", e);
     } finally {
@@ -2148,6 +2166,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     return true;
   }), [swimmers, branchFilter, levelFilter, dayFilter, timeFilter, sessionTypeFilter, paymentStatusFilter, paymentMonthFilter, search]);
 
+  useEffect(() => {
+    setVisibleSwimmerCount(SWIMMERS_PAGE_SIZE);
+  }, [branchFilter, levelFilter, dayFilter, timeFilter, sessionTypeFilter, paymentStatusFilter, paymentMonthFilter, search]);
+
   // Only offer times that are actually in use, sorted chronologically
   const timeOptions = React.useMemo(() => Array.from(new Set(swimmers.map((s) => s.time).filter(Boolean))).sort(
     (a, b) => timeToMinutes(a) - timeToMinutes(b)
@@ -2597,7 +2619,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           )}
 
           <div className="space-y-2">
-            {filteredSwimmers.map((s) => (
+            {filteredSwimmers.slice(0, visibleSwimmerCount).map((s) => (
               <div key={s.id} className="bg-white rounded-2xl border border-slate-200 p-3">
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="min-w-[120px]">
@@ -2942,6 +2964,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
               </div>
             ))}
           </div>
+
+          {visibleSwimmerCount < filteredSwimmers.length && (
+            <div className="text-center mt-4">
+              <button
+                onClick={() => setVisibleSwimmerCount((c) => c + SWIMMERS_PAGE_SIZE)}
+                className="px-5 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200"
+              >
+                Show more ({filteredSwimmers.length - visibleSwimmerCount} left)
+              </button>
+            </div>
+          )}
         </div>
       )}
 
