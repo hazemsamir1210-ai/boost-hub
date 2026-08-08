@@ -1126,7 +1126,7 @@ function SubscribeView({ initialPlanId, onSubmitted, onBack }) {
 /* ============================================================
    Swimmer registration form (used for both add & edit)
    ============================================================ */
-function SwimmerForm({ initial, coaches, swimmers, onSave, onCancel, requireSchedule = false }) {
+function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = false }) {
   const isNew = !initial;
   const [name, setName] = useState(initial?.name || "");
   const [age, setAge] = useState(initial?.age || "");
@@ -1168,8 +1168,34 @@ function SwimmerForm({ initial, coaches, swimmers, onSave, onCancel, requireSche
   const [saving, setSaving] = useState(false);
   const recordIdRef = useRef(initial?.id || genId());
 
-  // How full the chosen coach already is for this exact day + time slot
-  const slotUsage = coachSlotUsage(swimmers || [], coachId, day, time, initial?.id);
+  // How full the chosen coach already is for this exact day + time slot.
+  // Looked up live from Supabase (just this one coach/day/time, not the
+  // whole roster) instead of needing every swimmer loaded in memory.
+  const [slotUsage, setSlotUsage] = useState([]);
+  useEffect(() => {
+    if (!coachId || !day || !time) {
+      setSlotUsage([]);
+      return;
+    }
+    let cancelled = false;
+    supabase
+      .from("swimmers")
+      .select("data")
+      .filter("data->>coachId", "eq", coachId)
+      .filter("data->>day", "eq", day)
+      .filter("data->>time", "eq", time)
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          setSlotUsage([]);
+          return;
+        }
+        setSlotUsage((data || []).map((r) => r.data).filter((s) => s.id !== initial?.id));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [coachId, day, time, initial?.id]);
   const slotType = slotUsage[0]?.sessionType;
   const capacity = sessionTypeInfo(sessionType).capacity;
   const slotMismatch = coachId && slotUsage.length > 0 && slotType !== sessionType;
@@ -1183,7 +1209,7 @@ function SwimmerForm({ initial, coaches, swimmers, onSave, onCancel, requireSche
     if (requireSchedule && (!day || !time)) return setError("Choose a day and time to activate this month's payment");
 
     if (coachId) {
-      const usage = coachSlotUsage(swimmers || [], coachId, day, time, initial?.id);
+      const usage = slotUsage;
       if (usage.length > 0 && usage[0].sessionType !== sessionType) {
         return setError(`This coach already has a ${sessionTypeInfo(usage[0].sessionType).label} session at this time`);
       }
@@ -1634,24 +1660,26 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   useEffect(() => {
     if (!authed) return;
     loadRequests();
-    loadSwimmers();
     loadCoaches();
     loadExpenses();
     loadAccounts();
     loadAchievements();
-    // Requests and swimmers are needed on almost every tab, so they always
-    // stay live. Expenses and accounts are only shown on their own tabs —
-    // polling them in the background on every tab, every 15s, was wasted
-    // work that grows with how much data has piled up (more swimmers/
-    // requests/expenses = more JSON to parse and re-sort each cycle, even
-    // while looking at an unrelated tab). Only refresh them while their
-    // tab is actually open.
+    // The full swimmers roster (loadSwimmers) is now ONLY loaded for the
+    // Reports/Coaches tabs, which are the only places that genuinely need
+    // to see everyone at once for their totals. Continuously holding
+    // 1000+ swimmer records in memory just in case is what made phones
+    // run out of memory and show a blank page — the Swimmers tab itself
+    // now fetches its own small, searched/paginated slice (loadSwimmersPage),
+    // and every action on it (payments, freezing, editing...) reads/writes
+    // the full roster fresh each time via fetchAllSwimmers/updateSwimmerById
+    // instead of keeping it sitting in state.
+    if (tab === "reports" || tab === "coaches") loadSwimmers();
     const t = setInterval(() => {
       loadRequests();
-      loadSwimmers();
       loadCoaches();
       if (tab === "reports") loadExpenses();
       if (tab === "accounts") loadAccounts();
+      if (tab === "reports" || tab === "coaches") loadSwimmers();
     }, 15000);
     return () => clearInterval(t);
   }, [authed, tab, loadRequests, loadSwimmers, loadCoaches, loadExpenses, loadAccounts, loadAchievements]);
@@ -1701,31 +1729,32 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     // from the Swimmers tab instead, which asks for a schedule first.
     if (status === "confirmed") {
       const key = monthKey();
-      const matches = record.swimmerId
-        ? swimmers.filter((s) => s.id === record.swimmerId)
-        : swimmers.filter((s) => s.phone === record.phone);
-      const readyToMark = matches.filter((s) => s.day && s.time && !(s.paidMonths || []).includes(key));
-      const needsSchedule = matches.filter((s) => (!s.day || !s.time) && !(s.paidMonths || []).includes(key));
-      if (readyToMark.length > 0) {
-        const nextSwimmers = swimmers.map((s) =>
-          readyToMark.some((m) => m.id === s.id) ? { ...s, paidMonths: [...(s.paidMonths || []), key] } : s
-        );
-        setSwimmers(nextSwimmers);
-        loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
-        try {
-          await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
-        } catch (e) {
-          loadSwimmers();
+      try {
+        const all = await fetchAllSwimmers();
+        const matches = record.swimmerId
+          ? all.filter((s) => s.id === record.swimmerId)
+          : all.filter((s) => s.phone === record.phone);
+        const readyToMark = matches.filter((s) => s.day && s.time && !(s.paidMonths || []).includes(key));
+        const needsSchedule = matches.filter((s) => (!s.day || !s.time) && !(s.paidMonths || []).includes(key));
+        if (readyToMark.length > 0) {
+          const next = all.map((s) =>
+            readyToMark.some((m) => m.id === s.id) ? { ...s, paidMonths: [...(s.paidMonths || []), key] } : s
+          );
+          const res = await saveCollection(STORE_KEYS.swimmers, next);
+          if (res) loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
         }
-      }
-      if (needsSchedule.length > 0) {
-        setScheduleNeededNotice(needsSchedule.map((s) => s.name));
+        if (needsSchedule.length > 0) {
+          setScheduleNeededNotice(needsSchedule.map((s) => s.name));
+        }
+      } catch (e) {
+        console.warn("Could not auto-mark swimmer paid", e);
       }
     }
   };
 
   const saveSwimmer = async (record) => {
-    const existing = swimmers.find((s) => s.id === record.id);
+    const all = await fetchAllSwimmers();
+    const existing = all.find((s) => s.id === record.id);
     // Track a level history entry whenever the level actually changes
     let levelHistory = record.levelHistory || [];
     if (!existing) {
@@ -1744,14 +1773,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
 
     const finalRecord = { ...record, levelHistory, paidMonths };
 
-    const nextSwimmers = existing
-      ? swimmers.map((s) => (s.id === finalRecord.id ? finalRecord : s))
-      : [...swimmers, finalRecord];
+    const next = existing
+      ? all.map((s) => (s.id === finalRecord.id ? finalRecord : s))
+      : [...all, finalRecord];
 
-    const res = await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
+    const res = await saveCollection(STORE_KEYS.swimmers, next);
     if (!res) throw new Error("Could not save the swimmer, please try again");
 
-    setSwimmers(nextSwimmers);
     loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     setShowForm(false);
     setEditingSwimmer(null);
@@ -1762,13 +1790,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     setConfirmAction({
       message: `Remove ${swimmer.name} from the roster?`,
       onConfirm: async () => {
-        const nextSwimmers = swimmers.filter((s) => s.id !== swimmer.id);
         try {
-          await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
-          setSwimmers(nextSwimmers);
+          const all = await fetchAllSwimmers();
+          const next = all.filter((s) => s.id !== swimmer.id);
+          const res = await saveCollection(STORE_KEYS.swimmers, next);
+          if (!res) throw new Error("delete failed");
           loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
         } catch (e) {
-          loadSwimmers();
+          loadSwimmersPage({ offset: 0 });
         }
       },
     });
@@ -1788,6 +1817,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         setImportError("That file doesn't have any rows to import");
         return;
       }
+      const existingAll = await fetchAllSwimmers();
       const valid = [];
       const duplicates = [];
       const errors = [];
@@ -1799,7 +1829,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           return;
         }
         const { record, warnings } = result;
-        const existing = swimmers.find((s) => s.phone === record.phone && s.name.trim().toLowerCase() === record.name.trim().toLowerCase());
+        const existing = existingAll.find((s) => s.phone === record.phone && s.name.trim().toLowerCase() === record.name.trim().toLowerCase());
         if (existing || seenPhones.has(record.phone)) {
           duplicates.push({ row: i + 2, record, reason: existing ? "already registered" : "duplicate row in this file" });
           return;
@@ -1819,11 +1849,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     if (!importPreview || importPreview.valid.length === 0) return;
     setImporting(true);
     try {
+      const all = await fetchAllSwimmers();
       const newRecords = importPreview.valid.map((v) => v.record);
-      const nextSwimmers = [...swimmers, ...newRecords];
-      const res = await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
+      const next = [...all, ...newRecords];
+      const res = await saveCollection(STORE_KEYS.swimmers, next);
       if (!res) throw new Error("Could not save the imported swimmers, please try again");
-      setSwimmers(nextSwimmers);
       loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
       setImportPreview(null);
     } catch (e) {
@@ -1844,17 +1874,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       setShowForm(true);
       return;
     }
-    const paidMonths = paidNow
-      ? (swimmer.paidMonths || []).filter((m) => m !== key)
-      : [...(swimmer.paidMonths || []), key];
-    const updated = { ...swimmer, paidMonths };
-    const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
-    setSwimmers(nextSwimmers);
-    loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     try {
-      await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
+      await updateSwimmerById(swimmer.id, (s) => {
+        const has = (s.paidMonths || []).includes(key);
+        return { ...s, paidMonths: has ? (s.paidMonths || []).filter((m) => m !== key) : [...(s.paidMonths || []), key] };
+      });
+      loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     } catch (e) {
-      loadSwimmers();
+      loadSwimmersPage({ offset: 0 });
     }
   };
 
@@ -1871,12 +1898,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     if (!days || days <= 0) return setFreezeError("Enter a valid number of days");
     setFreezeSaving(true);
     const swimmer = freezeModal;
-    const updated = freezeSwimmer(swimmer, days, freezeNote.trim());
-    const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
     try {
-      const res = await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
-      if (!res) throw new Error("Could not save, please try again");
-      setSwimmers(nextSwimmers);
+      await updateSwimmerById(swimmer.id, (s) => freezeSwimmer(s, days, freezeNote.trim()));
       loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
       setFreezeModal(null);
     } catch (e) {
@@ -1887,14 +1910,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   };
 
   const confirmUnfreeze = async (swimmer) => {
-    const updated = unfreezeSwimmer(swimmer);
-    const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
-    setSwimmers(nextSwimmers);
-    loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     try {
-      await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
+      await updateSwimmerById(swimmer.id, unfreezeSwimmer);
+      loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     } catch (e) {
-      loadSwimmers();
+      loadSwimmersPage({ offset: 0 });
     }
   };
 
@@ -1923,16 +1943,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     const swimmer = markPaidModal;
     setMarkPaidSaving(true);
     const key = monthKey();
-    const manualPayments = [
-      ...(swimmer.manualPayments || []),
-      { month: key, at: new Date().toISOString() },
-    ];
-    const updated = { ...swimmer, paidMonths: [...(swimmer.paidMonths || []), key], manualPayments };
-    const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
     try {
-      const res = await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
-      if (!res) throw new Error("Could not save, please try again");
-      setSwimmers(nextSwimmers);
+      await updateSwimmerById(swimmer.id, (s) => ({
+        ...s,
+        paidMonths: [...(s.paidMonths || []), key],
+        manualPayments: [...(s.manualPayments || []), { month: key, at: new Date().toISOString() }],
+      }));
       loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
       setMarkPaidModal(null);
     } catch (e) {
@@ -1974,11 +1990,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
 
       const key = monthKey();
       if (!(swimmer.paidMonths || []).includes(key)) {
-        const updatedSwimmer = { ...swimmer, paidMonths: [...(swimmer.paidMonths || []), key] };
-        const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updatedSwimmer : s));
-        setSwimmers(nextSwimmers);
+        await updateSwimmerById(swimmer.id, (s) => ({ ...s, paidMonths: [...(s.paidMonths || []), key] }));
         loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
-        await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
       }
       setCashModal(null);
       setCashAmount("");
@@ -2140,62 +2153,57 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   // Calendar-based attendance: add/remove specific training dates, and mark present/absent
   const addTrainingDate = async (swimmer, date) => {
     if (!date) return;
-    const trainingDates = Array.from(new Set([...(swimmer.trainingDates || []), date])).sort();
-    const updated = { ...swimmer, trainingDates };
-    const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
-    setSwimmers(nextSwimmers);
-    loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     try {
-      await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
+      await updateSwimmerById(swimmer.id, (s) => ({
+        ...s,
+        trainingDates: Array.from(new Set([...(s.trainingDates || []), date])).sort(),
+      }));
+      loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     } catch (e) {
-      loadSwimmers();
+      loadSwimmersPage({ offset: 0 });
     }
   };
 
   const removeTrainingDate = async (swimmer, date) => {
-    const trainingDates = (swimmer.trainingDates || []).filter((d) => d !== date);
-    const attendance = { ...(swimmer.attendance || {}) };
-    delete attendance[date];
-    const updated = { ...swimmer, trainingDates, attendance };
-    const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
-    setSwimmers(nextSwimmers);
-    loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     try {
-      await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
+      await updateSwimmerById(swimmer.id, (s) => {
+        const attendance = { ...(s.attendance || {}) };
+        delete attendance[date];
+        return { ...s, trainingDates: (s.trainingDates || []).filter((d) => d !== date), attendance };
+      });
+      loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     } catch (e) {
-      loadSwimmers();
+      loadSwimmersPage({ offset: 0 });
     }
   };
 
   const markAttendance = async (swimmer, date, status) => {
-    const attendance = { ...(swimmer.attendance || {}) };
-    if (attendance[date] === status) delete attendance[date]; // click again to clear
-    else attendance[date] = status;
-    const updated = { ...swimmer, attendance };
-    const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
-    setSwimmers(nextSwimmers);
-    loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     try {
-      await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
+      await updateSwimmerById(swimmer.id, (s) => {
+        const attendance = { ...(s.attendance || {}) };
+        if (attendance[date] === status) delete attendance[date]; // click again to clear
+        else attendance[date] = status;
+        return { ...s, attendance };
+      });
+      loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     } catch (e) {
-      loadSwimmers();
+      loadSwimmersPage({ offset: 0 });
     }
   };
 
   // Skills are tracked per level, so a swimmer keeps their Level 3 ratings
   // even after moving up to Level 4 with a fresh checklist of its own.
   const setSkillRating = async (swimmer, skill, rating) => {
-    const level = swimmer.level;
-    const levelSkills = { ...(swimmer.skills?.[level] || {}) };
-    levelSkills[skill] = rating;
-    const updated = { ...swimmer, skills: { ...(swimmer.skills || {}), [level]: levelSkills } };
-    const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
-    setSwimmers(nextSwimmers);
-    loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     try {
-      await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
+      await updateSwimmerById(swimmer.id, (s) => {
+        const level = s.level;
+        const levelSkills = { ...(s.skills?.[level] || {}) };
+        levelSkills[skill] = rating;
+        return { ...s, skills: { ...(s.skills || {}), [level]: levelSkills } };
+      });
+      loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     } catch (e) {
-      loadSwimmers();
+      loadSwimmersPage({ offset: 0 });
     }
   };
 
@@ -2679,7 +2687,6 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             <SwimmerForm
               initial={editingSwimmer}
               coaches={coaches}
-              swimmers={swimmers}
               requireSchedule={!!pendingActivationId && pendingActivationId === editingSwimmer?.id}
               onSave={saveSwimmer}
               onCancel={() => { setShowForm(false); setEditingSwimmer(null); setPendingActivationId(null); }}
