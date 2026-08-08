@@ -337,14 +337,14 @@ async function notifyTelegram(record) {
       `Phone: ${record.phone}\n` +
       `Plan: ${record.planName} (${record.price} EGP)\n` +
       `Code: ${record.id}`;
-    await fetch(
-      `https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: CONFIG.telegramChatId, text }),
-      }
-    );
+    // A plain GET with the message in the query string avoids the CORS
+    // preflight that a JSON POST body triggers — some browsers block that
+    // preflight for Telegram's API, which silently drops the notification
+    // even though the request looks fine in the code.
+    const url =
+      `https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage` +
+      `?chat_id=${encodeURIComponent(CONFIG.telegramChatId)}&text=${encodeURIComponent(text)}`;
+    await fetch(url);
   } catch (e) {
     console.warn("Telegram notify failed", e);
   }
