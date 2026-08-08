@@ -473,7 +473,32 @@ function isDueForRenewal(swimmer) {
   return !!(swimmer.day && swimmer.time) && !isPaidThisMonth(swimmer) && !isFrozen(swimmer);
 }
 
-/* ---------- Level progression ---------- */
+/* ---------- Roster-scale helpers ----------
+   With a large roster (1000+ swimmers), holding everyone in React state
+   just to render a page of 10-40 and search/filter client-side is what was
+   making the Swimmers tab crash on phones. The swimmers table (see
+   README) is the fast, searchable/paginated source for what gets
+   DISPLAYED; these two helpers are for the few actions (payments,
+   freezing, editing, importing...) that still need to safely read/update
+   one swimmer within the FULL roster stored in Supabase — they fetch it
+   fresh each time rather than keeping it sitting in memory. */
+async function fetchAllSwimmers() {
+  return await loadCollection(STORE_KEYS.swimmers);
+}
+
+async function updateSwimmerById(id, updateFn) {
+  const all = await fetchAllSwimmers();
+  const idx = all.findIndex((s) => s.id === id);
+  if (idx === -1) throw new Error("Swimmer not found — try refreshing the list");
+  const updated = updateFn(all[idx]);
+  const next = [...all];
+  next[idx] = updated;
+  const res = await saveCollection(STORE_KEYS.swimmers, next);
+  if (!res) throw new Error("Could not save, please try again");
+  return updated;
+}
+
+
 function nextLevelOf(level) {
   const i = LEVELS.indexOf(level);
   if (i === -1 || i === LEVELS.length - 1) return null; // unknown level, or already at the top
@@ -1384,7 +1409,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   // changes (new search, different filter) so it doesn't stay scrolled
   // deep into a now-irrelevant list.
   const SWIMMERS_PAGE_SIZE = 10;
-  const [visibleSwimmerCount, setVisibleSwimmerCount] = useState(SWIMMERS_PAGE_SIZE);
+  // The Swimmers TAB's list is what was crashing phones with a large
+  // roster: filtering + re-rendering ~1500+ records on every keystroke/poll
+  // is too much for a phone browser, even though only 10 cards show at
+  // once. This queries the `swimmers` table (kept in sync with the full
+  // roster automatically, see README) for just the current page/search —
+  // the full `swimmers` state above still loads everyone for the other
+  // tabs that genuinely need whole-roster totals (Reports, Coaches).
+  const [swimmersPage, setSwimmersPage] = useState([]);
+  const [swimmersPageTotal, setSwimmersPageTotal] = useState(0);
+  const [swimmersPageLoading, setSwimmersPageLoading] = useState(false);
+  const [swimmersPageError, setSwimmersPageError] = useState("");
   const [branchFilter, setBranchFilter] = useState("all");
   const [levelFilter, setLevelFilter] = useState("all");
   const [dayFilter, setDayFilter] = useState("all");
@@ -1676,6 +1711,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           readyToMark.some((m) => m.id === s.id) ? { ...s, paidMonths: [...(s.paidMonths || []), key] } : s
         );
         setSwimmers(nextSwimmers);
+        loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
         try {
           await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
         } catch (e) {
@@ -1716,6 +1752,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     if (!res) throw new Error("Could not save the swimmer, please try again");
 
     setSwimmers(nextSwimmers);
+    loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     setShowForm(false);
     setEditingSwimmer(null);
     setPendingActivationId(null);
@@ -1729,6 +1766,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         try {
           await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
           setSwimmers(nextSwimmers);
+          loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
         } catch (e) {
           loadSwimmers();
         }
@@ -1786,6 +1824,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       const res = await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
       if (!res) throw new Error("Could not save the imported swimmers, please try again");
       setSwimmers(nextSwimmers);
+      loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
       setImportPreview(null);
     } catch (e) {
       setImportError(e?.message || "Could not save the imported swimmers, please try again");
@@ -1811,6 +1850,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     const updated = { ...swimmer, paidMonths };
     const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
     setSwimmers(nextSwimmers);
+    loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     try {
       await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
     } catch (e) {
@@ -1837,6 +1877,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       const res = await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
       if (!res) throw new Error("Could not save, please try again");
       setSwimmers(nextSwimmers);
+      loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
       setFreezeModal(null);
     } catch (e) {
       setFreezeError(e?.message || "Could not save, please try again");
@@ -1849,6 +1890,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     const updated = unfreezeSwimmer(swimmer);
     const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
     setSwimmers(nextSwimmers);
+    loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     try {
       await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
     } catch (e) {
@@ -1891,6 +1933,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       const res = await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
       if (!res) throw new Error("Could not save, please try again");
       setSwimmers(nextSwimmers);
+      loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
       setMarkPaidModal(null);
     } catch (e) {
       setMarkPaidError(e?.message || "Could not save, please try again");
@@ -1934,6 +1977,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         const updatedSwimmer = { ...swimmer, paidMonths: [...(swimmer.paidMonths || []), key] };
         const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updatedSwimmer : s));
         setSwimmers(nextSwimmers);
+        loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
         await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
       }
       setCashModal(null);
@@ -2012,6 +2056,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           if (inUse) {
             const nextSwimmers = swimmers.map((s) => (s.coachId === coach.id ? { ...s, coachId: null } : s));
             setSwimmers(nextSwimmers);
+            loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
             await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
           }
         } catch (e) {
@@ -2099,6 +2144,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     const updated = { ...swimmer, trainingDates };
     const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
     setSwimmers(nextSwimmers);
+    loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     try {
       await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
     } catch (e) {
@@ -2113,6 +2159,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     const updated = { ...swimmer, trainingDates, attendance };
     const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
     setSwimmers(nextSwimmers);
+    loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     try {
       await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
     } catch (e) {
@@ -2127,6 +2174,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     const updated = { ...swimmer, attendance };
     const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
     setSwimmers(nextSwimmers);
+    loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     try {
       await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
     } catch (e) {
@@ -2143,6 +2191,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     const updated = { ...swimmer, skills: { ...(swimmer.skills || {}), [level]: levelSkills } };
     const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
     setSwimmers(nextSwimmers);
+    loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     try {
       await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
     } catch (e) {
@@ -2150,30 +2199,61 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     }
   };
 
-  const filteredSwimmers = React.useMemo(() => swimmers.filter((s) => {
-    if (branchFilter !== "all" && s.branch !== branchFilter) return false;
-    if (levelFilter !== "all" && s.level !== levelFilter) return false;
-    if (dayFilter !== "all" && s.day !== dayFilter) return false;
-    if (timeFilter !== "all" && s.time !== timeFilter) return false;
-    if (sessionTypeFilter !== "all" && s.sessionType !== sessionTypeFilter) return false;
-    if (paymentStatusFilter !== "all") {
-      const paidThatMonth = (s.paidMonths || []).includes(paymentMonthFilter);
-      if (paymentStatusFilter === "paid" && !paidThatMonth) return false;
-      if (paymentStatusFilter === "unpaid" && paidThatMonth) return false;
-    }
-    const q = search.trim().toLowerCase();
-    if (q && !((s.name || "").toLowerCase().includes(q) || (s.phone || "").includes(q))) return false;
-    return true;
-  }), [swimmers, branchFilter, levelFilter, dayFilter, timeFilter, sessionTypeFilter, paymentStatusFilter, paymentMonthFilter, search]);
+  const loadSwimmersPage = useCallback(
+    async (opts = {}) => {
+      const offset = opts.offset ?? 0;
+      const append = !!opts.append;
+      setSwimmersPageLoading(true);
+      setSwimmersPageError("");
+      try {
+        let query = supabase.from("swimmers").select("data", { count: "exact" });
+        if (branchFilter !== "all") query = query.eq("branch", branchFilter);
+        if (levelFilter !== "all") query = query.eq("level", levelFilter);
+        if (dayFilter !== "all") query = query.filter("data->>day", "eq", dayFilter);
+        if (timeFilter !== "all") query = query.filter("data->>time", "eq", timeFilter);
+        if (sessionTypeFilter !== "all") query = query.filter("data->>sessionType", "eq", sessionTypeFilter);
+        if (paymentStatusFilter === "paid") {
+          query = query.filter("data->paidMonths", "cs", JSON.stringify([paymentMonthFilter]));
+        } else if (paymentStatusFilter === "unpaid") {
+          query = query.not("data->paidMonths", "cs", JSON.stringify([paymentMonthFilter]));
+        }
+        const q = search.trim();
+        if (q) query = query.or(`name.ilike.%${q}%,phone.ilike.%${q}%`);
+        query = query.order("name", { ascending: true }).range(offset, offset + SWIMMERS_PAGE_SIZE - 1);
+        const { data, error, count } = await query;
+        if (error) throw error;
+        const items = (data || []).map((r) => r.data);
+        setSwimmersPage((prev) => (append ? [...prev, ...items] : items));
+        setSwimmersPageTotal(count || 0);
+      } catch (e) {
+        console.warn("load swimmers page failed", e);
+        setSwimmersPageError("Could not load swimmers — check your connection and try again");
+      } finally {
+        setSwimmersPageLoading(false);
+      }
+    },
+    [branchFilter, levelFilter, dayFilter, timeFilter, sessionTypeFilter, paymentStatusFilter, paymentMonthFilter, search]
+  );
 
   useEffect(() => {
-    setVisibleSwimmerCount(SWIMMERS_PAGE_SIZE);
-  }, [branchFilter, levelFilter, dayFilter, timeFilter, sessionTypeFilter, paymentStatusFilter, paymentMonthFilter, search]);
+    if (!authed) return;
+    loadSwimmersPage({ offset: 0 });
+  }, [authed, loadSwimmersPage]);
 
-  // Only offer times that are actually in use, sorted chronologically
-  const timeOptions = React.useMemo(() => Array.from(new Set(swimmers.map((s) => s.time).filter(Boolean))).sort(
-    (a, b) => timeToMinutes(a) - timeToMinutes(b)
-  ), [swimmers]);
+  const loadMoreSwimmers = () => {
+    loadSwimmersPage({ offset: swimmersPage.length, append: true });
+  };
+
+  // Filter dropdown time options come from the configured schedule, not
+  // from whichever swimmers happen to be loaded — otherwise this would
+  // need to hold everyone in memory just to list the possible times.
+  const timeOptions = React.useMemo(() => {
+    const set = new Set();
+    Object.values(TIME_SLOTS).forEach((byDay) => {
+      Object.values(byDay).forEach((times) => times.forEach((t) => set.add(t)));
+    });
+    return Array.from(set).sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
+  }, []);
 
   if (!authed) {
     return (
@@ -2556,8 +2636,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
               )}
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={loadSwimmers} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
-                <RefreshCw className={`w-4 h-4 ${swimmersLoading ? "animate-spin" : ""}`} />
+              <button
+                onClick={() => {
+                  loadSwimmers();
+                  loadSwimmersPage({ offset: 0 });
+                }}
+                className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"
+              >
+                <RefreshCw className={`w-4 h-4 ${swimmersLoading || swimmersPageLoading ? "animate-spin" : ""}`} />
               </button>
               {canEdit && (
                 <>
@@ -2601,27 +2687,29 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           )}
 
           <div className="text-sm text-slate-500 mb-3">
-            {paymentStatusFilter !== "all" ? (
-              <span className="font-semibold text-slate-900">{filteredSwimmers.length}</span>
-            ) : (
-              <>
-                <span className="font-semibold text-slate-900">{filteredSwimmers.length}</span> of {swimmers.length}
-              </>
-            )}
+            <span className="font-semibold text-slate-900">{swimmersPageTotal}</span>
             {" "}
-            swimmer{filteredSwimmers.length === 1 ? "" : "s"}
+            swimmer{swimmersPageTotal === 1 ? "" : "s"}
             {paymentStatusFilter === "paid" && ` paid in ${monthLabel(paymentMonthFilter)}`}
             {paymentStatusFilter === "unpaid" && ` not paid in ${monthLabel(paymentMonthFilter)}`}
           </div>
 
-          {filteredSwimmers.length === 0 && (
+          {swimmersPageError && (
+            <div className="text-center text-red-500 text-sm py-4">{swimmersPageError}</div>
+          )}
+
+          {swimmersPageLoading && swimmersPage.length === 0 && (
+            <div className="text-center text-slate-400 py-16">Loading...</div>
+          )}
+
+          {!swimmersPageLoading && swimmersPage.length === 0 && !swimmersPageError && (
             <div className="text-center text-slate-400 py-16">
-              {swimmers.length === 0 ? "No swimmers registered yet" : "No swimmers match these filters"}
+              {swimmersPageTotal === 0 ? "No swimmers registered yet" : "No swimmers match these filters"}
             </div>
           )}
 
           <div className="space-y-2">
-            {filteredSwimmers.slice(0, visibleSwimmerCount).map((s) => (
+            {swimmersPage.map((s) => (
               <div key={s.id} className="bg-white rounded-2xl border border-slate-200 p-3">
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="min-w-[120px]">
@@ -2967,13 +3055,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             ))}
           </div>
 
-          {visibleSwimmerCount < filteredSwimmers.length && (
+          {swimmersPage.length < swimmersPageTotal && (
             <div className="text-center mt-4">
               <button
-                onClick={() => setVisibleSwimmerCount((c) => c + SWIMMERS_PAGE_SIZE)}
-                className="px-5 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200"
+                onClick={loadMoreSwimmers}
+                disabled={swimmersPageLoading}
+                className="px-5 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200 disabled:opacity-60"
               >
-                Show more ({filteredSwimmers.length - visibleSwimmerCount} left)
+                {swimmersPageLoading ? "Loading..." : `Show more (${swimmersPageTotal - swimmersPage.length} left)`}
               </button>
             </div>
           )}
