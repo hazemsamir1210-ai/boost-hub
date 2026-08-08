@@ -61,8 +61,8 @@ const CONFIG = {
   staffPassword: "staff123",             // pool staff attendance dashboard — change before going live
   // Optional: Telegram bot for instant admin notifications
   // Create a bot via BotFather and paste the token + chat id below
-  telegramBotToken: "",
-  telegramChatId: "",
+  telegramBotToken: "8700106222:AAGqcrk7SDCDrNS091Kx2URxgHedzCf_msg",
+  telegramChatId: "6183949692",
   // Homepage photos — paste data URIs of real academy/pool photos here
   // (same format as logoDataUri above). Leave empty and the homepage
   // falls back to the plain blue hero.
@@ -1368,6 +1368,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   // marked paid yet because they still need a day/time assigned
   const [scheduleNeededNotice, setScheduleNeededNotice] = useState(null);
   const [search, setSearch] = useState("");
+  // The input itself updates instantly (searchDraft), but the value that
+  // actually drives filtering/re-rendering the swimmer list (search) only
+  // updates ~200ms after typing stops. Recomputing + re-rendering the whole
+  // list on every single keystroke is what made the search box feel
+  // sluggish with a large roster — this keeps typing itself snappy.
+  const [searchDraft, setSearchDraft] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchDraft), 200);
+    return () => clearTimeout(t);
+  }, [searchDraft]);
   const [branchFilter, setBranchFilter] = useState("all");
   const [levelFilter, setLevelFilter] = useState("all");
   const [dayFilter, setDayFilter] = useState("all");
@@ -2431,8 +2441,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
               <div className="relative flex-1 max-w-xs">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
                 <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  value={searchDraft}
+                  onChange={(e) => setSearchDraft(e.target.value)}
                   placeholder="Search by name or phone"
                   className="w-full border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-sm outline-none focus:border-blue-900"
                 />
