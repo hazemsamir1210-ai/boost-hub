@@ -2319,6 +2319,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   // Filter dropdown time options come from the configured schedule, not
   // from whichever swimmers happen to be loaded — otherwise this would
   // need to hold everyone in memory just to list the possible times.
+  // O(1) lookup by id instead of `.find()` — this gets called once per
+  // request row rendered, and `swimmers` can hold the full roster (loaded
+  // for the Reports/Coaches tabs) even while looking at a different tab,
+  // so a linear search here for every row was another place a large
+  // roster could make things sluggish.
+  const swimmersById = React.useMemo(() => {
+    const map = new Map();
+    swimmers.forEach((s) => map.set(s.id, s));
+    return map;
+  }, [swimmers]);
+
   const timeOptions = React.useMemo(() => {
     const set = new Set();
     Object.values(TIME_SLOTS).forEach((byDay) => {
@@ -2326,6 +2337,37 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     });
     return Array.from(set).sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
   }, []);
+
+  // For the Coaches tab: how many swimmers each coach has, and which
+  // day+time sessions they're booked into with how much room is left in
+  // each. Computed in ONE pass over the roster (not once per coach) and
+  // only recomputed when the roster or coach list actually changes —
+  // doing this filter/group inline in the render, once per coach, on
+  // every render (including the 15s poll) was heavy enough with a large
+  // roster to freeze the tab.
+  const { coachLoadById, coachBookingsById } = React.useMemo(() => {
+    const loadById = {};
+    const bookingsMapById = {};
+    swimmers.forEach((s) => {
+      if (!s.coachId) return;
+      loadById[s.coachId] = (loadById[s.coachId] || 0) + 1;
+      if (!s.day || !s.time) return;
+      if (!bookingsMapById[s.coachId]) bookingsMapById[s.coachId] = {};
+      const key = `${s.day}|${s.time}`;
+      const bucket = bookingsMapById[s.coachId];
+      if (!bucket[key]) bucket[key] = { day: s.day, time: s.time, sessionType: s.sessionType, count: 0 };
+      bucket[key].count += 1;
+    });
+    const bookingsById = {};
+    Object.keys(bookingsMapById).forEach((coachId) => {
+      bookingsById[coachId] = Object.values(bookingsMapById[coachId]).sort(
+        (a, b) =>
+          DAY_GROUPS.findIndex((d) => d.id === a.day) - DAY_GROUPS.findIndex((d) => d.id === b.day) ||
+          timeToMinutes(a.time) - timeToMinutes(b.time)
+      );
+    });
+    return { coachLoadById: loadById, coachBookingsById: bookingsById };
+  }, [swimmers]);
 
   if (!authed) {
     return (
@@ -2562,7 +2604,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                   <div className="text-sm text-slate-600 mb-1">{r.planName} — {r.price} EGP</div>
                   {r.swimmerId && (
                     <div className="text-xs text-indigo-700 bg-indigo-50 inline-block px-2 py-0.5 rounded-full mb-2">
-                      Linked to: {swimmers.find((s) => s.id === r.swimmerId)?.name || "swimmer"}
+                      Linked to: {swimmersById.get(r.swimmerId)?.name || "swimmer"}
                     </div>
                   )}
                   <div className="flex items-center gap-1 text-xs text-slate-400 mb-3">
@@ -3171,22 +3213,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
 
           <div className="space-y-3">
             {coaches.map((c) => {
-              const load = swimmers.filter((s) => s.coachId === c.id).length;
-              // Group this coach's current swimmers by day+time to show
-              // which sessions they're booked into, and how much room is
-              // left in each — that's what "free slots with this coach"
-              // means in practice, since capacity is set per session.
-              const bookingsMap = {};
-              swimmers
-                .filter((s) => s.coachId === c.id && s.day && s.time)
-                .forEach((s) => {
-                  const key = `${s.day}|${s.time}`;
-                  if (!bookingsMap[key]) bookingsMap[key] = { day: s.day, time: s.time, sessionType: s.sessionType, count: 0 };
-                  bookingsMap[key].count += 1;
-                });
-              const bookings = Object.values(bookingsMap).sort(
-                (a, b) => DAY_GROUPS.findIndex((d) => d.id === a.day) - DAY_GROUPS.findIndex((d) => d.id === b.day) || timeToMinutes(a.time) - timeToMinutes(b.time)
-              );
+              const load = coachLoadById[c.id] || 0;
+              const bookings = coachBookingsById[c.id] || [];
               return (
                 <div key={c.id} className="bg-white rounded-2xl border border-slate-200 p-4">
                 <div className="flex flex-wrap items-center gap-4">
