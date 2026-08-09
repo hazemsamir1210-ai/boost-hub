@@ -23,25 +23,70 @@ const supabase = createClient(
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
 
+/* ============================================================
+   Multi-academy support — which academy is this visitor/admin on?
+   Determined once, from the URL path (e.g. yoursite.com/boost-hub ->
+   slug "boost-hub"), and cached on `window.__academy` for the whole
+   session. Every read/write below is scoped to this academy's id —
+   this is what keeps one academy's data from mixing with another's.
+   ============================================================ */
+window.__academy = null; // { id, slug, name, logoDataUri, instapayHandle, instapayPhone } once resolved
+
+function academySlugFromPath() {
+  const seg = window.location.pathname.split("/").filter(Boolean)[0];
+  return seg || null;
+}
+
+async function resolveAcademy() {
+  const slug = academySlugFromPath();
+  // No slug in the URL — this is the plain link that was already shared
+  // with everyone before multi-academy support existed. Keep it pointing
+  // at the original academy so nothing breaks for people already using it.
+  const query = supabase
+    .from("academies")
+    .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone");
+  const { data, error } = slug
+    ? await query.eq("slug", slug).maybeSingle()
+    : await query.eq("id", "354f7151-03f6-4511-b40a-19db46f28e29").maybeSingle();
+  if (error || !data) return null;
+  window.__academy = {
+    id: data.id,
+    slug: data.slug,
+    name: data.name,
+    logoDataUri: data.logo_data_uri,
+    instapayHandle: data.instapay_handle,
+    instapayPhone: data.instapay_phone,
+  };
+  return window.__academy;
+}
+
 window.storage = {
   async get(key) {
+    if (!window.__academy) return null;
     const { data, error } = await supabase
       .from("app_storage")
       .select("value")
       .eq("key", key)
+      .eq("academy_id", window.__academy.id)
       .maybeSingle();
     if (error) throw error;
     return data ? { key, value: data.value } : null;
   },
   async set(key, value) {
+    if (!window.__academy) throw new Error("No academy selected — check the link you're using");
     const { error } = await supabase
       .from("app_storage")
-      .upsert({ key, value, updated_at: new Date().toISOString() });
+      .upsert({ key, value, academy_id: window.__academy.id, updated_at: new Date().toISOString() });
     if (error) throw error;
     return { key, value };
   },
   async delete(key) {
-    const { error } = await supabase.from("app_storage").delete().eq("key", key);
+    if (!window.__academy) return null;
+    const { error } = await supabase
+      .from("app_storage")
+      .delete()
+      .eq("key", key)
+      .eq("academy_id", window.__academy.id);
     if (error) return null;
     return { key, deleted: true };
   },
@@ -956,7 +1001,7 @@ function SubscribeView({ initialPlanId, onSubmitted, onBack }) {
     let cancelled = false;
     const t = setTimeout(async () => {
       try {
-        const { data, error } = await supabase.from("swimmers").select("data").ilike("name", `%${q}%`).limit(20);
+        const { data, error } = await supabase.from("swimmers").select("data").eq("academy_id", window.__academy?.id).ilike("name", `%${q}%`).limit(20);
         if (!cancelled && !error) setExistingSwimmers((data || []).map((r) => r.data));
       } catch (e) {
         // non-fatal — the dropdown just stays empty, name/phone alone still works
@@ -1258,6 +1303,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
     supabase
       .from("swimmers")
       .select("data")
+      .eq("academy_id", window.__academy?.id)
       .filter("data->>coachId", "eq", coachId)
       .filter("data->>day", "eq", day)
       .filter("data->>time", "eq", time)
@@ -2385,7 +2431,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       setSwimmersPageLoading(true);
       setSwimmersPageError("");
       try {
-        let query = supabase.from("swimmers").select("data", { count: "exact" });
+        let query = supabase.from("swimmers").select("data", { count: "exact" }).eq("academy_id", window.__academy?.id);
         if (branchFilter !== "all") query = query.eq("branch", branchFilter);
         if (levelFilter !== "all") query = query.eq("level", levelFilter);
         if (dayFilter !== "all") query = query.filter("data->>day", "eq", dayFilter);
@@ -4637,7 +4683,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
       // level if this account is restricted to one) — a staff member is
       // only ever looking at one session at a time, so there's no reason
       // to load the whole roster to show it.
-      let query = supabase.from("swimmers").select("data").eq("branch", branch)
+      let query = supabase.from("swimmers").select("data").eq("academy_id", window.__academy?.id).eq("branch", branch)
         .filter("data->>day", "eq", dayGroup)
         .filter("data->>time", "eq", time);
       if (effectiveLevel) query = query.eq("level", effectiveLevel);
@@ -5034,6 +5080,7 @@ function CoachView({ onExit }) {
       const { data, error } = await supabase
         .from("swimmers")
         .select("data")
+        .eq("academy_id", window.__academy?.id)
         .filter("data->>coachId", "eq", authedCoach.id);
       if (error) throw error;
       setSwimmers((data || []).map((r) => r.data));
@@ -5685,12 +5732,84 @@ function HomeView({ onChoosePlan, onAdmin, onStaff, onCoach, onStaffPortal }) {
 /* ============================================================
    Main app
    ============================================================ */
+/* A render crash anywhere used to blank the whole page silently — this
+   catches that instead and shows what actually went wrong, with a button
+   to recover, so a bug in one corner of the app doesn't lock everyone
+   out of the whole site. */
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    console.error("Render error caught by ErrorBoundary:", error, info);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="min-h-screen flex items-center justify-center px-4 bg-white">
+          <div className="max-w-sm w-full text-center">
+            <div className="text-4xl mb-3">⚠️</div>
+            <h2 className="text-lg font-bold text-slate-900 mb-2">Something went wrong</h2>
+            <p className="text-sm text-slate-500 mb-1">
+              The page hit an error instead of just going blank. Here's what it says:
+            </p>
+            <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-4 break-words text-left">
+              {String(this.state.error?.message || this.state.error)}
+            </p>
+            <button
+              onClick={() => window.location.reload()}
+              className="w-full py-2.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition"
+            >
+              Reload the page
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   const [view, setView] = useState("home");
   const [chosenPlan, setChosenPlan] = useState(null);
   const [lastRecord, setLastRecord] = useState(null);
+  const [academyStatus, setAcademyStatus] = useState("loading"); // "loading" | "ready" | "not-found"
+
+  useEffect(() => {
+    resolveAcademy().then((academy) => {
+      setAcademyStatus(academy ? "ready" : "not-found");
+    });
+  }, []);
+
+  if (academyStatus === "loading") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-white">
+        <RefreshCw className="w-6 h-6 text-slate-300 animate-spin" />
+      </div>
+    );
+  }
+
+  if (academyStatus === "not-found") {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4 bg-white">
+        <div className="max-w-sm w-full text-center">
+          <div className="text-4xl mb-3">🔍</div>
+          <h2 className="text-lg font-bold text-slate-900 mb-2">Academy not found</h2>
+          <p className="text-sm text-slate-500">
+            This link doesn't match a registered academy. Double-check the link, or ask your academy for the correct one.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
+    <ErrorBoundary>
     <div dir="ltr" className="min-h-screen bg-white font-sans" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
       <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;800&display=swap" />
 
@@ -5718,5 +5837,6 @@ export default function App() {
 
       {view === "staffportal" && <StaffPortal onExit={() => setView("home")} />}
     </div>
+    </ErrorBoundary>
   );
 }
