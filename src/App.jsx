@@ -47,13 +47,13 @@ async function resolveAcademy() {
     if (slug) {
       result = await supabase
         .from("academies")
-        .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone")
+        .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone, hero_data_uri")
         .eq("slug", slug)
         .maybeSingle();
     } else {
       result = await supabase
         .from("academies")
-        .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone")
+        .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone, hero_data_uri")
         .eq("id", "354f7151-03f6-4511-b40a-19db46f28e29")
         .maybeSingle();
     }
@@ -86,6 +86,7 @@ async function resolveAcademy() {
   if (data.logo_data_uri) CONFIG.logoDataUri = data.logo_data_uri;
   if (data.instapay_handle) CONFIG.instapayHandle = data.instapay_handle;
   if (data.instapay_phone) CONFIG.instapayPhone = data.instapay_phone;
+  if (data.hero_data_uri) CONFIG.heroPhotos = [data.hero_data_uri];
   return window.__academy;
 }
 
@@ -5977,6 +5978,7 @@ function SuperAdminView() {
   const [newInstapayHandle, setNewInstapayHandle] = useState("");
   const [newInstapayPhone, setNewInstapayPhone] = useState("");
   const [newLogoPreview, setNewLogoPreview] = useState("");
+  const [newHeroPreview, setNewHeroPreview] = useState("");
   const [editingAcademyId, setEditingAcademyId] = useState(null);
   const [creatingAcademy, setCreatingAcademy] = useState(false);
   const [createError, setCreateError] = useState("");
@@ -5996,6 +5998,7 @@ function SuperAdminView() {
           instapay_handle: newInstapayHandle.trim(),
           instapay_phone: newInstapayPhone.trim(),
           logo_data_uri: newLogoPreview || null,
+          hero_data_uri: newHeroPreview || null,
         })
         .select()
         .single();
@@ -6006,6 +6009,7 @@ function SuperAdminView() {
       setNewInstapayHandle("");
       setNewInstapayPhone("");
       setNewLogoPreview("");
+      setNewHeroPreview("");
       loadAcademies();
     } catch (e) {
       setCreateError(e?.message || "Could not create the academy");
@@ -6108,6 +6112,23 @@ function SuperAdminView() {
             />
           </div>
         </div>
+        <div className="mb-3">
+          <label className="text-xs text-slate-500 mb-1 block">Header photo (optional — the big image at the top of their homepage)</label>
+          <div className="flex items-center gap-3">
+            {newHeroPreview && <img src={newHeroPreview} alt="" className="w-20 h-12 object-cover rounded-lg border border-slate-200" />}
+            <input
+              type="file"
+              accept="image/*"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const dataUri = await compressImage(file, 1200, 0.75);
+                setNewHeroPreview(dataUri);
+              }}
+              className="text-sm"
+            />
+          </div>
+        </div>
         {createError && <div className="text-red-500 text-sm mb-3">{createError}</div>}
         {createdAcademy && (
           <div className="text-sm bg-green-50 text-green-700 rounded-lg px-3 py-2 mb-3">
@@ -6188,6 +6209,7 @@ function AcademyEditRow({ academy, onSaved, onClose }) {
   const [instapayHandle, setInstapayHandle] = useState("");
   const [instapayPhone, setInstapayPhone] = useState("");
   const [logoPreview, setLogoPreview] = useState("");
+  const [heroPreview, setHeroPreview] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -6201,6 +6223,7 @@ function AcademyEditRow({ academy, onSaved, onClose }) {
       if (instapayHandle.trim()) update.instapay_handle = instapayHandle.trim();
       if (instapayPhone.trim()) update.instapay_phone = instapayPhone.trim();
       if (logoPreview) update.logo_data_uri = logoPreview;
+      if (heroPreview) update.hero_data_uri = heroPreview;
       const { error: updateError } = await supabase.from("academies").update(update).eq("id", academy.id);
       if (updateError) throw new Error(updateError.message.includes("duplicate") ? "That link name is already taken" : updateError.message);
       onSaved();
@@ -6221,6 +6244,7 @@ function AcademyEditRow({ academy, onSaved, onClose }) {
         <input value={instapayPhone} onChange={(e) => setInstapayPhone(e.target.value)} className="border border-slate-200 rounded-lg py-2 px-2.5 text-sm outline-none focus:border-blue-900" placeholder="New Instapay phone (optional)" />
       </div>
       <div className="flex items-center gap-2 mb-2">
+        <span className="text-xs text-slate-400 w-14 shrink-0">Logo</span>
         {logoPreview && <img src={logoPreview} alt="" className="w-10 h-10 object-contain rounded-lg border border-slate-200" />}
         <input
           type="file"
@@ -6229,6 +6253,20 @@ function AcademyEditRow({ academy, onSaved, onClose }) {
             const file = e.target.files?.[0];
             if (!file) return;
             setLogoPreview(await compressImage(file, 400, 0.8));
+          }}
+          className="text-xs"
+        />
+      </div>
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-xs text-slate-400 w-14 shrink-0">Header</span>
+        {heroPreview && <img src={heroPreview} alt="" className="w-16 h-10 object-cover rounded-lg border border-slate-200" />}
+        <input
+          type="file"
+          accept="image/*"
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            setHeroPreview(await compressImage(file, 1200, 0.75));
           }}
           className="text-xs"
         />
