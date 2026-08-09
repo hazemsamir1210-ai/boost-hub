@@ -1702,13 +1702,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     // and every action on it (payments, freezing, editing...) reads/writes
     // the full roster fresh each time via fetchAllSwimmers/updateSwimmerById
     // instead of keeping it sitting in state.
-    if (tab === "reports" || tab === "coaches") loadSwimmers();
+    if (tab === "reports" || tab === "coaches" || tab === "schedule") loadSwimmers();
     const t = setInterval(() => {
       loadRequests();
       loadCoaches();
       if (tab === "reports") loadExpenses();
       if (tab === "accounts") loadAccounts();
-      if (tab === "reports" || tab === "coaches") loadSwimmers();
+      if (tab === "reports" || tab === "coaches" || tab === "schedule") loadSwimmers();
     }, 15000);
     return () => clearInterval(t);
   }, [authed, tab, loadRequests, loadSwimmers, loadCoaches, loadExpenses, loadAccounts, loadAchievements]);
@@ -2479,6 +2479,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           <Award className="w-4 h-4" /> Coaches
         </button>
         <button
+          onClick={() => setTab("schedule")}
+          className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
+            tab === "schedule" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
+          }`}
+        >
+          <CalendarDays className="w-4 h-4" /> Schedule
+        </button>
+        <button
           onClick={() => setTab("reports")}
           className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
             tab === "reports" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
@@ -3214,7 +3222,6 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           <div className="space-y-3">
             {coaches.map((c) => {
               const load = coachLoadById[c.id] || 0;
-              const bookings = coachBookingsById[c.id] || [];
               return (
                 <div key={c.id} className="bg-white rounded-2xl border border-slate-200 p-4">
                 <div className="flex flex-wrap items-center gap-4">
@@ -3245,29 +3252,87 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                     </div>
                   )}
                 </div>
-                {bookings.length > 0 && (
-                  <div className="mt-3 pt-3 border-t border-slate-100 flex flex-wrap gap-1.5">
-                    {bookings.map((b, i) => {
-                      const capacity = sessionTypeInfo(b.sessionType).capacity;
-                      const spotsLeft = capacity - b.count;
-                      return (
-                        <div
-                          key={i}
-                          className={`text-xs px-2.5 py-1 rounded-full font-medium ${
-                            spotsLeft > 0 ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"
-                          }`}
-                        >
-                          {DAY_GROUPS.find((d) => d.id === b.day)?.label} · {b.time} — {b.count}/{capacity} {sessionTypeInfo(b.sessionType).label}
-                          {spotsLeft > 0 ? ` (${spotsLeft} free)` : " (full)"}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
                 </div>
               );
             })}
           </div>
+        </div>
+      )}
+
+      {tab === "schedule" && (
+        <div>
+          <p className="text-sm text-slate-500 mb-4">
+            Every coach, every day & time, at a glance — same idea as the paper sheet, always up to date.
+          </p>
+          {coaches.length === 0 ? (
+            <div className="text-center text-slate-400 py-16">No coaches added yet</div>
+          ) : (
+            DAY_GROUPS.map((dayGroup) => {
+              const times = (TIME_SLOTS[BRANCHES[0].id]?.[dayGroup.id] || []).slice().sort(
+                (a, b) => timeToMinutes(a) - timeToMinutes(b)
+              );
+              if (times.length === 0) return null;
+              return (
+                <div key={dayGroup.id} className="mb-8">
+                  <h3 className="font-bold text-slate-900 mb-2">{dayGroup.label}</h3>
+                  <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                    <table className="w-full text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50">
+                          <th className="text-left px-3 py-2 font-semibold text-slate-600 sticky left-0 bg-slate-50 whitespace-nowrap">
+                            Coach
+                          </th>
+                          {times.map((t) => (
+                            <th key={t} className="px-2 py-2 font-semibold text-slate-600 whitespace-nowrap text-center">
+                              {t}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {coaches.map((c) => (
+                          <tr key={c.id} className="border-t border-slate-100">
+                            <td className="px-3 py-2 font-medium text-slate-800 sticky left-0 bg-white whitespace-nowrap">
+                              {c.name}
+                            </td>
+                            {times.map((t) => {
+                              const booking = (coachBookingsById[c.id] || []).find(
+                                (b) => b.day === dayGroup.id && b.time === t
+                              );
+                              if (!booking) {
+                                return (
+                                  <td key={t} className="px-2 py-2 text-center text-slate-300">
+                                    —
+                                  </td>
+                                );
+                              }
+                              const capacity = sessionTypeInfo(booking.sessionType).capacity;
+                              const spotsLeft = capacity - booking.count;
+                              return (
+                                <td key={t} className="px-2 py-2 text-center whitespace-nowrap">
+                                  <span
+                                    className={`inline-block px-1.5 py-0.5 rounded font-medium ${
+                                      spotsLeft > 0 ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"
+                                    }`}
+                                    title={`${sessionTypeInfo(booking.sessionType).label} — ${booking.count}/${capacity}`}
+                                  >
+                                    {booking.count}/{capacity}
+                                  </span>
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })
+          )}
+          <p className="text-xs text-slate-400">
+            — means that coach has no swimmer booked at that day/time yet (fully open). A green box means there's still room; gray means it's full.
+          </p>
         </div>
       )}
 
