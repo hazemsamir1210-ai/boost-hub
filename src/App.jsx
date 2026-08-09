@@ -78,6 +78,14 @@ async function resolveAcademy() {
     instapayHandle: data.instapay_handle,
     instapayPhone: data.instapay_phone,
   };
+  // Every place in the app that reads CONFIG.academyName / logoDataUri /
+  // instapayHandle / instapayPhone now shows THIS academy's own values —
+  // falls back to the built-in defaults for anything the academy hasn't
+  // set yet (e.g. no custom logo uploaded), rather than showing blank.
+  if (data.name) CONFIG.academyName = data.name;
+  if (data.logo_data_uri) CONFIG.logoDataUri = data.logo_data_uri;
+  if (data.instapay_handle) CONFIG.instapayHandle = data.instapay_handle;
+  if (data.instapay_phone) CONFIG.instapayPhone = data.instapay_phone;
   return window.__academy;
 }
 
@@ -5884,6 +5892,8 @@ function SuperAdminView() {
   const [newSlug, setNewSlug] = useState("");
   const [newInstapayHandle, setNewInstapayHandle] = useState("");
   const [newInstapayPhone, setNewInstapayPhone] = useState("");
+  const [newLogoPreview, setNewLogoPreview] = useState("");
+  const [editingAcademyId, setEditingAcademyId] = useState(null);
   const [creatingAcademy, setCreatingAcademy] = useState(false);
   const [createError, setCreateError] = useState("");
   const [createdAcademy, setCreatedAcademy] = useState(null);
@@ -5901,6 +5911,7 @@ function SuperAdminView() {
           slug: newSlug.trim(),
           instapay_handle: newInstapayHandle.trim(),
           instapay_phone: newInstapayPhone.trim(),
+          logo_data_uri: newLogoPreview || null,
         })
         .select()
         .single();
@@ -5910,6 +5921,7 @@ function SuperAdminView() {
       setNewSlug("");
       setNewInstapayHandle("");
       setNewInstapayPhone("");
+      setNewLogoPreview("");
       loadAcademies();
     } catch (e) {
       setCreateError(e?.message || "Could not create the academy");
@@ -5995,6 +6007,23 @@ function SuperAdminView() {
           <input value={newInstapayHandle} onChange={(e) => setNewInstapayHandle(e.target.value)} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Instapay handle (optional)" />
           <input value={newInstapayPhone} onChange={(e) => setNewInstapayPhone(e.target.value)} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Instapay phone (optional)" />
         </div>
+        <div className="mb-3">
+          <label className="text-xs text-slate-500 mb-1 block">Logo (optional — uses the default logo if skipped)</label>
+          <div className="flex items-center gap-3">
+            {newLogoPreview && <img src={newLogoPreview} alt="" className="w-12 h-12 object-contain rounded-lg border border-slate-200" />}
+            <input
+              type="file"
+              accept="image/*"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const dataUri = await compressImage(file, 400, 0.8);
+                setNewLogoPreview(dataUri);
+              }}
+              className="text-sm"
+            />
+          </div>
+        </div>
         {createError && <div className="text-red-500 text-sm mb-3">{createError}</div>}
         {createdAcademy && (
           <div className="text-sm bg-green-50 text-green-700 rounded-lg px-3 py-2 mb-3">
@@ -6045,12 +6074,89 @@ function SuperAdminView() {
         </div>
         <div className="space-y-2">
           {academies.map((a) => (
-            <div key={a.id} className="flex items-center justify-between text-sm border-t border-slate-100 pt-2">
-              <span className="font-medium text-slate-800">{a.name}</span>
-              <span className="text-slate-400">yoursite.com/{a.slug}</span>
+            <div key={a.id} className="border-t border-slate-100 pt-2">
+              <div className="flex items-center justify-between text-sm">
+                <span className="font-medium text-slate-800">{a.name}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-400">yoursite.com/{a.slug}</span>
+                  <button
+                    onClick={() => setEditingAcademyId(editingAcademyId === a.id ? null : a.id)}
+                    className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+              {editingAcademyId === a.id && <AcademyEditRow academy={a} onSaved={loadAcademies} onClose={() => setEditingAcademyId(null)} />}
             </div>
           ))}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* Small inline form for fixing an academy's name/slug/instapay/logo after
+   it's already been created — e.g. to correct a typo or add a logo later. */
+function AcademyEditRow({ academy, onSaved, onClose }) {
+  const [name, setName] = useState(academy.name || "");
+  const [slug, setSlug] = useState(academy.slug || "");
+  const [instapayHandle, setInstapayHandle] = useState("");
+  const [instapayPhone, setInstapayPhone] = useState("");
+  const [logoPreview, setLogoPreview] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const save = async () => {
+    setError("");
+    if (!name.trim()) return setError("Enter a name");
+    if (!/^[a-z0-9-]+$/.test(slug.trim())) return setError("Link name: lowercase letters, numbers and dashes only");
+    setSaving(true);
+    try {
+      const update = { name: name.trim(), slug: slug.trim() };
+      if (instapayHandle.trim()) update.instapay_handle = instapayHandle.trim();
+      if (instapayPhone.trim()) update.instapay_phone = instapayPhone.trim();
+      if (logoPreview) update.logo_data_uri = logoPreview;
+      const { error: updateError } = await supabase.from("academies").update(update).eq("id", academy.id);
+      if (updateError) throw new Error(updateError.message.includes("duplicate") ? "That link name is already taken" : updateError.message);
+      onSaved();
+      onClose();
+    } catch (e) {
+      setError(e?.message || "Could not save");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="bg-slate-50 rounded-lg p-3 mt-2">
+      <div className="grid sm:grid-cols-2 gap-2 mb-2">
+        <input value={name} onChange={(e) => setName(e.target.value)} className="border border-slate-200 rounded-lg py-2 px-2.5 text-sm outline-none focus:border-blue-900" placeholder="Academy name" />
+        <input value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} className="border border-slate-200 rounded-lg py-2 px-2.5 text-sm outline-none focus:border-blue-900" placeholder="Link name" />
+        <input value={instapayHandle} onChange={(e) => setInstapayHandle(e.target.value)} className="border border-slate-200 rounded-lg py-2 px-2.5 text-sm outline-none focus:border-blue-900" placeholder="New Instapay handle (optional)" />
+        <input value={instapayPhone} onChange={(e) => setInstapayPhone(e.target.value)} className="border border-slate-200 rounded-lg py-2 px-2.5 text-sm outline-none focus:border-blue-900" placeholder="New Instapay phone (optional)" />
+      </div>
+      <div className="flex items-center gap-2 mb-2">
+        {logoPreview && <img src={logoPreview} alt="" className="w-10 h-10 object-contain rounded-lg border border-slate-200" />}
+        <input
+          type="file"
+          accept="image/*"
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            setLogoPreview(await compressImage(file, 400, 0.8));
+          }}
+          className="text-xs"
+        />
+      </div>
+      {error && <div className="text-red-500 text-xs mb-2">{error}</div>}
+      <div className="flex gap-2">
+        <button onClick={save} disabled={saving} className="text-xs px-3 py-1.5 rounded-lg bg-blue-950 text-white font-semibold hover:bg-blue-900 disabled:opacity-60">
+          {saving ? "Saving..." : "Save"}
+        </button>
+        <button onClick={onClose} disabled={saving} className="text-xs px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-slate-100">
+          Cancel
+        </button>
       </div>
     </div>
   );
