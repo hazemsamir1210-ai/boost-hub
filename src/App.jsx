@@ -1567,6 +1567,47 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   const [authed, setAuthed] = useState(preAuthed);
   const [pass, setPass] = useState("");
   const [passError, setPassError] = useState("");
+  const [showLegacyLogin, setShowLegacyLogin] = useState(false);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+
+  // Real login: signs in with Supabase Auth, then checks that this
+  // account is actually linked to the academy this link belongs to (or
+  // is a super admin, who can access any academy). This is on top of —
+  // not instead of — the database's own row-level security; it's what
+  // lets us show a clear "wrong academy" message instead of just an
+  // empty dashboard.
+  const accountLogin = async () => {
+    setAuthError("");
+    if (!authEmail.trim() || !authPassword) return setAuthError("Enter your email and password");
+    setAuthLoading(true);
+    try {
+      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+        email: authEmail.trim(),
+        password: authPassword,
+      });
+      if (signInError) throw new Error("Wrong email or password");
+      const userId = signInData.user.id;
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("academy_id, is_super_admin")
+        .eq("id", userId)
+        .maybeSingle();
+      if (profileError || !profile) throw new Error("This account isn't set up yet — ask your super admin");
+      if (!profile.is_super_admin && profile.academy_id !== window.__academy?.id) {
+        await supabase.auth.signOut();
+        throw new Error("This account isn't linked to this academy's link");
+      }
+      setAuthed(true);
+    } catch (e) {
+      setAuthError(e?.message || "Could not sign in, please try again");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
   const [tab, setTab] = useState("requests");
   const canEdit = role === "admin"; // branch_manager gets the same screens, view-only
 
@@ -2552,29 +2593,70 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         <div className="max-w-sm w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
           <img src={CONFIG.logoDataUri} alt={CONFIG.academyName} className="w-14 h-14 mx-auto mb-4 object-contain" />
           <h2 className="text-xl font-bold text-slate-900 mb-4 text-center">Admin login</h2>
+
+          <input
+            type="email"
+            value={authEmail}
+            onChange={(e) => setAuthEmail(e.target.value)}
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+            placeholder="Email"
+            autoComplete="username"
+          />
           <input
             type="password"
-            value={pass}
-            onChange={(e) => setPass(e.target.value)}
+            value={authPassword}
+            onChange={(e) => setAuthPassword(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                if (pass === CONFIG.adminPassword) setAuthed(true);
-                else setPassError("Wrong password");
-              }
+              if (e.key === "Enter") accountLogin();
             }}
             className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
             placeholder="Password"
+            autoComplete="current-password"
           />
-          {passError && <div className="text-red-500 text-sm mb-3">{passError}</div>}
+          {authError && <div className="text-red-500 text-sm mb-3">{authError}</div>}
           <button
-            onClick={() => {
-              if (pass === CONFIG.adminPassword) setAuthed(true);
-              else setPassError("Wrong password");
-            }}
-            className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition mb-2"
+            onClick={accountLogin}
+            disabled={authLoading}
+            className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition mb-2 disabled:opacity-60 flex items-center justify-center gap-2"
           >
-            Log in
+            {authLoading && <RefreshCw className="w-4 h-4 animate-spin" />}
+            {authLoading ? "Signing in..." : "Log in"}
           </button>
+
+          <div className="text-center my-3">
+            <button onClick={() => setShowLegacyLogin((v) => !v)} className="text-xs text-slate-400 hover:text-slate-600 underline">
+              {showLegacyLogin ? "Hide old password login" : "Having trouble? Use the old password login"}
+            </button>
+          </div>
+
+          {showLegacyLogin && (
+            <div className="border-t border-slate-100 pt-3 mb-2">
+              <input
+                type="password"
+                value={pass}
+                onChange={(e) => setPass(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    if (pass === CONFIG.adminPassword) setAuthed(true);
+                    else setPassError("Wrong password");
+                  }
+                }}
+                className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+                placeholder="Old admin password"
+              />
+              {passError && <div className="text-red-500 text-sm mb-3">{passError}</div>}
+              <button
+                onClick={() => {
+                  if (pass === CONFIG.adminPassword) setAuthed(true);
+                  else setPassError("Wrong password");
+                }}
+                className="w-full py-2.5 rounded-xl bg-slate-100 text-slate-600 font-medium hover:bg-slate-200 transition mb-2"
+              >
+                Log in with old password
+              </button>
+            </div>
+          )}
+
           <button onClick={onExit} className="w-full py-2 text-slate-400 text-sm hover:text-slate-600">
             Back to site
           </button>
