@@ -5835,6 +5835,227 @@ function HomeView({ onChoosePlan, onAdmin, onStaff, onCoach, onStaffPortal }) {
 /* ============================================================
    Main app
    ============================================================ */
+/* Super-admin panel: reachable at yoursite.com/_admin (a reserved path
+   that never resolves to a real academy). Lets the super admin (you)
+   register new academies and link a login to each one. */
+function SuperAdminView() {
+  const [session, setSession] = useState(null); // {email} once signed in as super admin
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [loginLoading, setLoginLoading] = useState(false);
+
+  const [academies, setAcademies] = useState([]);
+  const [loadingAcademies, setLoadingAcademies] = useState(false);
+
+  const loadAcademies = async () => {
+    setLoadingAcademies(true);
+    const { data } = await supabase.from("academies").select("id, name, slug, created_at").order("created_at", { ascending: false });
+    setAcademies(data || []);
+    setLoadingAcademies(false);
+  };
+
+  useEffect(() => {
+    if (session) loadAcademies();
+  }, [session]);
+
+  const login = async () => {
+    setLoginError("");
+    if (!email.trim() || !password) return setLoginError("Enter your email and password");
+    setLoginLoading(true);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      if (error) throw new Error("Wrong email or password");
+      const { data: profile } = await supabase.from("profiles").select("is_super_admin").eq("id", data.user.id).maybeSingle();
+      if (!profile?.is_super_admin) {
+        await supabase.auth.signOut();
+        throw new Error("This account isn't a super admin");
+      }
+      setSession({ email: email.trim() });
+    } catch (e) {
+      setLoginError(e?.message || "Could not sign in");
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  // Step 1 form: create the academy itself
+  const [newName, setNewName] = useState("");
+  const [newSlug, setNewSlug] = useState("");
+  const [newInstapayHandle, setNewInstapayHandle] = useState("");
+  const [newInstapayPhone, setNewInstapayPhone] = useState("");
+  const [creatingAcademy, setCreatingAcademy] = useState(false);
+  const [createError, setCreateError] = useState("");
+  const [createdAcademy, setCreatedAcademy] = useState(null);
+
+  const createAcademy = async () => {
+    setCreateError("");
+    if (!newName.trim()) return setCreateError("Enter the academy's name");
+    if (!/^[a-z0-9-]+$/.test(newSlug.trim())) return setCreateError("Link name: lowercase letters, numbers and dashes only (e.g. blue-waves)");
+    setCreatingAcademy(true);
+    try {
+      const { data, error } = await supabase
+        .from("academies")
+        .insert({
+          name: newName.trim(),
+          slug: newSlug.trim(),
+          instapay_handle: newInstapayHandle.trim(),
+          instapay_phone: newInstapayPhone.trim(),
+        })
+        .select()
+        .single();
+      if (error) throw new Error(error.message.includes("duplicate") ? "That link name is already taken" : error.message);
+      setCreatedAcademy(data);
+      setNewName("");
+      setNewSlug("");
+      setNewInstapayHandle("");
+      setNewInstapayPhone("");
+      loadAcademies();
+    } catch (e) {
+      setCreateError(e?.message || "Could not create the academy");
+    } finally {
+      setCreatingAcademy(false);
+    }
+  };
+
+  // Step 2 form: link an already-created Supabase Auth user (made the same
+  // way you made your own super-admin login) to an academy as its admin.
+  const [linkUserId, setLinkUserId] = useState("");
+  const [linkAcademyId, setLinkAcademyId] = useState("");
+  const [linking, setLinking] = useState(false);
+  const [linkError, setLinkError] = useState("");
+  const [linkSuccess, setLinkSuccess] = useState(false);
+
+  const linkUserToAcademy = async () => {
+    setLinkError("");
+    setLinkSuccess(false);
+    if (!/^[0-9a-f-]{36}$/i.test(linkUserId.trim())) return setLinkError("That doesn't look like a valid user ID (UUID)");
+    if (!linkAcademyId) return setLinkError("Choose an academy");
+    setLinking(true);
+    try {
+      const { error } = await supabase
+        .from("profiles")
+        .upsert({ id: linkUserId.trim(), academy_id: linkAcademyId, is_super_admin: false });
+      if (error) throw new Error(error.message);
+      setLinkSuccess(true);
+      setLinkUserId("");
+    } catch (e) {
+      setLinkError(e?.message || "Could not link that account");
+    } finally {
+      setLinking(false);
+    }
+  };
+
+  if (!session) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4 bg-white">
+        <div className="max-w-sm w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
+          <h2 className="text-xl font-bold text-slate-900 mb-4 text-center">Super Admin</h2>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+            placeholder="Email"
+          />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") login(); }}
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+            placeholder="Password"
+          />
+          {loginError && <div className="text-red-500 text-sm mb-3">{loginError}</div>}
+          <button
+            onClick={login}
+            disabled={loginLoading}
+            className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60"
+          >
+            {loginLoading ? "Signing in..." : "Log in"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto px-4 py-10">
+      <h2 className="text-2xl font-bold text-slate-900 mb-1">Super Admin — Academies</h2>
+      <p className="text-slate-500 mb-8 text-sm">Signed in as {session.email}</p>
+
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+        <h3 className="font-bold text-slate-900 mb-1">Step 1 — Register a new academy</h3>
+        <p className="text-xs text-slate-400 mb-4">
+          The "link name" becomes their web address, e.g. "blue-waves" → yoursite.com/blue-waves
+        </p>
+        <div className="grid sm:grid-cols-2 gap-3 mb-3">
+          <input value={newName} onChange={(e) => setNewName(e.target.value)} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Academy name" />
+          <input value={newSlug} onChange={(e) => setNewSlug(e.target.value.toLowerCase())} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Link name (e.g. blue-waves)" />
+          <input value={newInstapayHandle} onChange={(e) => setNewInstapayHandle(e.target.value)} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Instapay handle (optional)" />
+          <input value={newInstapayPhone} onChange={(e) => setNewInstapayPhone(e.target.value)} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Instapay phone (optional)" />
+        </div>
+        {createError && <div className="text-red-500 text-sm mb-3">{createError}</div>}
+        {createdAcademy && (
+          <div className="text-sm bg-green-50 text-green-700 rounded-lg px-3 py-2 mb-3">
+            Created! Their link: <strong>yoursite.com/{createdAcademy.slug}</strong>. Now do Step 2 below to give them a login.
+          </div>
+        )}
+        <button
+          onClick={createAcademy}
+          disabled={creatingAcademy}
+          className="py-2.5 px-5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+        >
+          {creatingAcademy ? "Creating..." : "Create academy"}
+        </button>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+        <h3 className="font-bold text-slate-900 mb-1">Step 2 — Give them a login</h3>
+        <p className="text-xs text-slate-400 mb-4">
+          In Supabase → Authentication → Users → "Add user" → "Create new user", make an account with their
+          email/password (tick "Auto Confirm User"). Copy the User ID it gives you and paste it below.
+        </p>
+        <div className="grid sm:grid-cols-2 gap-3 mb-3">
+          <input value={linkUserId} onChange={(e) => setLinkUserId(e.target.value)} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="User ID (UUID) from Supabase" />
+          <select value={linkAcademyId} onChange={(e) => setLinkAcademyId(e.target.value)} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
+            <option value="">Choose academy...</option>
+            {academies.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+        </div>
+        {linkError && <div className="text-red-500 text-sm mb-3">{linkError}</div>}
+        {linkSuccess && <div className="text-sm bg-green-50 text-green-700 rounded-lg px-3 py-2 mb-3">Linked! They can log in now.</div>}
+        <button
+          onClick={linkUserToAcademy}
+          disabled={linking}
+          className="py-2.5 px-5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+        >
+          {linking ? "Linking..." : "Link account to academy"}
+        </button>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 p-5">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-bold text-slate-900">All academies ({academies.length})</h3>
+          <button onClick={loadAcademies} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+            <RefreshCw className={`w-4 h-4 ${loadingAcademies ? "animate-spin" : ""}`} />
+          </button>
+        </div>
+        <div className="space-y-2">
+          {academies.map((a) => (
+            <div key={a.id} className="flex items-center justify-between text-sm border-t border-slate-100 pt-2">
+              <span className="font-medium text-slate-800">{a.name}</span>
+              <span className="text-slate-400">yoursite.com/{a.slug}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* A render crash anywhere used to blank the whole page silently — this
    catches that instead and shows what actually went wrong, with a button
    to recover, so a bug in one corner of the app doesn't lock everyone
@@ -5883,11 +6104,24 @@ export default function App() {
   const [lastRecord, setLastRecord] = useState(null);
   const [academyStatus, setAcademyStatus] = useState("loading"); // "loading" | "ready" | "not-found"
 
+  // A reserved path that never maps to a real academy — the super admin's
+  // own panel for registering new academies.
+  const isSuperAdminRoute = academySlugFromPath() === "_admin";
+
   useEffect(() => {
+    if (isSuperAdminRoute) return;
     resolveAcademy().then((academy) => {
       setAcademyStatus(academy ? "ready" : "not-found");
     });
-  }, []);
+  }, [isSuperAdminRoute]);
+
+  if (isSuperAdminRoute) {
+    return (
+      <ErrorBoundary>
+        <SuperAdminView />
+      </ErrorBoundary>
+    );
+  }
 
   if (academyStatus === "loading") {
     return (
