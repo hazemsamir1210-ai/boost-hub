@@ -389,9 +389,24 @@ function monthKey(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
+function nextMonthKey(date = new Date()) {
+  return monthKey(new Date(date.getFullYear(), date.getMonth() + 1, 1));
+}
+
 function monthLabel(key) {
   const [y, m] = key.split("-").map(Number);
   return new Date(y, m - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+}
+
+/* Which month a NEW payment coming in right now should count for. Once
+   the admin's "next month opens on" date has arrived, everyone paying is
+   pre-paying for NEXT month (this month is basically over) — so default
+   to that instead of always assuming "this month", which was silently
+   marking advance payments against the wrong month. Still just a
+   default: wherever this is used, the admin can override it. */
+function defaultPaymentMonth(bookingOpenDate) {
+  if (bookingOpenDate && todayISO() >= bookingOpenDate) return nextMonthKey();
+  return monthKey();
 }
 
 function isPaidThisMonth(swimmer) {
@@ -538,6 +553,27 @@ async function setLastScheduleResetMonth(key) {
   } catch {
     // non-fatal — worst case we re-check next load
   }
+}
+
+/* ---------- Next month's booking-open date ----------
+   The admin sets one date (e.g. "the 24th") from the dashboard each month.
+   Before that date, parents can still fill in the subscribe form, but
+   can't actually send it — this is a single shared setting, not tied to
+   a specific swimmer, so it's stored the same simple way as the schedule
+   reset flag above. An empty/missing value means "no restriction". */
+const BOOKING_OPEN_DATE_KEY = "booking-open-date";
+
+async function getBookingOpenDate() {
+  try {
+    const res = await window.storage.get(BOOKING_OPEN_DATE_KEY, true);
+    return res?.value || "";
+  } catch {
+    return "";
+  }
+}
+
+async function setBookingOpenDate(dateStr) {
+  await storageSet(BOOKING_OPEN_DATE_KEY, dateStr || "", true);
 }
 
 /* Swimmers a given coach already has booked in the same day+time slot
@@ -895,16 +931,42 @@ function SubscribeView({ initialPlanId, onSubmitted, onBack }) {
   // Optional: link straight to an existing swimmer's profile, so a payment
   // still gets matched correctly even if it's sent from a different phone
   // (e.g. Dad pays from Mom's Instapay) — no more relying on the phone
-  // number alone to find who to mark as paid.
+  // number alone to find who to mark as paid. Searched on-demand (once the
+  // parent has typed a couple of letters) rather than loading the whole
+  // roster up front — with a large roster, that was another place a
+  // phone could run out of memory before the parent even got to pay.
   const [existingSwimmers, setExistingSwimmers] = useState([]);
   const [swimmerId, setSwimmerId] = useState("");
 
+  // Admin sets one date each month (e.g. "next month's spots open on the
+  // 24th") — before that date the form still works, but sending is
+  // blocked with an explanation instead.
+  const [bookingOpenDate, setBookingOpenDateState] = useState("");
   useEffect(() => {
-    (async () => {
-      const items = await loadCollection(STORE_KEYS.swimmers);
-      setExistingSwimmers(items.sort((a, b) => a.name.localeCompare(b.name)));
-    })();
+    getBookingOpenDate().then(setBookingOpenDateState);
   }, []);
+  const bookingLocked = !!bookingOpenDate && todayISO() < bookingOpenDate;
+
+  useEffect(() => {
+    const q = name.trim();
+    if (q.length < 2) {
+      setExistingSwimmers([]);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const { data, error } = await supabase.from("swimmers").select("data").ilike("name", `%${q}%`).limit(20);
+        if (!cancelled && !error) setExistingSwimmers((data || []).map((r) => r.data));
+      } catch (e) {
+        // non-fatal — the dropdown just stays empty, name/phone alone still works
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [name]);
 
   const handleFile = async (f) => {
     if (!f) return;
@@ -925,6 +987,10 @@ function SubscribeView({ initialPlanId, onSubmitted, onBack }) {
 
   const submit = async () => {
     setError("");
+    if (bookingLocked)
+      return setError(
+        `Sending isn't open yet — it opens on ${new Date(bookingOpenDate + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long" })}. You're welcome to fill in the form now and come back then.`
+      );
     if (!name.trim()) return setError("Please enter your name");
     if (!/^01[0-2,5][0-9]{8}$/.test(phone.trim()))
       return setError("Please enter a valid phone number");
@@ -968,6 +1034,16 @@ function SubscribeView({ initialPlanId, onSubmitted, onBack }) {
 
       <h2 className="text-2xl font-bold text-slate-900 mb-1">Confirm subscription</h2>
       <p className="text-slate-500 mb-6">Choose a plan and send your payment proof</p>
+
+      {bookingLocked && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-xl px-4 py-3 mb-6">
+          Sending isn't open yet — it opens on{" "}
+          <strong>
+            {new Date(bookingOpenDate + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long" })}
+          </strong>
+          . Feel free to fill in the form now and come back to send it then.
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-2 mb-3">
         {PLANS.map((p) => (
@@ -1063,7 +1139,7 @@ function SubscribeView({ initialPlanId, onSubmitted, onBack }) {
           </div>
         </div>
 
-        {existingSwimmers.length > 0 && (
+        {name.trim().length >= 2 && (
           <div>
             <label className="text-sm text-slate-600 mb-1 block">
               Already a registered swimmer? <span className="text-slate-400 font-normal">(optional, but helps us link your payment)</span>
@@ -1074,10 +1150,7 @@ function SubscribeView({ initialPlanId, onSubmitted, onBack }) {
               className="w-full border border-slate-200 rounded-xl py-3 px-3 outline-none focus:border-blue-900 bg-white"
             >
               <option value="">— Select the swimmer's name —</option>
-              {(name.trim()
-                ? existingSwimmers.filter((s) => s.name.toLowerCase().includes(name.trim().toLowerCase()))
-                : existingSwimmers
-              ).map((s) => (
+              {existingSwimmers.map((s) => (
                 <option key={s.id} value={s.id}>{s.name} ({s.age} yrs)</option>
               ))}
             </select>
@@ -1112,11 +1185,11 @@ function SubscribeView({ initialPlanId, onSubmitted, onBack }) {
 
         <button
           onClick={submit}
-          disabled={submitting}
+          disabled={submitting || bookingLocked}
           className="w-full py-3.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60 flex items-center justify-center gap-2"
         >
           {submitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-          {submitting ? "Sending..." : "Send request"}
+          {submitting ? "Sending..." : bookingLocked ? "Not open yet" : "Send request"}
         </button>
       </div>
     </div>
@@ -1453,6 +1526,31 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   // Names of swimmers whose payment was just confirmed but couldn't be
   // marked paid yet because they still need a day/time assigned
   const [scheduleNeededNotice, setScheduleNeededNotice] = useState(null);
+  const [bookingOpenDateInput, setBookingOpenDateInput] = useState("");
+  const [bookingOpenDateSaving, setBookingOpenDateSaving] = useState(false);
+
+  useEffect(() => {
+    if (!authed || !canEdit) return;
+    getBookingOpenDate().then((d) => {
+      setBookingOpenDateInput(d);
+      // Once, on load: if we're already past this month's "next month
+      // opens on" date, default the Swimmers tab to acting on NEXT month
+      // instead of the current one — that's what most payments coming in
+      // right now actually are. The admin can always change it manually
+      // afterwards; this only sets the starting point.
+      if (d && todayISO() >= d) setPaymentMonthFilter(nextMonthKey());
+    });
+  }, [authed, canEdit]);
+
+  const saveBookingOpenDate = async (explicitValue) => {
+    const value = explicitValue !== undefined ? explicitValue : bookingOpenDateInput;
+    setBookingOpenDateSaving(true);
+    try {
+      await setBookingOpenDate(value);
+    } finally {
+      setBookingOpenDateSaving(false);
+    }
+  };
   const [search, setSearch] = useState("");
   // The search box is its own isolated component (SwimmerSearchInput,
   // below) with its own local state — typing a keystroke only re-renders
@@ -1521,6 +1619,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   // confirming a payment request — asks for the paper receipt book number
   const [receiptModal, setReceiptModal] = useState(null); // request record, or null
   const [receiptNoInput, setReceiptNoInput] = useState("");
+  const [receiptTargetMonth, setReceiptTargetMonth] = useState(monthKey());
   const [receiptError, setReceiptError] = useState("");
   const [receiptSaving, setReceiptSaving] = useState(false);
 
@@ -1743,7 +1842,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     };
   }, [authed, requests, photos]);
 
-  const setRequestStatus = async (record, status, receiptNo) => {
+  const setRequestStatus = async (record, status, receiptNo, targetMonth) => {
     const updated = {
       ...record,
       status,
@@ -1757,14 +1856,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       loadRequests();
     }
 
-    // Auto-link: confirming a payment marks the matching swimmer(s) as paid.
-    // Prefer the swimmer explicitly picked on the subscribe form (exact,
-    // works even if the payment came from a different phone); fall back to
-    // matching by phone number for older requests that don't have that.
+    // Auto-link: confirming a payment marks the matching swimmer(s) as paid
+    // for the chosen month — defaults to "this month", but once next
+    // month's booking window is open it defaults to next month instead,
+    // since by then everyone paying is really pre-paying ahead. The admin
+    // can always override which month from the confirm dialog.
     // A swimmer with no day/time yet is left unpaid here — activate them
     // from the Swimmers tab instead, which asks for a schedule first.
     if (status === "confirmed") {
-      const key = monthKey();
+      const key = targetMonth || defaultPaymentMonth(bookingOpenDateInput);
       try {
         const all = await fetchAllSwimmers();
         const matches = record.swimmerId
@@ -1935,7 +2035,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   };
 
   const togglePaidThisMonth = async (swimmer) => {
-    const key = monthKey();
+    const key = paymentMonthFilter;
     const paidNow = (swimmer.paidMonths || []).includes(key);
     // Turning payment ON for a swimmer with no day/time yet — collect the
     // schedule first, then the save itself marks the month paid.
@@ -1992,7 +2092,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   // "Mark paid only" — requires a receipt # and amount before activating,
   // same as the day/time gate: no schedule yet -> collect that first.
   const openMarkPaidOnly = (swimmer) => {
-    const key = monthKey();
+    const key = paymentMonthFilter;
     if ((swimmer.paidMonths || []).includes(key)) return;
     if (!swimmer.day || !swimmer.time) {
       setEditingSwimmer(swimmer);
@@ -2013,7 +2113,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     setMarkPaidError("");
     const swimmer = markPaidModal;
     setMarkPaidSaving(true);
-    const key = monthKey();
+    const key = paymentMonthFilter;
     try {
       await updateSwimmerById(swimmer.id, (s) => ({
         ...s,
@@ -2059,7 +2159,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       if (!res) throw new Error("Could not save the payment, please try again");
       setRequests(nextRequests);
 
-      const key = monthKey();
+      const key = paymentMonthFilter;
       if (!(swimmer.paidMonths || []).includes(key)) {
         await updateSwimmerById(swimmer.id, (s) => ({ ...s, paidMonths: [...(s.paidMonths || []), key] }));
         loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
@@ -2088,7 +2188,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     setReceiptError("");
     setReceiptSaving(true);
     try {
-      await setRequestStatus(receiptModal, "confirmed", receiptNoInput.trim());
+      await setRequestStatus(receiptModal, "confirmed", receiptNoInput.trim(), receiptTargetMonth);
       setReceiptModal(null);
       setReceiptNoInput("");
     } catch (e) {
@@ -2538,6 +2638,36 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
               </button>
             </div>
           )}
+          {canEdit && (
+            <div className="mb-4 flex items-center gap-3 flex-wrap bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5">
+              <span className="text-sm text-slate-600 font-medium">Next month's bookings open on:</span>
+              <input
+                type="date"
+                value={bookingOpenDateInput}
+                onChange={(e) => setBookingOpenDateInput(e.target.value)}
+                className="border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-blue-900 bg-white"
+              />
+              <button
+                onClick={saveBookingOpenDate}
+                disabled={bookingOpenDateSaving}
+                className="text-sm px-3 py-1.5 rounded-lg bg-blue-950 text-white font-medium hover:bg-blue-900 disabled:opacity-60"
+              >
+                {bookingOpenDateSaving ? "Saving..." : "Save"}
+              </button>
+              {bookingOpenDateInput && (
+                <button
+                  onClick={() => { setBookingOpenDateInput(""); saveBookingOpenDate(""); }}
+                  disabled={bookingOpenDateSaving}
+                  className="text-sm px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-500 font-medium hover:bg-slate-100 disabled:opacity-60"
+                >
+                  Clear (always open)
+                </button>
+              )}
+              <span className="text-xs text-slate-400">
+                Parents can fill in the form anytime, but can't send it before this date.
+              </span>
+            </div>
+          )}
           <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
             <div className="flex gap-2">
               {[
@@ -2635,6 +2765,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                         onClick={() => {
                           setReceiptModal(r);
                           setReceiptNoInput(nextReceiptNo());
+                          setReceiptTargetMonth(defaultPaymentMonth(bookingOpenDateInput));
                           setReceiptError("");
                         }}
                         className="flex-1 py-2 rounded-lg bg-blue-950 text-white text-sm font-medium hover:bg-blue-900 flex items-center justify-center gap-1"
@@ -2734,14 +2865,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                 <option value="paid">Paid</option>
                 <option value="unpaid">Not paid</option>
               </select>
-              {paymentStatusFilter !== "all" && (
+              <div className="flex items-center gap-1.5 border border-slate-200 rounded-lg py-1 pl-3 pr-1 bg-white">
+                <span className="text-xs text-slate-400 whitespace-nowrap">Acting on:</span>
                 <input
                   type="month"
                   value={paymentMonthFilter}
                   onChange={(e) => setPaymentMonthFilter(e.target.value)}
-                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                  className="text-sm outline-none bg-white"
+                  title="Payment status, and the Cash payment / Mark paid only / Undo buttons below, all apply to this month"
                 />
-              )}
+              </div>
               {(branchFilter !== "all" || levelFilter !== "all" || dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || paymentStatusFilter !== "all" || search) && (
                 <button
                   onClick={() => {
@@ -2899,11 +3032,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                   <div className="flex items-center gap-1.5">
                     <span
                       className={`text-xs px-3 py-1.5 rounded-full font-semibold ${
-                        isPaidThisMonth(s) ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"
+                        (s.paidMonths || []).includes(paymentMonthFilter) ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"
                       }`}
-                      title={monthLabel(monthKey())}
+                      title={monthLabel(paymentMonthFilter)}
                     >
-                      {isPaidThisMonth(s) ? `Paid · ${monthLabel(monthKey())}` : isFrozen(s) ? "Frozen" : "Not paid"}
+                      {(s.paidMonths || []).includes(paymentMonthFilter)
+                        ? `Paid · ${monthLabel(paymentMonthFilter)}`
+                        : isFrozen(s)
+                        ? "Frozen"
+                        : `Not paid · ${monthLabel(paymentMonthFilter)}`}
                     </span>
                     {isFrozen(s) ? (
                       canEdit && (
@@ -2915,7 +3052,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                           Unfreeze
                         </button>
                       )
-                    ) : !isPaidThisMonth(s) ? (
+                    ) : !(s.paidMonths || []).includes(paymentMonthFilter) ? (
                       canEdit && (
                         <div className="flex items-center gap-1">
                           <button
@@ -3984,7 +4121,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           <div className="bg-white rounded-2xl p-5 max-w-sm w-full shadow-xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-bold text-slate-900 mb-1">Record cash payment</h3>
             <p className="text-sm text-slate-500 mb-4">
-              For {cashModal.name} · {monthLabel(monthKey())}. This marks the month as paid and adds it to the revenue report.
+              For {cashModal.name} · {monthLabel(paymentMonthFilter)}. This marks the month as paid and adds it to the revenue report.
             </p>
             <div className="mb-3">
               <label className="text-xs text-slate-500 mb-1 block">Amount (EGP)</label>
@@ -4046,7 +4183,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           <div className="bg-white rounded-2xl p-5 max-w-sm w-full shadow-xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-bold text-slate-900 mb-1">Did {markPaidModal.name} pay?</h3>
             <p className="text-sm text-slate-500 mb-4">
-              {monthLabel(monthKey())}. This just marks the month as paid — no receipt or amount needed. It won't be counted in the revenue totals (since there's no amount), but it'll be listed under "Marked paid only" in Reports.
+              {monthLabel(paymentMonthFilter)}. This just marks the month as paid — no receipt or amount needed. It won't be counted in the revenue totals (since there's no amount), but it'll be listed under "Marked paid only" in Reports.
             </p>
             {markPaidError && <div className="text-red-500 text-sm mb-3">{markPaidError}</div>}
             <div className="flex gap-2">
@@ -4131,6 +4268,23 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             <p className="text-sm text-slate-500 mb-4">
               For {receiptModal.name} · {receiptModal.planName} — {receiptModal.price} EGP.
             </p>
+            <div className="mb-3">
+              <label className="text-xs text-slate-500 mb-1 block">Mark paid for</label>
+              <select
+                value={receiptTargetMonth}
+                onChange={(e) => setReceiptTargetMonth(e.target.value)}
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+              >
+                {[-1, 0, 1, 2].map((offset) => {
+                  const d = new Date();
+                  d.setMonth(d.getMonth() + offset);
+                  const key = monthKey(d);
+                  return (
+                    <option key={key} value={key}>{monthLabel(key)}</option>
+                  );
+                })}
+              </select>
+            </div>
             <div className="mb-3">
               <label className="text-xs text-slate-500 mb-1 block">Receipt # (from your receipt book)</label>
               <input
