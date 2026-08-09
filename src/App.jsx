@@ -42,13 +42,34 @@ async function resolveAcademy() {
   // No slug in the URL — this is the plain link that was already shared
   // with everyone before multi-academy support existed. Keep it pointing
   // at the original academy so nothing breaks for people already using it.
-  const query = supabase
-    .from("academies")
-    .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone");
-  const { data, error } = slug
-    ? await query.eq("slug", slug).maybeSingle()
-    : await query.eq("id", "354f7151-03f6-4511-b40a-19db46f28e29").maybeSingle();
-  if (error || !data) return null;
+  let result;
+  try {
+    if (slug) {
+      result = await supabase
+        .from("academies")
+        .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone")
+        .eq("slug", slug)
+        .maybeSingle();
+    } else {
+      result = await supabase
+        .from("academies")
+        .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone")
+        .eq("id", "354f7151-03f6-4511-b40a-19db46f28e29")
+        .maybeSingle();
+    }
+  } catch (e) {
+    window.__academyError = String(e?.message || e);
+    return null;
+  }
+  const { data, error } = result;
+  if (error) {
+    window.__academyError = error.message || JSON.stringify(error);
+    return null;
+  }
+  if (!data) {
+    window.__academyError = `No academy row matched (slug="${slug || "none"}")`;
+    return null;
+  }
   window.__academy = {
     id: data.id,
     slug: data.slug,
@@ -5800,9 +5821,14 @@ export default function App() {
         <div className="max-w-sm w-full text-center">
           <div className="text-4xl mb-3">🔍</div>
           <h2 className="text-lg font-bold text-slate-900 mb-2">Academy not found</h2>
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-slate-500 mb-3">
             This link doesn't match a registered academy. Double-check the link, or ask your academy for the correct one.
           </p>
+          {window.__academyError && (
+            <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2 break-words text-left">
+              {window.__academyError}
+            </p>
+          )}
         </div>
       </div>
     );
