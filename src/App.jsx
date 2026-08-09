@@ -5846,6 +5846,90 @@ function HomeView({ onChoosePlan, onAdmin, onStaff, onCoach, onStaffPortal }) {
 /* Super-admin panel: reachable at yoursite.com/_admin (a reserved path
    that never resolves to a real academy). Lets the super admin (you)
    register new academies and link a login to each one. */
+/* The generic, un-branded entry point — no academy's marketing page, just
+   a login form. Signs in with Supabase Auth, looks up which academy that
+   account belongs to, and sends the browser to that academy's own link
+   (or to the super-admin panel for a super admin). Reached at the bare
+   root URL — each academy's own public/subscribe page still lives at its
+   own link, e.g. yoursite.com/boost-hub. */
+function GatewayView() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const login = async () => {
+    setError("");
+    if (!email.trim() || !password) return setError("Enter your email and password");
+    setLoading(true);
+    try {
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      if (signInError) throw new Error("Wrong email or password");
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("academy_id, is_super_admin")
+        .eq("id", data.user.id)
+        .maybeSingle();
+      if (profileError || !profile) throw new Error("This account isn't set up with an academy yet");
+      if (profile.is_super_admin) {
+        window.location.href = "/_admin";
+        return;
+      }
+      const { data: academy, error: academyError } = await supabase
+        .from("academies")
+        .select("slug")
+        .eq("id", profile.academy_id)
+        .maybeSingle();
+      if (academyError || !academy?.slug) throw new Error("Your academy isn't set up correctly — ask your super admin");
+      window.location.href = `/${academy.slug}`;
+    } catch (e) {
+      setError(e?.message || "Could not sign in, please try again");
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4 bg-slate-50">
+      <div className="max-w-sm w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
+        <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-blue-950 flex items-center justify-center">
+          <Waves className="w-7 h-7 text-white" />
+        </div>
+        <h2 className="text-xl font-bold text-slate-900 mb-1 text-center">Swimming Academy Management</h2>
+        <p className="text-sm text-slate-400 mb-6 text-center">Sign in to your academy's dashboard</p>
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+          placeholder="Email"
+          autoComplete="username"
+        />
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") login(); }}
+          className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+          placeholder="Password"
+          autoComplete="current-password"
+        />
+        {error && <div className="text-red-500 text-sm mb-3">{error}</div>}
+        <button
+          onClick={login}
+          disabled={loading}
+          className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60"
+        >
+          {loading ? "Signing in..." : "Log in"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
 function SuperAdminView() {
   const [session, setSession] = useState(null); // {email} once signed in as super admin
   const [email, setEmail] = useState("");
@@ -6213,18 +6297,31 @@ export default function App() {
   // A reserved path that never maps to a real academy — the super admin's
   // own panel for registering new academies.
   const isSuperAdminRoute = academySlugFromPath() === "_admin";
+  // No slug at all (the bare root URL) — this is now the general
+  // "Swimming Academy Management" login gateway, not any one academy's
+  // page. Each academy's own public page lives at its own link, e.g.
+  // yoursite.com/boost-hub.
+  const isGatewayRoute = !isSuperAdminRoute && !academySlugFromPath();
 
   useEffect(() => {
-    if (isSuperAdminRoute) return;
+    if (isSuperAdminRoute || isGatewayRoute) return;
     resolveAcademy().then((academy) => {
       setAcademyStatus(academy ? "ready" : "not-found");
     });
-  }, [isSuperAdminRoute]);
+  }, [isSuperAdminRoute, isGatewayRoute]);
 
   if (isSuperAdminRoute) {
     return (
       <ErrorBoundary>
         <SuperAdminView />
+      </ErrorBoundary>
+    );
+  }
+
+  if (isGatewayRoute) {
+    return (
+      <ErrorBoundary>
+        <GatewayView />
       </ErrorBoundary>
     );
   }
