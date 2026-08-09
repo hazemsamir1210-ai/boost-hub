@@ -1157,6 +1157,8 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
     setDay(newDay);
     const newOptions = getTimeOptions(branch, newDay, level);
     if (!newOptions.includes(time)) setTime(newOptions[0]);
+    // clear the assigned coach if they're off on the newly picked day
+    if (coachId && (coaches || []).find((c) => c.id === coachId)?.offDays?.includes(newDay)) setCoachId("");
   };
 
   const handleLevelChange = (newLevel) => {
@@ -1341,12 +1343,16 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
             className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
           >
             <option value="">No coach assigned</option>
-            {(coaches || []).filter((c) => c.branch === branch).map((c) => (
+            {(coaches || []).filter((c) => c.branch === branch && !(c.offDays || []).includes(day)).map((c) => (
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
-          {(coaches || []).filter((c) => c.branch === branch).length === 0 && (
-            <div className="text-xs text-amber-600 mt-1">No coaches at this branch yet — add one from the Coaches tab</div>
+          {(coaches || []).filter((c) => c.branch === branch && !(c.offDays || []).includes(day)).length === 0 && (
+            <div className="text-xs text-amber-600 mt-1">
+              {(coaches || []).some((c) => c.branch === branch)
+                ? "Every coach at this branch is off on this day"
+                : "No coaches at this branch yet — add one from the Coaches tab"}
+            </div>
           )}
           {coachId && (
             <div className={`text-xs mt-1 ${slotMismatch || slotFull ? "text-red-500" : "text-slate-400"}`}>
@@ -1486,6 +1492,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   const [importPreview, setImportPreview] = useState(null); // { valid: [...], errors: [...] }
   const [importing, setImporting] = useState(false);
   const [exportingSwimmers, setExportingSwimmers] = useState(false);
+  const [scheduleDayFilter, setScheduleDayFilter] = useState(dayGroupForToday() || DAY_GROUPS[0].id);
   const [importError, setImportError] = useState("");
   const fileInputRef = useRef(null);
   const [expandedId, setExpandedId] = useState(null);
@@ -2355,16 +2362,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       if (!bookingsMapById[s.coachId]) bookingsMapById[s.coachId] = {};
       const key = `${s.day}|${s.time}`;
       const bucket = bookingsMapById[s.coachId];
-      if (!bucket[key]) bucket[key] = { day: s.day, time: s.time, sessionType: s.sessionType, count: 0 };
+      if (!bucket[key]) bucket[key] = { day: s.day, time: s.time, sessionType: s.sessionType, count: 0, levels: new Set() };
       bucket[key].count += 1;
+      if (s.level) bucket[key].levels.add(s.level);
     });
     const bookingsById = {};
     Object.keys(bookingsMapById).forEach((coachId) => {
-      bookingsById[coachId] = Object.values(bookingsMapById[coachId]).sort(
-        (a, b) =>
-          DAY_GROUPS.findIndex((d) => d.id === a.day) - DAY_GROUPS.findIndex((d) => d.id === b.day) ||
-          timeToMinutes(a.time) - timeToMinutes(b.time)
-      );
+      bookingsById[coachId] = Object.values(bookingsMapById[coachId])
+        .map((b) => ({ ...b, levels: Array.from(b.levels) }))
+        .sort(
+          (a, b) =>
+            DAY_GROUPS.findIndex((d) => d.id === a.day) - DAY_GROUPS.findIndex((d) => d.id === b.day) ||
+            timeToMinutes(a.time) - timeToMinutes(b.time)
+        );
     });
     return { coachLoadById: loadById, coachBookingsById: bookingsById };
   }, [swimmers]);
@@ -3261,20 +3271,30 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
 
       {tab === "schedule" && (
         <div>
-          <p className="text-sm text-slate-500 mb-4">
-            Every coach, every day & time, at a glance — same idea as the paper sheet, always up to date.
-          </p>
+          <div className="flex items-center justify-between gap-2 flex-wrap mb-4">
+            <p className="text-sm text-slate-500">
+              Every coach, every time, at a glance — same idea as the paper sheet, always up to date.
+            </p>
+            <select
+              value={scheduleDayFilter}
+              onChange={(e) => setScheduleDayFilter(e.target.value)}
+              className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+            >
+              {DAY_GROUPS.map((d) => (
+                <option key={d.id} value={d.id}>{d.label}</option>
+              ))}
+            </select>
+          </div>
           {coaches.length === 0 ? (
             <div className="text-center text-slate-400 py-16">No coaches added yet</div>
           ) : (
-            DAY_GROUPS.map((dayGroup) => {
+            DAY_GROUPS.filter((d) => d.id === scheduleDayFilter).map((dayGroup) => {
               const times = (TIME_SLOTS[BRANCHES[0].id]?.[dayGroup.id] || []).slice().sort(
                 (a, b) => timeToMinutes(a) - timeToMinutes(b)
               );
               if (times.length === 0) return null;
               return (
                 <div key={dayGroup.id} className="mb-8">
-                  <h3 className="font-bold text-slate-900 mb-2">{dayGroup.label}</h3>
                   <div className="overflow-x-auto border border-slate-200 rounded-xl">
                     <table className="w-full text-xs border-collapse">
                       <thead>
@@ -3290,7 +3310,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                         </tr>
                       </thead>
                       <tbody>
-                        {coaches.map((c) => (
+                        {coaches
+                          .filter((c) => !(c.offDays || []).includes(dayGroup.id))
+                          .map((c) => (
                           <tr key={c.id} className="border-t border-slate-100">
                             <td className="px-3 py-2 font-medium text-slate-800 sticky left-0 bg-white whitespace-nowrap">
                               {c.name}
@@ -3311,12 +3333,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                               return (
                                 <td key={t} className="px-2 py-2 text-center whitespace-nowrap">
                                   <span
-                                    className={`inline-block px-1.5 py-0.5 rounded font-medium ${
+                                    className={`inline-block px-1.5 py-0.5 rounded font-medium leading-tight ${
                                       spotsLeft > 0 ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"
                                     }`}
                                     title={`${sessionTypeInfo(booking.sessionType).label} — ${booking.count}/${capacity}`}
                                   >
                                     {booking.count}/{capacity}
+                                    <br />
+                                    {booking.levels.join(", ")}
                                   </span>
                                 </td>
                               );
@@ -4235,9 +4259,14 @@ function CoachForm({ initial, onSave, onCancel }) {
   const [phone, setPhone] = useState(initial?.phone || "");
   const [branch, setBranch] = useState(initial?.branch || BRANCHES[0].id);
   const [pin, setPin] = useState(initial?.pin || "");
+  const [offDays, setOffDays] = useState(initial?.offDays || []);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const recordIdRef = useRef(initial?.id || genId());
+
+  const toggleOffDay = (dayId) => {
+    setOffDays((prev) => (prev.includes(dayId) ? prev.filter((d) => d !== dayId) : [...prev, dayId]));
+  };
 
   const save = async () => {
     setError("");
@@ -4251,6 +4280,7 @@ function CoachForm({ initial, onSave, onCancel }) {
         phone: phone.trim(),
         branch,
         pin: pin.trim(),
+        offDays,
         createdAt: initial?.createdAt || new Date().toISOString(),
       });
     } catch (e) {
@@ -4290,6 +4320,28 @@ function CoachForm({ initial, onSave, onCancel }) {
             inputMode="numeric"
           />
           <div className="text-xs text-slate-400 mt-1">Lets this coach log in to see their own schedule</div>
+        </div>
+        <div className="sm:col-span-2">
+          <label className="text-xs text-slate-500 mb-1 block">Off days (this coach doesn't work these)</label>
+          <div className="flex flex-wrap gap-2">
+            {DAY_GROUPS.map((d) => (
+              <button
+                key={d.id}
+                type="button"
+                onClick={() => toggleOffDay(d.id)}
+                className={`text-xs px-3 py-1.5 rounded-full font-medium border transition ${
+                  offDays.includes(d.id)
+                    ? "bg-red-50 text-red-700 border-red-200"
+                    : "bg-white text-slate-500 border-slate-200 hover:border-slate-300"
+                }`}
+              >
+                {d.label}
+              </button>
+            ))}
+          </div>
+          <div className="text-xs text-slate-400 mt-1">
+            Off days won't show up in the Schedule tab or as bookable in the swimmer form.
+          </div>
         </div>
       </div>
       {error && <div className="text-red-500 text-sm mb-3">{error}</div>}
@@ -4459,9 +4511,9 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
 
   // How full each coach is for THIS exact session (branch/day/time) —
   // `swimmers` is already scoped to just this slot, so no extra fetch is
-  // needed to work this out.
+  // needed to work this out. Coaches off on this day are left out entirely.
   const coachAvailability = coaches
-    .filter((c) => c.branch === branch)
+    .filter((c) => c.branch === branch && !(c.offDays || []).includes(dayGroup))
     .map((c) => {
       const inSlot = swimmers.filter((s) => s.coachId === c.id);
       if (inSlot.length === 0) return { coach: c, free: true, label: "Free — no bookings" };
