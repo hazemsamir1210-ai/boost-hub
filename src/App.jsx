@@ -1163,6 +1163,8 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
     setLevel(newLevel);
     const newOptions = getTimeOptions(branch, day, newLevel);
     if (!newOptions.includes(time)) setTime(newOptions[0]);
+    // Baby classes are always 1-on-1, so the session type follows automatically.
+    if (newLevel === "Baby") setSessionType("private");
   };
 
   const [saving, setSaving] = useState(false);
@@ -3170,8 +3172,24 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           <div className="space-y-3">
             {coaches.map((c) => {
               const load = swimmers.filter((s) => s.coachId === c.id).length;
+              // Group this coach's current swimmers by day+time to show
+              // which sessions they're booked into, and how much room is
+              // left in each — that's what "free slots with this coach"
+              // means in practice, since capacity is set per session.
+              const bookingsMap = {};
+              swimmers
+                .filter((s) => s.coachId === c.id && s.day && s.time)
+                .forEach((s) => {
+                  const key = `${s.day}|${s.time}`;
+                  if (!bookingsMap[key]) bookingsMap[key] = { day: s.day, time: s.time, sessionType: s.sessionType, count: 0 };
+                  bookingsMap[key].count += 1;
+                });
+              const bookings = Object.values(bookingsMap).sort(
+                (a, b) => DAY_GROUPS.findIndex((d) => d.id === a.day) - DAY_GROUPS.findIndex((d) => d.id === b.day) || timeToMinutes(a.time) - timeToMinutes(b.time)
+              );
               return (
-                <div key={c.id} className="bg-white rounded-2xl border border-slate-200 p-4 flex flex-wrap items-center gap-4">
+                <div key={c.id} className="bg-white rounded-2xl border border-slate-200 p-4">
+                <div className="flex flex-wrap items-center gap-4">
                   <div className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center flex-shrink-0">
                     <Award className="w-5 h-5 text-indigo-700" />
                   </div>
@@ -3198,6 +3216,26 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                       </button>
                     </div>
                   )}
+                </div>
+                {bookings.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-slate-100 flex flex-wrap gap-1.5">
+                    {bookings.map((b, i) => {
+                      const capacity = sessionTypeInfo(b.sessionType).capacity;
+                      const spotsLeft = capacity - b.count;
+                      return (
+                        <div
+                          key={i}
+                          className={`text-xs px-2.5 py-1 rounded-full font-medium ${
+                            spotsLeft > 0 ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"
+                          }`}
+                        >
+                          {DAY_GROUPS.find((d) => d.id === b.day)?.label} · {b.time} — {b.count}/{capacity} {sessionTypeInfo(b.sessionType).label}
+                          {spotsLeft > 0 ? ` (${spotsLeft} free)` : " (full)"}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
                 </div>
               );
             })}
@@ -4280,6 +4318,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
 
   const [swimmers, setSwimmers] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [coaches, setCoaches] = useState([]);
   const [branch, setBranch] = useState(BRANCHES[0].id);
   const [dayGroup, setDayGroup] = useState(dayGroupForToday() || DAY_GROUPS[0].id);
   const [babyMode, setBabyMode] = useState(levelRestriction === "Baby");
@@ -4319,6 +4358,29 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
     const t = setInterval(loadSwimmers, 15000);
     return () => clearInterval(t);
   }, [authed, loadSwimmers]);
+
+  useEffect(() => {
+    if (!authed) return;
+    loadCollection(STORE_KEYS.coaches).then((items) => setCoaches(items || []));
+  }, [authed]);
+
+  // How full each coach is for THIS exact session (branch/day/time) —
+  // `swimmers` is already scoped to just this slot, so no extra fetch is
+  // needed to work this out.
+  const coachAvailability = coaches
+    .filter((c) => c.branch === branch)
+    .map((c) => {
+      const inSlot = swimmers.filter((s) => s.coachId === c.id);
+      if (inSlot.length === 0) return { coach: c, free: true, label: "Free — no bookings" };
+      const type = inSlot[0].sessionType;
+      const capacity = sessionTypeInfo(type).capacity;
+      const spotsLeft = capacity - inSlot.length;
+      return {
+        coach: c,
+        free: spotsLeft > 0,
+        label: `${inSlot.length}/${capacity} ${sessionTypeInfo(type).label}${spotsLeft > 0 ? ` — ${spotsLeft} free` : " — full"}`,
+      };
+    });
 
   const today = todayISO();
   const todaysGroup = dayGroupForToday();
@@ -4518,6 +4580,24 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
         </button>
       </div>
 
+      {coachAvailability.length > 0 && (
+        <div className="mb-4">
+          <div className="text-xs text-slate-400 mb-1.5">Coach availability for this day & time</div>
+          <div className="flex flex-wrap gap-1.5">
+            {coachAvailability.map(({ coach, free, label }) => (
+              <div
+                key={coach.id}
+                className={`text-xs px-2.5 py-1 rounded-full font-medium ${
+                  free ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"
+                }`}
+              >
+                {coach.name} · {label}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {sessionSwimmers.length === 0 && (
         <div className="text-center text-slate-400 py-16">No swimmers scheduled for this day & time</div>
       )}
@@ -4530,7 +4610,10 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
               <div className="flex flex-wrap items-center gap-3 mb-3">
                 <div className="min-w-[120px] flex-1">
                   <div className="font-semibold text-slate-900">{s.name}</div>
-                  <div className="text-xs text-slate-400">{s.level} · {s.age} yrs</div>
+                  <div className="text-xs text-slate-400">
+                    {s.level} · {s.age} yrs
+                    {s.coachId && ` · Coach: ${coaches.find((c) => c.id === s.coachId)?.name || "—"}`}
+                  </div>
                 </div>
                 {nextLevelOf(s.level) && (
                   <button
