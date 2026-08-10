@@ -5934,7 +5934,8 @@ function ParentPortalView({ onRenew, onExit }) {
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [swimmer, setSwimmer] = useState(null);
+  const [siblings, setSiblings] = useState(null); // array of swimmer data once logged in
+  const [selectedId, setSelectedId] = useState(null);
 
   const login = async () => {
     setError("");
@@ -5942,15 +5943,22 @@ function ParentPortalView({ onRenew, onExit }) {
     if (!/^\d{4}$/.test(pin.trim())) return setError("Enter the 4-digit PIN");
     setLoading(true);
     try {
+      // Every swimmer registered under this phone number — a family with
+      // more than one child all show up together under the same PIN entry,
+      // as long as the PIN matches at least one of them.
       const { data, error: qError } = await supabase
         .from("swimmers")
         .select("data")
         .eq("academy_id", window.__academy?.id)
-        .eq("phone", phone.trim())
-        .filter("data->>parentPin", "eq", pin.trim())
-        .maybeSingle();
-      if (qError || !data) throw new Error("Phone number or PIN doesn't match — check with the academy");
-      setSwimmer(data.data);
+        .eq("phone", phone.trim());
+      if (qError) throw new Error("Could not sign in, please try again");
+      const all = (data || []).map((r) => r.data);
+      const matches = all.filter((s) => s.parentPin === pin.trim());
+      if (matches.length === 0) throw new Error("Phone number or PIN doesn't match — check with the academy");
+      // Show every child on this phone number, not just the one whose PIN
+      // matched — that's the point of a shared family view.
+      setSiblings(all);
+      setSelectedId(matches[0].id);
     } catch (e) {
       setError(e?.message || "Could not sign in, please try again");
     } finally {
@@ -5958,7 +5966,7 @@ function ParentPortalView({ onRenew, onExit }) {
     }
   };
 
-  if (!swimmer) {
+  if (!siblings) {
     return (
       <div className="min-h-screen flex items-center justify-center px-4 bg-slate-50">
         <div className="max-w-sm w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
@@ -6001,7 +6009,7 @@ function ParentPortalView({ onRenew, onExit }) {
     );
   }
 
-  const s = swimmer;
+  const s = siblings.find((sw) => sw.id === selectedId) || siblings[0];
   const skills = LEVEL_SKILLS[s.level] || [];
   const mastered = skills.filter((sk) => (s.skills?.[s.level]?.[sk] || 0) >= 5).length;
   const paidMonths = (s.paidMonths || []).slice().sort().reverse();
@@ -6012,8 +6020,24 @@ function ParentPortalView({ onRenew, onExit }) {
       <div className="max-w-md mx-auto">
         <div className="flex items-center justify-between mb-6">
           <img src={CONFIG.logoDataUri} alt={CONFIG.academyName} className="w-10 h-10 object-contain" />
-          <button onClick={() => setSwimmer(null)} className="text-sm text-slate-400 hover:text-slate-600">Log out</button>
+          <button onClick={() => { setSiblings(null); setSelectedId(null); }} className="text-sm text-slate-400 hover:text-slate-600">Log out</button>
         </div>
+
+        {siblings.length > 1 && (
+          <div className="flex gap-2 mb-4 overflow-x-auto pb-1">
+            {siblings.map((sw) => (
+              <button
+                key={sw.id}
+                onClick={() => setSelectedId(sw.id)}
+                className={`shrink-0 px-4 py-2 rounded-full text-sm font-medium border transition ${
+                  sw.id === s.id ? "bg-blue-950 text-white border-blue-950" : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"
+                }`}
+              >
+                {sw.name}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-4">
           <h2 className="text-xl font-bold text-slate-900">{s.name}</h2>
@@ -6058,7 +6082,7 @@ function ParentPortalView({ onRenew, onExit }) {
           onClick={() => onRenew(s)}
           className="w-full py-3.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition"
         >
-          Renew subscription
+          Renew subscription for {s.name}
         </button>
       </div>
     </div>
