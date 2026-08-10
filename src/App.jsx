@@ -694,13 +694,27 @@ function parseImportedSwimmerRow(row, coaches) {
   // Excel stores a cell typed as a plain number, not text — so it drops the
   // leading 0 and "01012345678" becomes 1012345678. Rebuild it when a phone
   // looks like exactly that: 10 digits, no leading 0.
-  // Some rows also list two numbers separated by "-" (shared with a
-  // sibling's) — we only keep the first one.
-  let phone = get("phone", "mobile", "phone number", "mobile number", "رقم الموبايل", "رقم الهاتف", "الموبايل", "موبايل")
-    .split(/[-/,]/)[0]
-    .replace(/[\s]/g, "");
+  // Some rows also list two numbers in the same cell (a second parent's, or
+  // a sibling's) separated by almost anything — a dash, slash, comma,
+  // space, "و", a newline. Rather than guessing every possible separator,
+  // just pull out the first run of 10-11 digits found anywhere in the
+  // cell and use that; the rest of the cell is ignored.
+  const phoneRaw = get("phone", "mobile", "phone number", "mobile number", "رقم الموبايل", "رقم الهاتف", "الموبايل", "موبايل");
+  const phoneMatch = phoneRaw.match(/\d{10,11}/);
+  let phone = phoneMatch ? phoneMatch[0] : "";
   if (/^\d{10}$/.test(phone)) phone = "0" + phone;
   if (!phone) return { error: "Missing phone number" };
+
+  // A second number in the same cell (after the first) isn't dropped —
+  // it goes in the notes so it's still there if needed, just not lost.
+  let altPhone = "";
+  if (phoneMatch) {
+    const rest = phoneRaw.slice(phoneMatch.index + phoneMatch[0].length);
+    const altMatch = rest.match(/\d{10,11}/);
+    if (altMatch) {
+      altPhone = /^\d{10}$/.test(altMatch[0]) ? "0" + altMatch[0] : altMatch[0];
+    }
+  }
 
   const warnings = [];
 
@@ -767,6 +781,7 @@ function parseImportedSwimmerRow(row, coaches) {
       name,
       age: age > 0 ? age : "",
       phone,
+      altPhone,
       branch,
       level,
       day,
@@ -774,6 +789,7 @@ function parseImportedSwimmerRow(row, coaches) {
       sessionType,
       coachId: coachMatch ? coachMatch.id : null,
       notes,
+      parentPin: genParentPin(),
       paidMonths: [],
       frozenUntil: null,
       freezeLog: [],
@@ -1288,6 +1304,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
   const [name, setName] = useState(initial?.name || "");
   const [age, setAge] = useState(initial?.age || "");
   const [phone, setPhone] = useState(initial?.phone || "");
+  const [altPhone, setAltPhone] = useState(initial?.altPhone || "");
   const [branch, setBranch] = useState(initial?.branch || BRANCHES[0].id);
   const [level, setLevel] = useState(initial?.level || LEVELS[1]);
   // Day & time are NOT auto-picked for a new swimmer — they stay unscheduled
@@ -1390,6 +1407,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
       name: name.trim(),
       age: Number(age),
       phone: phone.trim(),
+      altPhone: altPhone.trim(),
       branch,
       level,
       day,
@@ -1443,6 +1461,10 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Mobile number</label>
           <input value={phone} onChange={(e) => setPhone(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="01xxxxxxxxx" />
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Second number (optional)</label>
+          <input value={altPhone} onChange={(e) => setAltPhone(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="01xxxxxxxxx" />
         </div>
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Level</label>
@@ -1762,7 +1784,100 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   const [importPreview, setImportPreview] = useState(null); // { valid: [...], errors: [...] }
   const [importing, setImporting] = useState(false);
   const [exportingSwimmers, setExportingSwimmers] = useState(false);
+  const [deleteAllModalOpen, setDeleteAllModalOpen] = useState(false);
+  const [deleteAllConfirmText, setDeleteAllConfirmText] = useState("");
+  const [deletingAll, setDeletingAll] = useState(false);
+  const [deleteAllError, setDeleteAllError] = useState("");
+
+  // Wipes the ENTIRE roster — every swimmer, gone, for everyone using this
+  // academy. There's no undo button in the app for this, only whatever
+  // backup exists in Supabase — hence making the admin type the academy's
+  // own name to confirm, not just click a button.
+  const deleteAllSwimmers = async () => {
+    setDeleteAllError("");
+    if (deleteAllConfirmText.trim() !== CONFIG.academyName) {
+      return setDeleteAllError(`Type the academy's name exactly: ${CONFIG.academyName}`);
+    }
+    setDeletingAll(true);
+    try {
+      const res = await saveCollection(STORE_KEYS.swimmers, []);
+      if (!res) throw new Error("Could not delete, please try again");
+      setDeleteAllModalOpen(false);
+      setDeleteAllConfirmText("");
+      loadSwimmersPage({ offset: 0 });
+    } catch (e) {
+      setDeleteAllError(e?.message || "Could not delete, please try again");
+    } finally {
+      setDeletingAll(false);
+    }
+  };
+
   const [scheduleDayFilter, setScheduleDayFilter] = useState(dayGroupForToday() || DAY_GROUPS[0].id);
+  const [scheduleTimeFilter, setScheduleTimeFilter] = useState("all"); // "all" or one specific time
+  const [exportingRoster, setExportingRoster] = useState(false);
+
+  // Prints/saves a PDF of who's in the pool for a specific day (and
+  // optionally one specific time) — one page per coach, listing their
+  // swimmers' names, levels, and today's attendance mark.
+  const exportSessionRoster = async () => {
+    setExportingRoster(true);
+    try {
+      const all = await fetchAllSwimmers();
+      const today = todayISO();
+      const dayLabel = DAY_GROUPS.find((d) => d.id === scheduleDayFilter)?.label || scheduleDayFilter;
+      const inSession = all.filter(
+        (s) => s.day === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time === scheduleTimeFilter)
+      );
+      const byCoach = {};
+      inSession.forEach((s) => {
+        const key = s.coachId || "unassigned";
+        if (!byCoach[key]) byCoach[key] = [];
+        byCoach[key].push(s);
+      });
+      const coachSections = Object.keys(byCoach)
+        .sort((a, b) => {
+          const nameA = coaches.find((c) => c.id === a)?.name || "Unassigned";
+          const nameB = coaches.find((c) => c.id === b)?.name || "Unassigned";
+          return nameA.localeCompare(nameB);
+        })
+        .map((coachId) => {
+          const coachName = coaches.find((c) => c.id === coachId)?.name || "Unassigned";
+          const rows = byCoach[coachId]
+            .slice()
+            .sort((a, b) => (a.time || "").localeCompare(b.time || "") || a.name.localeCompare(b.name))
+            .map((s) => {
+              const att = s.attendance?.[today];
+              const attLabel = att === "present" ? '<span class="green">Present</span>' : att === "absent" ? '<span class="red">Absent</span>' : "—";
+              return `<tr><td>${escapeHtml(s.name)}</td><td>${escapeHtml(s.time || "")}</td><td>${escapeHtml(s.level)}</td><td>${attLabel}</td></tr>`;
+            })
+            .join("");
+          return `
+            <h3>${escapeHtml(coachName)} (${byCoach[coachId].length})</h3>
+            <table>
+              <tr><th>Name</th><th>Time</th><th>Level</th><th>Attendance today</th></tr>
+              ${rows}
+            </table>`;
+        })
+        .join("");
+
+      const bodyHtml = `
+        <div class="header">
+          <img src="${CONFIG.logoDataUri}" />
+          <div>
+            <h1>${escapeHtml(CONFIG.academyName)}</h1>
+            <div class="sub">Session roster — ${escapeHtml(dayLabel)}${scheduleTimeFilter !== "all" ? ` · ${escapeHtml(scheduleTimeFilter)}` : ""}</div>
+          </div>
+        </div>
+        ${coachSections || "<p>No swimmers scheduled for this selection.</p>"}
+      `;
+      downloadReportHTML(`roster-${scheduleDayFilter}${scheduleTimeFilter !== "all" ? "-" + scheduleTimeFilter.replace(/[: ]/g, "") : ""}`, bodyHtml);
+    } catch (e) {
+      console.warn("Export roster failed", e);
+    } finally {
+      setExportingRoster(false);
+    }
+  };
+
   const [importError, setImportError] = useState("");
   const fileInputRef = useRef(null);
   const [expandedId, setExpandedId] = useState(null);
@@ -3161,6 +3276,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                     {exportingSwimmers ? "Exporting..." : "Export Excel"}
                   </button>
                   <button
+                    onClick={() => setDeleteAllModalOpen(true)}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-red-200 text-red-600 text-sm font-semibold hover:bg-red-50"
+                  >
+                    <Trash2 className="w-4 h-4" /> Delete all swimmers
+                  </button>
+                  <button
                     onClick={() => { setEditingSwimmer(null); setPendingActivationId(null); setShowForm(true); }}
                     className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
                   >
@@ -3218,6 +3339,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                     </div>
                     <div className="text-xs text-slate-400 flex items-center gap-1.5">
                       {s.age} yrs · {s.phone}
+                      {s.altPhone && <span title="Second number">/ {s.altPhone}</span>}
                       {waLink(s.phone) && (
                         <a
                           href={waLink(s.phone)}
@@ -3647,15 +3769,37 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             <p className="text-sm text-slate-500">
               Every coach, every time, at a glance — same idea as the paper sheet, always up to date.
             </p>
-            <select
-              value={scheduleDayFilter}
-              onChange={(e) => setScheduleDayFilter(e.target.value)}
-              className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
-            >
-              {DAY_GROUPS.map((d) => (
-                <option key={d.id} value={d.id}>{d.label}</option>
-              ))}
-            </select>
+            <div className="flex items-center gap-2 flex-wrap">
+              <select
+                value={scheduleDayFilter}
+                onChange={(e) => { setScheduleDayFilter(e.target.value); setScheduleTimeFilter("all"); }}
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+              >
+                {DAY_GROUPS.map((d) => (
+                  <option key={d.id} value={d.id}>{d.label}</option>
+                ))}
+              </select>
+              <select
+                value={scheduleTimeFilter}
+                onChange={(e) => setScheduleTimeFilter(e.target.value)}
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+              >
+                <option value="all">All times</option>
+                {(TIME_SLOTS[BRANCHES[0].id]?.[scheduleDayFilter] || []).slice().sort(
+                  (a, b) => timeToMinutes(a) - timeToMinutes(b)
+                ).map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+              <button
+                onClick={exportSessionRoster}
+                disabled={exportingRoster}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+              >
+                {exportingRoster ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
+                {exportingRoster ? "Exporting..." : "Export PDF"}
+              </button>
+            </div>
           </div>
           {coaches.length === 0 ? (
             <div className="text-center text-slate-400 py-16">No coaches added yet</div>
@@ -4487,6 +4631,43 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
               <button
                 onClick={() => setFreezeModal(null)}
                 disabled={freezeSaving}
+                className="px-4 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteAllModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 px-4" onClick={() => { setDeleteAllModalOpen(false); setDeleteAllConfirmText(""); setDeleteAllError(""); }}>
+          <div className="bg-white rounded-2xl p-5 max-w-sm w-full shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-bold text-red-600 mb-1">Delete ALL swimmers?</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              This permanently removes every swimmer, their payment history, skills, and attendance for <strong>{CONFIG.academyName}</strong>. This cannot be undone from the app.
+            </p>
+            <label className="text-xs text-slate-500 mb-1 block">
+              Type the academy's name to confirm: <strong>{CONFIG.academyName}</strong>
+            </label>
+            <input
+              value={deleteAllConfirmText}
+              onChange={(e) => setDeleteAllConfirmText(e.target.value)}
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-red-500 mb-3"
+              placeholder={CONFIG.academyName}
+            />
+            {deleteAllError && <div className="text-red-500 text-sm mb-3">{deleteAllError}</div>}
+            <div className="flex gap-2">
+              <button
+                onClick={deleteAllSwimmers}
+                disabled={deletingAll}
+                className="flex-1 py-2.5 rounded-lg bg-red-600 text-white text-sm font-semibold hover:bg-red-700 disabled:opacity-60"
+              >
+                {deletingAll ? "Deleting..." : "Delete everyone"}
+              </button>
+              <button
+                onClick={() => { setDeleteAllModalOpen(false); setDeleteAllConfirmText(""); setDeleteAllError(""); }}
+                disabled={deletingAll}
                 className="px-4 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200 disabled:opacity-60"
               >
                 Cancel
