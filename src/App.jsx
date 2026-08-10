@@ -6378,9 +6378,23 @@ function SuperAdminView() {
 
   const loadAcademies = async () => {
     setLoadingAcademies(true);
-    const { data } = await supabase.from("academies").select("id, name, slug, created_at").order("created_at", { ascending: false });
+    const { data } = await supabase.from("academies").select("id, name, slug, created_at, subscription_paid_until").order("created_at", { ascending: false });
     setAcademies(data || []);
     setLoadingAcademies(false);
+  };
+
+  // Extends the platform subscription by one month from whichever is
+  // later — today, or the current paid-until date (so paying early stacks
+  // on top of remaining time instead of losing it).
+  const extendSubscription = async (academyId) => {
+    const current = academies.find((a) => a.id === academyId);
+    const base = current?.subscription_paid_until && current.subscription_paid_until > todayISO()
+      ? new Date(current.subscription_paid_until + "T00:00:00")
+      : new Date();
+    base.setMonth(base.getMonth() + 1);
+    const newDate = base.toISOString().slice(0, 10);
+    const { error } = await supabase.from("academies").update({ subscription_paid_until: newDate }).eq("id", academyId);
+    if (!error) loadAcademies();
   };
 
   useEffect(() => {
@@ -6613,12 +6627,28 @@ function SuperAdminView() {
           </button>
         </div>
         <div className="space-y-2">
-          {academies.map((a) => (
+          {academies.map((a) => {
+            const paidUntil = a.subscription_paid_until;
+            const isPaid = paidUntil && paidUntil >= todayISO();
+            return (
             <div key={a.id} className="border-t border-slate-100 pt-2">
-              <div className="flex items-center justify-between text-sm">
+              <div className="flex items-center justify-between text-sm flex-wrap gap-2">
                 <span className="font-medium text-slate-800">{a.name}</span>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-slate-400">yoursite.com/{a.slug}</span>
+                  <span
+                    className={`text-xs px-2.5 py-1 rounded-full font-medium ${
+                      isPaid ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"
+                    }`}
+                  >
+                    {isPaid ? `Subscribed until ${paidUntil}` : "Subscription not paid"}
+                  </span>
+                  <button
+                    onClick={() => extendSubscription(a.id)}
+                    className="text-xs px-2.5 py-1 rounded-full bg-blue-950 text-white font-medium hover:bg-blue-900"
+                  >
+                    +1 month
+                  </button>
                   <button
                     onClick={() => setEditingAcademyId(editingAcademyId === a.id ? null : a.id)}
                     className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"
@@ -6629,7 +6659,8 @@ function SuperAdminView() {
               </div>
               {editingAcademyId === a.id && <AcademyEditRow academy={a} onSaved={loadAcademies} onClose={() => setEditingAcademyId(null)} />}
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
