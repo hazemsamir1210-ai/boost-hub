@@ -1318,6 +1318,22 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
   const [parentPin, setParentPin] = useState(initial?.parentPin || genParentPin());
   const [error, setError] = useState("");
 
+  // Some swimmers train twice a week on two totally different day/time
+  // combos (e.g. a private session Sun & Tue, plus a group session Mon &
+  // Wed) — same subscription, same swimmer, just a second weekly slot.
+  const [hasSecondSlot, setHasSecondSlot] = useState(!!(initial?.day2 && initial?.time2));
+  const [day2, setDay2] = useState(initial?.day2 || "");
+  const [time2, setTime2] = useState(initial?.time2 || "");
+  const [sessionType2, setSessionType2] = useState(initial?.sessionType2 || "group");
+  const [coachId2, setCoachId2] = useState(initial?.coachId2 || "");
+  const timeOptions2 = getTimeOptions(branch, day2, level);
+  const handleDay2Change = (newDay) => {
+    setDay2(newDay);
+    const newOptions = getTimeOptions(branch, newDay, level);
+    if (!newOptions.includes(time2)) setTime2(newOptions[0]);
+    if (coachId2 && (coaches || []).find((c) => c.id === coachId2)?.offDays?.includes(newDay)) setCoachId2("");
+  };
+
   const timeOptions = getTimeOptions(branch, day, level);
 
   const handleBranchChange = (newBranch) => {
@@ -1387,6 +1403,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
     if (!age || Number(age) <= 0) return setError("Please enter a valid age");
     if (!/^01[0-2,5][0-9]{8}$/.test(phone.trim())) return setError("Please enter a valid phone number");
     if (requireSchedule && (!day || !time)) return setError("Choose a day and time to activate this month's payment");
+    if (hasSecondSlot && (!day2 || !time2)) return setError("Choose a day and time for the second session, or untick it");
 
     if (coachId) {
       const usage = slotUsage;
@@ -1414,6 +1431,10 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
       time,
       sessionType,
       coachId: coachId || null,
+      day2: hasSecondSlot ? day2 : "",
+      time2: hasSecondSlot ? time2 : "",
+      sessionType2: hasSecondSlot ? sessionType2 : "",
+      coachId2: hasSecondSlot ? coachId2 || null : null,
       notes: notes.trim(),
       paidMonths: initial?.paidMonths || [],
       levelHistory: initial?.levelHistory || [],
@@ -1548,6 +1569,63 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
         </div>
         )}
       </div>
+
+      <label className="flex items-center gap-2 mb-3 text-sm text-slate-600 select-none">
+        <input
+          type="checkbox"
+          checked={hasSecondSlot}
+          onChange={(e) => setHasSecondSlot(e.target.checked)}
+          className="w-4 h-4 accent-blue-900"
+        />
+        This swimmer also trains a second time each week
+      </label>
+
+      {hasSecondSlot && (
+        <div className="border border-slate-200 rounded-xl p-3 mb-3 bg-slate-50">
+          <div className="text-xs text-slate-400 mb-2">Second weekly session</div>
+          <div className="grid sm:grid-cols-2 gap-3 mb-3">
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Day</label>
+              <select value={day2} onChange={(e) => handleDay2Change(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
+                <option value="">— Choose —</option>
+                {DAY_GROUPS.map((d) => (
+                  <option key={d.id} value={d.id}>{d.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Time</label>
+              <select value={time2} onChange={(e) => setTime2(e.target.value)} disabled={!day2} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white disabled:bg-slate-100">
+                {timeOptions2.length === 0 && <option value="">— Choose a day first —</option>}
+                {timeOptions2.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Session type</label>
+              <select value={sessionType2} onChange={(e) => setSessionType2(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
+                {SESSION_TYPES.map((t) => (
+                  <option key={t.id} value={t.id}>{t.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Coach</label>
+              <select value={coachId2} onChange={(e) => setCoachId2(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
+                <option value="">No coach assigned</option>
+                {(coaches || []).filter((c) => c.branch === branch && !(c.offDays || []).includes(day2)).map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="text-xs text-slate-400">
+            Note: coach capacity is only checked automatically for the first session above — double-check this coach isn't already full at this day/time.
+          </div>
+        </div>
+      )}
+
       {requireSchedule && (
         <div className="mb-3 text-sm bg-amber-50 border border-amber-200 text-amber-700 rounded-lg px-3 py-2.5">
           This swimmer isn't scheduled yet — choose a day and time above, then save to activate this month's payment.
@@ -1847,14 +1925,23 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       const all = await fetchAllSwimmers();
       const dayLabel = DAY_GROUPS.find((d) => d.id === scheduleDayFilter)?.label || scheduleDayFilter;
       const sessionDates = datesForMonthAndDayGroup(scheduleMonth, scheduleDayFilter);
-      const inSession = all.filter(
-        (s) => s.day === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time === scheduleTimeFilter)
-      );
+      // A swimmer's main slot AND their second weekly slot (if it also
+      // falls on this day/time) each count as their own entry here, so a
+      // swimmer with two sessions this day shows up under both coaches.
+      const inSession = [];
+      all.forEach((s) => {
+        if (s.day === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time === scheduleTimeFilter)) {
+          inSession.push({ swimmer: s, time: s.time, coachId: s.coachId, sessionType: s.sessionType });
+        }
+        if (s.day2 === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time2 === scheduleTimeFilter)) {
+          inSession.push({ swimmer: s, time: s.time2, coachId: s.coachId2, sessionType: s.sessionType2 });
+        }
+      });
       const byCoach = {};
-      inSession.forEach((s) => {
-        const key = s.coachId || "unassigned";
+      inSession.forEach((entry) => {
+        const key = entry.coachId || "unassigned";
         if (!byCoach[key]) byCoach[key] = [];
-        byCoach[key].push(s);
+        byCoach[key].push(entry);
       });
       const dateHeaderCells = sessionDates.map((d) => `<th>${d.slice(8)}</th>`).join("");
       const coachSections = Object.keys(byCoach)
@@ -1867,8 +1954,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           const coachName = coaches.find((c) => c.id === coachId)?.name || "Unassigned";
           const rows = byCoach[coachId]
             .slice()
-            .sort((a, b) => (a.time || "").localeCompare(b.time || "") || a.name.localeCompare(b.name))
-            .map((s) => {
+            .sort((a, b) => (a.time || "").localeCompare(b.time || "") || a.swimmer.name.localeCompare(b.swimmer.name))
+            .map(({ swimmer: s, time, sessionType }) => {
               const attCells = sessionDates
                 .map((d) => {
                   const att = s.attendance?.[d];
@@ -1876,7 +1963,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                   return `<td style="text-align:center">${mark}</td>`;
                 })
                 .join("");
-              return `<tr><td>${escapeHtml(s.name)}</td><td>${escapeHtml(s.time || "")}</td><td>${escapeHtml(s.level)}</td><td>${escapeHtml(sessionTypeInfo(s.sessionType).label)}</td>${attCells}</tr>`;
+              return `<tr><td>${escapeHtml(s.name)}</td><td>${escapeHtml(time || "")}</td><td>${escapeHtml(s.level)}</td><td>${escapeHtml(sessionTypeInfo(sessionType).label)}</td>${attCells}</tr>`;
             })
             .join("");
           return `
@@ -2773,16 +2860,21 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   const { coachLoadById, coachBookingsById } = React.useMemo(() => {
     const loadById = {};
     const bookingsMapById = {};
-    swimmers.forEach((s) => {
-      if (!s.coachId) return;
-      loadById[s.coachId] = (loadById[s.coachId] || 0) + 1;
-      if (!s.day || !s.time) return;
-      if (!bookingsMapById[s.coachId]) bookingsMapById[s.coachId] = {};
-      const key = `${s.day}|${s.time}`;
-      const bucket = bookingsMapById[s.coachId];
-      if (!bucket[key]) bucket[key] = { day: s.day, time: s.time, sessionType: s.sessionType, count: 0, levels: new Set() };
+    const addBooking = (coachId, day, time, sessionType, level) => {
+      if (!coachId || !day || !time) return;
+      loadById[coachId] = (loadById[coachId] || 0) + 1;
+      if (!bookingsMapById[coachId]) bookingsMapById[coachId] = {};
+      const key = `${day}|${time}`;
+      const bucket = bookingsMapById[coachId];
+      if (!bucket[key]) bucket[key] = { day, time, sessionType, count: 0, levels: new Set() };
       bucket[key].count += 1;
-      if (s.level) bucket[key].levels.add(s.level);
+      if (level) bucket[key].levels.add(level);
+    };
+    swimmers.forEach((s) => {
+      addBooking(s.coachId, s.day, s.time, s.sessionType, s.level);
+      // A swimmer with a second weekly session (different coach or slot)
+      // shows up under that booking too — same swimmer, two commitments.
+      if (s.day2 && s.time2) addBooking(s.coachId2, s.day2, s.time2, s.sessionType2, s.level);
     });
     const bookingsById = {};
     Object.keys(bookingsMapById).forEach((coachId) => {
@@ -5131,10 +5223,10 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
       // Only fetch swimmers in THIS exact session (branch/day/time, and
       // level if this account is restricted to one) — a staff member is
       // only ever looking at one session at a time, so there's no reason
-      // to load the whole roster to show it.
+      // to load the whole roster to show it. Matches either a swimmer's
+      // main slot OR their second weekly slot, if they have one.
       let query = supabase.from("swimmers").select("data").eq("academy_id", window.__academy?.id).eq("branch", branch)
-        .filter("data->>day", "eq", dayGroup)
-        .filter("data->>time", "eq", time);
+        .or(`and(data->>day.eq.${dayGroup},data->>time.eq.${time}),and(data->>day2.eq.${dayGroup},data->>time2.eq.${time})`);
       if (effectiveLevel) query = query.eq("level", effectiveLevel);
       const { data, error } = await query;
       if (error) throw error;
