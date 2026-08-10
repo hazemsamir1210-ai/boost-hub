@@ -1596,6 +1596,7 @@ function SwimmerSearchInput({ onSearch }) {
 
 function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   const [authed, setAuthed] = useState(preAuthed);
+  const [checkingSession, setCheckingSession] = useState(!preAuthed);
   const [pass, setPass] = useState("");
   const [passError, setPassError] = useState("");
   const [showLegacyLogin, setShowLegacyLogin] = useState(false);
@@ -1603,6 +1604,43 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   const [authPassword, setAuthPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
+
+  // Checks that a signed-in Supabase Auth user is actually linked to the
+  // academy this link belongs to (or is a super admin, who can access
+  // any academy) — shared by both the explicit login form below and the
+  // automatic "already signed in" check on mount.
+  const verifyProfileForThisAcademy = async (userId) => {
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("academy_id, is_super_admin")
+      .eq("id", userId)
+      .maybeSingle();
+    if (profileError || !profile) return false;
+    if (!profile.is_super_admin && profile.academy_id !== window.__academy?.id) return false;
+    return true;
+  };
+
+  // If the person already signed in moments ago at the general login
+  // gateway, they land here with a live session — skip asking for the
+  // password again and go straight to the dashboard.
+  useEffect(() => {
+    if (preAuthed) return;
+    let cancelled = false;
+    supabase.auth.getSession().then(async ({ data }) => {
+      const user = data?.session?.user;
+      if (!user) {
+        if (!cancelled) setCheckingSession(false);
+        return;
+      }
+      const ok = await verifyProfileForThisAcademy(user.id);
+      if (cancelled) return;
+      if (ok) setAuthed(true);
+      setCheckingSession(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [preAuthed]);
 
   // Real login: signs in with Supabase Auth, then checks that this
   // account is actually linked to the academy this link belongs to (or
@@ -1620,14 +1658,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         password: authPassword,
       });
       if (signInError) throw new Error("Wrong email or password");
-      const userId = signInData.user.id;
-      const { data: profile, error: profileError } = await supabase
-        .from("profiles")
-        .select("academy_id, is_super_admin")
-        .eq("id", userId)
-        .maybeSingle();
-      if (profileError || !profile) throw new Error("This account isn't set up yet — ask your super admin");
-      if (!profile.is_super_admin && profile.academy_id !== window.__academy?.id) {
+      const ok = await verifyProfileForThisAcademy(signInData.user.id);
+      if (!ok) {
         await supabase.auth.signOut();
         throw new Error("This account isn't linked to this academy's link");
       }
@@ -2621,6 +2653,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     });
     return { coachLoadById: loadById, coachBookingsById: bookingsById };
   }, [swimmers]);
+
+  if (checkingSession) {
+    return (
+      <div className="min-h-[70vh] flex items-center justify-center">
+        <RefreshCw className="w-6 h-6 text-slate-300 animate-spin" />
+      </div>
+    );
+  }
 
   if (!authed) {
     return (
@@ -6090,7 +6130,116 @@ function ParentPortalView({ onRenew, onExit }) {
 }
 
 
+/* Finds an academy by typing its name — used by the gateway below for any
+   role that doesn't have a global account (parents, coaches, staff aren't
+   in `profiles`, so the gateway doesn't know which academy they belong to
+   until they tell it). Academy names/slugs are public info (the same
+   thing a parent sees on the sign-up page), so this is a safe lookup. */
+function AcademyPicker({ value, onChange }) {
+  const [query, setQuery] = useState(value?.name || "");
+  const [results, setResults] = useState([]);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (!q || (value && value.name === q)) {
+      setResults([]);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      const { data } = await supabase.from("academies").select("id, name, slug").ilike("name", `%${q}%`).limit(8);
+      if (!cancelled) setResults(data || []);
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [query]);
+
+  return (
+    <div className="relative mb-3">
+      <input
+        value={query}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setOpen(true);
+          if (value) onChange(null);
+        }}
+        onFocus={() => setOpen(true)}
+        className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900"
+        placeholder="Your academy's name"
+      />
+      {open && results.length > 0 && (
+        <div className="absolute z-10 mt-1 w-full bg-white rounded-xl border border-slate-200 shadow-lg overflow-hidden">
+          {results.map((a) => (
+            <button
+              key={a.id}
+              onClick={() => {
+                onChange(a);
+                setQuery(a.name);
+                setOpen(false);
+              }}
+              className="w-full text-left px-4 py-2.5 text-sm hover:bg-slate-50"
+            >
+              {a.name}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* The single link everyone uses. Asks who's logging in first, then — for
+   roles that don't have a global account (parent/coach/staff, unlike
+   admin which signs in with Supabase Auth directly) — which academy,
+   before sending them straight to that academy's own login for their
+   role. No detour through the academy's public marketing page. */
 function GatewayView() {
+  const [role, setRole] = useState(null); // "admin" | "parent" | "coach" | "staff" | null
+
+  const roleOptions = [
+    { id: "parent", label: "Parent", sub: "Check progress & renew", icon: Star },
+    { id: "coach", label: "Coach", sub: "Log in with your PIN", icon: User },
+    { id: "staff", label: "Pool staff / Front desk", sub: "Attendance & schedules", icon: CalendarCheck },
+    { id: "admin", label: "Admin / Academy owner", sub: "Full dashboard access", icon: Bell },
+  ];
+
+  if (!role) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4 bg-slate-50">
+        <div className="max-w-sm w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
+          <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-blue-950 flex items-center justify-center">
+            <Waves className="w-7 h-7 text-white" />
+          </div>
+          <h2 className="text-xl font-bold text-slate-900 mb-1 text-center">Swimming Academy Management</h2>
+          <p className="text-sm text-slate-400 mb-6 text-center">Who's logging in?</p>
+          <div className="space-y-2">
+            {roleOptions.map((opt) => (
+              <button
+                key={opt.id}
+                onClick={() => setRole(opt.id)}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-slate-200 hover:border-blue-900 hover:bg-blue-50/50 transition text-left"
+              >
+                <opt.icon className="w-5 h-5 text-blue-900 shrink-0" />
+                <div>
+                  <div className="text-sm font-semibold text-slate-900">{opt.label}</div>
+                  <div className="text-xs text-slate-400">{opt.sub}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (role === "admin") return <AdminGatewayLogin onBack={() => setRole(null)} />;
+  return <AcademyScopedGatewayLogin role={role} onBack={() => setRole(null)} />;
+}
+
+function AdminGatewayLogin({ onBack }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -6122,7 +6271,7 @@ function GatewayView() {
         .eq("id", profile.academy_id)
         .maybeSingle();
       if (academyError || !academy?.slug) throw new Error("Your academy isn't set up correctly — ask your super admin");
-      window.location.href = `/${academy.slug}`;
+      window.location.href = `/${academy.slug}/admin`;
     } catch (e) {
       setError(e?.message || "Could not sign in, please try again");
       setLoading(false);
@@ -6132,10 +6281,10 @@ function GatewayView() {
   return (
     <div className="min-h-screen flex items-center justify-center px-4 bg-slate-50">
       <div className="max-w-sm w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
-        <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-blue-950 flex items-center justify-center">
-          <Waves className="w-7 h-7 text-white" />
-        </div>
-        <h2 className="text-xl font-bold text-slate-900 mb-1 text-center">Swimming Academy Management</h2>
+        <button onClick={onBack} className="text-sm text-slate-400 hover:text-slate-600 flex items-center gap-1 mb-4">
+          <ChevronLeft className="w-4 h-4" /> Back
+        </button>
+        <h2 className="text-xl font-bold text-slate-900 mb-1 text-center">Admin login</h2>
         <p className="text-sm text-slate-400 mb-6 text-center">Sign in to your academy's dashboard</p>
         <input
           type="email"
@@ -6161,6 +6310,52 @@ function GatewayView() {
           className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60"
         >
           {loading ? "Signing in..." : "Log in"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* Parent / Coach / Pool staff — none of these have a global account, so
+   this asks which academy first, then sends them straight to that
+   academy's own login for their role (parents go all the way in, since
+   the parent portal already lives at its own URL; coach/staff land on
+   their academy's page ready to pick their PIN/password login in one
+   more tap, since those don't have their own URLs yet). */
+function AcademyScopedGatewayLogin({ role, onBack }) {
+  const [academy, setAcademy] = useState(null);
+
+  const titles = {
+    parent: "Parent — which academy?",
+    coach: "Coach — which academy?",
+    staff: "Staff — which academy?",
+  };
+
+  const go = () => {
+    if (!academy) return;
+    if (role === "parent") {
+      window.location.href = `/${academy.slug}/parent`;
+    } else {
+      // Coach and front-desk staff logins don't have their own URL yet —
+      // land on the academy's page, one tap away from their login.
+      window.location.href = `/${academy.slug}`;
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4 bg-slate-50">
+      <div className="max-w-sm w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
+        <button onClick={onBack} className="text-sm text-slate-400 hover:text-slate-600 flex items-center gap-1 mb-4">
+          <ChevronLeft className="w-4 h-4" /> Back
+        </button>
+        <h2 className="text-xl font-bold text-slate-900 mb-6 text-center">{titles[role]}</h2>
+        <AcademyPicker value={academy} onChange={setAcademy} />
+        <button
+          onClick={go}
+          disabled={!academy}
+          className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60"
+        >
+          Continue
         </button>
       </div>
     </div>
@@ -6567,7 +6762,9 @@ class ErrorBoundary extends React.Component {
 }
 
 export default function App() {
-  const [view, setView] = useState(secondPathSegment() === "parent" ? "parentportal" : "home");
+  const [view, setView] = useState(
+    secondPathSegment() === "parent" ? "parentportal" : secondPathSegment() === "admin" ? "admin" : "home"
+  );
   const [chosenPlan, setChosenPlan] = useState(null);
   const [renewSwimmer, setRenewSwimmer] = useState(null);
   const [lastRecord, setLastRecord] = useState(null);
