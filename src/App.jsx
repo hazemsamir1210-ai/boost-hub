@@ -1814,17 +1814,39 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
 
   const [scheduleDayFilter, setScheduleDayFilter] = useState(dayGroupForToday() || DAY_GROUPS[0].id);
   const [scheduleTimeFilter, setScheduleTimeFilter] = useState("all"); // "all" or one specific time
+  const [scheduleMonth, setScheduleMonth] = useState(monthKey()); // "YYYY-MM" — which month's sessions to report on
   const [exportingRoster, setExportingRoster] = useState(false);
 
+  // Which real calendar dates in the chosen month fall on this day-group's
+  // weekdays — e.g. "Sunday & Tuesday" in August 2026 -> every actual
+  // Sunday and Tuesday date that month. That's what becomes the ~8
+  // attendance columns (matching the plan's ~8 sessions/month), instead of
+  // just showing "today".
+  const DAY_GROUP_WEEKDAYS = { "sun-tue": [0, 2], "mon-wed": [1, 3], "fri-sat": [5, 6] };
+  const datesForMonthAndDayGroup = (monthKeyStr, dayGroupId) => {
+    const [y, m] = monthKeyStr.split("-").map(Number);
+    const weekdays = DAY_GROUP_WEEKDAYS[dayGroupId] || [];
+    const dates = [];
+    const daysInMonth = new Date(y, m, 0).getDate();
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dt = new Date(y, m - 1, d);
+      if (weekdays.includes(dt.getDay())) {
+        dates.push(`${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
+      }
+    }
+    return dates;
+  };
+
   // Prints/saves a PDF of who's in the pool for a specific day (and
-  // optionally one specific time) — one page per coach, listing their
-  // swimmers' names, levels, and today's attendance mark.
+  // optionally one specific time) in a chosen month — one page per coach,
+  // listing each swimmer's name, time, level, plan type, and a
+  // present/absent mark for every actual session date that month.
   const exportSessionRoster = async () => {
     setExportingRoster(true);
     try {
       const all = await fetchAllSwimmers();
-      const today = todayISO();
       const dayLabel = DAY_GROUPS.find((d) => d.id === scheduleDayFilter)?.label || scheduleDayFilter;
+      const sessionDates = datesForMonthAndDayGroup(scheduleMonth, scheduleDayFilter);
       const inSession = all.filter(
         (s) => s.day === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time === scheduleTimeFilter)
       );
@@ -1834,6 +1856,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         if (!byCoach[key]) byCoach[key] = [];
         byCoach[key].push(s);
       });
+      const dateHeaderCells = sessionDates.map((d) => `<th>${d.slice(8)}</th>`).join("");
       const coachSections = Object.keys(byCoach)
         .sort((a, b) => {
           const nameA = coaches.find((c) => c.id === a)?.name || "Unassigned";
@@ -1846,15 +1869,20 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             .slice()
             .sort((a, b) => (a.time || "").localeCompare(b.time || "") || a.name.localeCompare(b.name))
             .map((s) => {
-              const att = s.attendance?.[today];
-              const attLabel = att === "present" ? '<span class="green">Present</span>' : att === "absent" ? '<span class="red">Absent</span>' : "—";
-              return `<tr><td>${escapeHtml(s.name)}</td><td>${escapeHtml(s.time || "")}</td><td>${escapeHtml(s.level)}</td><td>${attLabel}</td></tr>`;
+              const attCells = sessionDates
+                .map((d) => {
+                  const att = s.attendance?.[d];
+                  const mark = att === "present" ? '<span class="green">P</span>' : att === "absent" ? '<span class="red">A</span>' : "—";
+                  return `<td style="text-align:center">${mark}</td>`;
+                })
+                .join("");
+              return `<tr><td>${escapeHtml(s.name)}</td><td>${escapeHtml(s.time || "")}</td><td>${escapeHtml(s.level)}</td><td>${escapeHtml(sessionTypeInfo(s.sessionType).label)}</td>${attCells}</tr>`;
             })
             .join("");
           return `
             <h3>${escapeHtml(coachName)} (${byCoach[coachId].length})</h3>
             <table>
-              <tr><th>Name</th><th>Time</th><th>Level</th><th>Attendance today</th></tr>
+              <tr><th>Name</th><th>Time</th><th>Level</th><th>Plan</th>${dateHeaderCells}</tr>
               ${rows}
             </table>`;
         })
@@ -1865,12 +1893,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           <img src="${CONFIG.logoDataUri}" />
           <div>
             <h1>${escapeHtml(CONFIG.academyName)}</h1>
-            <div class="sub">Session roster — ${escapeHtml(dayLabel)}${scheduleTimeFilter !== "all" ? ` · ${escapeHtml(scheduleTimeFilter)}` : ""}</div>
+            <div class="sub">Session roster & attendance — ${escapeHtml(dayLabel)}${scheduleTimeFilter !== "all" ? ` · ${escapeHtml(scheduleTimeFilter)}` : ""} · ${escapeHtml(monthLabel(scheduleMonth))}</div>
           </div>
         </div>
         ${coachSections || "<p>No swimmers scheduled for this selection.</p>"}
       `;
-      downloadReportHTML(`roster-${scheduleDayFilter}${scheduleTimeFilter !== "all" ? "-" + scheduleTimeFilter.replace(/[: ]/g, "") : ""}`, bodyHtml);
+      downloadReportHTML(`roster-${scheduleDayFilter}-${scheduleMonth}${scheduleTimeFilter !== "all" ? "-" + scheduleTimeFilter.replace(/[: ]/g, "") : ""}`, bodyHtml);
     } catch (e) {
       console.warn("Export roster failed", e);
     } finally {
@@ -3791,6 +3819,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                   <option key={t} value={t}>{t}</option>
                 ))}
               </select>
+              <input
+                type="month"
+                value={scheduleMonth}
+                onChange={(e) => setScheduleMonth(e.target.value)}
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                title="Which month's attendance to include in the PDF"
+              />
               <button
                 onClick={exportSessionRoster}
                 disabled={exportingRoster}
@@ -4112,6 +4147,50 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             </div>
             <div className="text-xs text-slate-400 -mt-4 print:hidden">
               Downloads a report file — open it and use your browser's Print → Save as PDF.
+            </div>
+
+            <div className="print:hidden bg-white rounded-2xl border border-slate-200 p-5">
+              <h3 className="font-bold text-slate-900 mb-1">Session roster & attendance</h3>
+              <p className="text-xs text-slate-400 mb-3">
+                One coach at a time, with every swimmer's plan and a present/absent mark for each session date that month.
+              </p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <select
+                  value={scheduleDayFilter}
+                  onChange={(e) => { setScheduleDayFilter(e.target.value); setScheduleTimeFilter("all"); }}
+                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                >
+                  {DAY_GROUPS.map((d) => (
+                    <option key={d.id} value={d.id}>{d.label}</option>
+                  ))}
+                </select>
+                <select
+                  value={scheduleTimeFilter}
+                  onChange={(e) => setScheduleTimeFilter(e.target.value)}
+                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                >
+                  <option value="all">All times</option>
+                  {(TIME_SLOTS[BRANCHES[0].id]?.[scheduleDayFilter] || []).slice().sort(
+                    (a, b) => timeToMinutes(a) - timeToMinutes(b)
+                  ).map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+                <input
+                  type="month"
+                  value={scheduleMonth}
+                  onChange={(e) => setScheduleMonth(e.target.value)}
+                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                />
+                <button
+                  onClick={exportSessionRoster}
+                  disabled={exportingRoster}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                >
+                  {exportingRoster ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
+                  {exportingRoster ? "Exporting..." : "Export PDF"}
+                </button>
+              </div>
             </div>
 
             <div id="report-printable" className="space-y-8">
@@ -6578,6 +6657,15 @@ function SuperAdminView() {
     if (!error) loadAcademies();
   };
 
+  // Ends the platform subscription immediately — e.g. an academy stopped
+  // paying, or asked to close their account. Their admins can still sign
+  // in (that's a separate thing from RLS access); this only affects what
+  // the subscription badge shows, as a record for you to act on.
+  const cancelSubscription = async (academyId) => {
+    const { error } = await supabase.from("academies").update({ subscription_paid_until: null }).eq("id", academyId);
+    if (!error) loadAcademies();
+  };
+
   useEffect(() => {
     if (session) loadAcademies();
   }, [session]);
@@ -6830,6 +6918,14 @@ function SuperAdminView() {
                   >
                     +1 month
                   </button>
+                  {isPaid && (
+                    <button
+                      onClick={() => cancelSubscription(a.id)}
+                      className="text-xs px-2.5 py-1 rounded-full bg-white border border-red-200 text-red-600 font-medium hover:bg-red-50"
+                    >
+                      Cancel subscription
+                    </button>
+                  )}
                   <button
                     onClick={() => setEditingAcademyId(editingAcademyId === a.id ? null : a.id)}
                     className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"
