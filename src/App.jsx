@@ -37,6 +37,11 @@ function academySlugFromPath() {
   return seg || null;
 }
 
+function secondPathSegment() {
+  const seg = window.location.pathname.split("/").filter(Boolean)[1];
+  return seg || null;
+}
+
 async function resolveAcademy() {
   const slug = academySlugFromPath();
   // No slug in the URL — this is the plain link that was already shared
@@ -300,6 +305,10 @@ function compressImage(file, maxWidth = 900, quality = 0.72) {
 
 function genId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+function genParentPin() {
+  return String(Math.floor(1000 + Math.random() * 9000));
 }
 
 function escapeHtml(str) {
@@ -987,10 +996,10 @@ function SuccessScreen({ record, onHome }) {
 /* ============================================================
    Subscribe & payment page
    ============================================================ */
-function SubscribeView({ initialPlanId, onSubmitted, onBack }) {
+function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
   const [planId, setPlanId] = useState(initialPlanId || PLANS[0].id);
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
+  const [name, setName] = useState(initialSwimmer?.name || "");
+  const [phone, setPhone] = useState(initialSwimmer?.phone || "");
   const [preview, setPreview] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -1011,7 +1020,7 @@ function SubscribeView({ initialPlanId, onSubmitted, onBack }) {
   // roster up front — with a large roster, that was another place a
   // phone could run out of memory before the parent even got to pay.
   const [existingSwimmers, setExistingSwimmers] = useState([]);
-  const [swimmerId, setSwimmerId] = useState("");
+  const [swimmerId, setSwimmerId] = useState(initialSwimmer?.id || "");
 
   // Admin sets one date each month (e.g. "next month's spots open on the
   // 24th") — before that date the form still works, but sending is
@@ -1289,6 +1298,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
   const [sessionType, setSessionType] = useState(initial?.sessionType || "group");
   const [coachId, setCoachId] = useState(initial?.coachId || "");
   const [notes, setNotes] = useState(initial?.notes || "");
+  const [parentPin, setParentPin] = useState(initial?.parentPin || genParentPin());
   const [error, setError] = useState("");
 
   const timeOptions = getTimeOptions(branch, day, level);
@@ -1391,6 +1401,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
       levelHistory: initial?.levelHistory || [],
       trainingDates: initial?.trainingDates || [],
       attendance: initial?.attendance || {},
+      parentPin: parentPin,
       createdAt: initial?.createdAt || new Date().toISOString(),
     };
 
@@ -1523,6 +1534,17 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
       <div className="mb-3">
         <label className="text-xs text-slate-500 mb-1 block">Notes</label>
         <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Any notes about the swimmer" />
+      </div>
+      <div className="mb-3 flex items-center gap-3 bg-slate-50 rounded-lg px-3 py-2.5">
+        <span className="text-xs text-slate-500">Parent portal PIN</span>
+        <span className="font-mono font-semibold text-slate-900 tracking-wider">{parentPin}</span>
+        <button
+          type="button"
+          onClick={() => setParentPin(genParentPin())}
+          className="text-xs text-blue-800 hover:underline ml-auto"
+        >
+          Generate new PIN
+        </button>
       </div>
       {error && <div className="text-red-500 text-sm mb-3">{error}</div>}
       <div className="flex gap-2">
@@ -1700,7 +1722,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   const [dayFilter, setDayFilter] = useState("all");
   const [timeFilter, setTimeFilter] = useState("all");
   const [paymentMonthFilter, setPaymentMonthFilter] = useState(monthKey());
-  const [paymentStatusFilter, setPaymentStatusFilter] = useState("all"); // "all" | "paid" | "unpaid"
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState("paid"); // "all" | "paid" | "unpaid" — defaults to only showing enrolled, paid swimmers
+  const [showUnscheduled, setShowUnscheduled] = useState(false); // include swimmers with no day/time set yet
   const [sessionTypeFilter, setSessionTypeFilter] = useState("all"); // filters by session size — Private (1) / Semi Private (2) / Group (4)
 
   // bulk import from Excel
@@ -2503,6 +2526,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       setSwimmersPageError("");
       try {
         let query = supabase.from("swimmers").select("data", { count: "exact" }).eq("academy_id", window.__academy?.id);
+        // By default, only show swimmers who are actually enrolled — have a
+        // day/time slot, not just added to the system with nothing set yet.
+        if (!showUnscheduled) query = query.neq("data->>day", "").neq("data->>time", "");
         if (branchFilter !== "all") query = query.eq("branch", branchFilter);
         if (levelFilter !== "all") query = query.eq("level", levelFilter);
         if (dayFilter !== "all") query = query.filter("data->>day", "eq", dayFilter);
@@ -2528,7 +2554,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         setSwimmersPageLoading(false);
       }
     },
-    [branchFilter, levelFilter, dayFilter, timeFilter, sessionTypeFilter, paymentStatusFilter, paymentMonthFilter, search]
+    [branchFilter, levelFilter, dayFilter, timeFilter, sessionTypeFilter, paymentStatusFilter, paymentMonthFilter, search, showUnscheduled]
   );
 
   useEffect(() => {
@@ -3033,7 +3059,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                   title="Payment status, and the Cash payment / Mark paid only / Undo buttons below, all apply to this month"
                 />
               </div>
-              {(branchFilter !== "all" || levelFilter !== "all" || dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || paymentStatusFilter !== "all" || search) && (
+              <label className="flex items-center gap-1.5 text-sm text-slate-500 select-none cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showUnscheduled}
+                  onChange={(e) => setShowUnscheduled(e.target.checked)}
+                  className="w-4 h-4 accent-blue-900"
+                />
+                Include unscheduled
+              </label>
+              {(branchFilter !== "all" || levelFilter !== "all" || dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || paymentStatusFilter !== "paid" || showUnscheduled || search) && (
                 <button
                   onClick={() => {
                     setBranchFilter("all");
@@ -3042,11 +3077,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                     setTimeFilter("all");
                     setSessionTypeFilter("all");
                     setPaymentStatusFilter("all");
+                    setShowUnscheduled(true);
                     setSearch("");
                   }}
                   className="text-xs text-slate-400 hover:text-slate-600 underline whitespace-nowrap"
+                  title="Shows everyone, including unscheduled and unpaid swimmers"
                 >
-                  Clear filters
+                  Clear filters (show everyone)
                 </button>
               )}
             </div>
@@ -5664,9 +5701,10 @@ function AchievementsSlideshow({ achievements }) {
   );
 }
 
-function HomeView({ onChoosePlan, onAdmin, onStaff, onCoach, onStaffPortal }) {
+function HomeView({ onChoosePlan, onAdmin, onStaff, onCoach, onStaffPortal, onParentPortal }) {
   const hasPhotos = CONFIG.heroPhotos && CONFIG.heroPhotos.length > 0;
   const [menuOpen, setMenuOpen] = useState(false);
+  const [loginPickerOpen, setLoginPickerOpen] = useState(false);
   const [achievements, setAchievements] = useState([]);
   useEffect(() => {
     let cancelled = false;
@@ -5675,12 +5713,19 @@ function HomeView({ onChoosePlan, onAdmin, onStaff, onCoach, onStaffPortal }) {
     });
     return () => { cancelled = true; };
   }, []);
+  // One "Log in" entry — instead of six separate, easy-to-mix-up menu
+  // items — opens a single "who are you?" screen that sends the person
+  // to the right login for their role. Same one link works for everyone.
+  const roleOptions = [
+    { label: "Parent", sub: "Check progress & renew", icon: Star, onClick: onParentPortal },
+    { label: "Coach", sub: "Log in with your PIN", icon: User, onClick: onCoach },
+    { label: "Pool staff / Technical", sub: "Attendance & schedules", icon: CalendarCheck, onClick: onStaff },
+    { label: "Front desk staff", sub: "Log in with your account", icon: Lock, onClick: onStaffPortal },
+    { label: "Admin", sub: "Full dashboard access", icon: Bell, onClick: onAdmin },
+  ];
   const menuItems = [
     { label: "Subscribe now", icon: Waves, onClick: () => onChoosePlan(null) },
-    { label: "Admin dashboard", icon: Bell, onClick: onAdmin },
-    { label: "Pool staff", icon: CalendarCheck, onClick: onStaff },
-    { label: "Coach login", icon: User, onClick: onCoach },
-    { label: "Staff login", icon: Lock, onClick: onStaffPortal },
+    { label: "Log in", icon: Lock, onClick: () => setLoginPickerOpen(true) },
   ];
   return (
     <div>
@@ -5711,6 +5756,36 @@ function HomeView({ onChoosePlan, onAdmin, onStaff, onCoach, onStaffPortal }) {
           </div>
         )}
       </div>
+
+      {loginPickerOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center px-4" onClick={() => setLoginPickerOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-lg font-bold text-slate-900">Who's logging in?</h3>
+              <button onClick={() => setLoginPickerOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-sm text-slate-400 mb-4">Pick your role — you'll go straight to your own login</p>
+            <div className="space-y-2">
+              {roleOptions.map((opt) => (
+                <button
+                  key={opt.label}
+                  onClick={() => { setLoginPickerOpen(false); opt.onClick(); }}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-slate-200 hover:border-blue-900 hover:bg-blue-50/50 transition text-left"
+                >
+                  <opt.icon className="w-5 h-5 text-blue-900 shrink-0" />
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">{opt.label}</div>
+                    <div className="text-xs text-slate-400">{opt.sub}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       <section className="relative bg-blue-950 text-white overflow-hidden">
         {hasPhotos && (
           <>
@@ -5844,15 +5919,153 @@ function HomeView({ onChoosePlan, onAdmin, onStaff, onCoach, onStaffPortal }) {
 /* ============================================================
    Main app
    ============================================================ */
-/* Super-admin panel: reachable at yoursite.com/_admin (a reserved path
-   that never resolves to a real academy). Lets the super admin (you)
-   register new academies and link a login to each one. */
 /* The generic, un-branded entry point — no academy's marketing page, just
    a login form. Signs in with Supabase Auth, looks up which academy that
    account belongs to, and sends the browser to that academy's own link
    (or to the super-admin panel for a super admin). Reached at the bare
    root URL — each academy's own public/subscribe page still lives at its
    own link, e.g. yoursite.com/boost-hub. */
+/* Parent portal — a swimmer's own parent logs in with the swimmer's phone
+   number + a 4-digit PIN (shown to the admin on that swimmer's profile, to
+   hand to the parent). Shows the swimmer's level & skill progress and
+   payment history, and lets them jump straight into renewing. */
+function ParentPortalView({ onRenew, onExit }) {
+  const [phone, setPhone] = useState("");
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [swimmer, setSwimmer] = useState(null);
+
+  const login = async () => {
+    setError("");
+    if (!/^01[0-2,5][0-9]{8}$/.test(phone.trim())) return setError("Enter the phone number on file");
+    if (!/^\d{4}$/.test(pin.trim())) return setError("Enter the 4-digit PIN");
+    setLoading(true);
+    try {
+      const { data, error: qError } = await supabase
+        .from("swimmers")
+        .select("data")
+        .eq("academy_id", window.__academy?.id)
+        .eq("phone", phone.trim())
+        .filter("data->>parentPin", "eq", pin.trim())
+        .maybeSingle();
+      if (qError || !data) throw new Error("Phone number or PIN doesn't match — check with the academy");
+      setSwimmer(data.data);
+    } catch (e) {
+      setError(e?.message || "Could not sign in, please try again");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!swimmer) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4 bg-slate-50">
+        <div className="max-w-sm w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
+          <img src={CONFIG.logoDataUri} alt={CONFIG.academyName} className="w-14 h-14 mx-auto mb-4 object-contain" />
+          <h2 className="text-xl font-bold text-slate-900 mb-1 text-center">Parent Portal</h2>
+          <p className="text-sm text-slate-400 mb-6 text-center">Check your child's progress & renew</p>
+          <input
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+            placeholder="Phone number on file"
+            inputMode="numeric"
+          />
+          <input
+            value={pin}
+            onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+            onKeyDown={(e) => { if (e.key === "Enter") login(); }}
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+            placeholder="4-digit PIN"
+            inputMode="numeric"
+          />
+          {error && <div className="text-red-500 text-sm mb-3">{error}</div>}
+          <button
+            onClick={login}
+            disabled={loading}
+            className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60"
+          >
+            {loading ? "Checking..." : "View progress"}
+          </button>
+          <p className="text-xs text-slate-400 text-center mt-4">
+            Don't have your PIN? Ask the academy — it's on your child's profile.
+          </p>
+          {onExit && (
+            <button onClick={onExit} className="w-full text-center text-sm text-slate-400 hover:text-slate-600 mt-4">
+              Back to site
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const s = swimmer;
+  const skills = LEVEL_SKILLS[s.level] || [];
+  const mastered = skills.filter((sk) => (s.skills?.[s.level]?.[sk] || 0) >= 5).length;
+  const paidMonths = (s.paidMonths || []).slice().sort().reverse();
+  const paidThisMonth = (s.paidMonths || []).includes(monthKey());
+
+  return (
+    <div className="min-h-screen bg-slate-50 px-4 py-10">
+      <div className="max-w-md mx-auto">
+        <div className="flex items-center justify-between mb-6">
+          <img src={CONFIG.logoDataUri} alt={CONFIG.academyName} className="w-10 h-10 object-contain" />
+          <button onClick={() => setSwimmer(null)} className="text-sm text-slate-400 hover:text-slate-600">Log out</button>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-4">
+          <h2 className="text-xl font-bold text-slate-900">{s.name}</h2>
+          <p className="text-sm text-slate-500">{s.age} yrs · {s.level}</p>
+          <div className="mt-3">
+            <span className={`text-xs px-3 py-1.5 rounded-full font-semibold ${paidThisMonth ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
+              {paidThisMonth ? `Paid · ${monthLabel(monthKey())}` : `Not paid · ${monthLabel(monthKey())}`}
+            </span>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-4">
+          <h3 className="font-bold text-slate-900 mb-1">Skill progress — {s.level}</h3>
+          <p className="text-xs text-slate-400 mb-3">{mastered} / {skills.length} skills mastered</p>
+          <div className="space-y-2">
+            {skills.map((skill) => {
+              const rating = s.skills?.[s.level]?.[skill] || 0;
+              return (
+                <div key={skill} className="flex items-center justify-between text-sm">
+                  <span className="text-slate-600">{skill}</span>
+                  <span className="text-amber-500">{"★".repeat(rating)}{"☆".repeat(5 - rating)}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-4">
+          <h3 className="font-bold text-slate-900 mb-3">Payment history</h3>
+          {paidMonths.length === 0 ? (
+            <p className="text-sm text-slate-400">No payments recorded yet</p>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {paidMonths.map((m) => (
+                <span key={m} className="text-xs px-2.5 py-1 rounded-full bg-green-50 text-green-700 font-medium">{monthLabel(m)}</span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <button
+          onClick={() => onRenew(s)}
+          className="w-full py-3.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition"
+        >
+          Renew subscription
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
 function GatewayView() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -5931,6 +6144,9 @@ function GatewayView() {
 }
 
 
+/* Super-admin panel: reachable at yoursite.com/_admin (a reserved path
+   that never resolves to a real academy). Lets the super admin (you)
+   register new academies and link a login to each one. */
 function SuperAdminView() {
   const [session, setSession] = useState(null); // {email} once signed in as super admin
   const [email, setEmail] = useState("");
@@ -6327,8 +6543,9 @@ class ErrorBoundary extends React.Component {
 }
 
 export default function App() {
-  const [view, setView] = useState("home");
+  const [view, setView] = useState(secondPathSegment() === "parent" ? "parentportal" : "home");
   const [chosenPlan, setChosenPlan] = useState(null);
+  const [renewSwimmer, setRenewSwimmer] = useState(null);
   const [lastRecord, setLastRecord] = useState(null);
   const [academyStatus, setAcademyStatus] = useState("loading"); // "loading" | "ready" | "not-found"
 
@@ -6403,11 +6620,17 @@ export default function App() {
           onStaff={() => setView("staff")}
           onCoach={() => setView("coach")}
           onStaffPortal={() => setView("staffportal")}
+          onParentPortal={() => setView("parentportal")}
         />
       )}
 
       {view === "subscribe" && (
-        <SubscribeView initialPlanId={chosenPlan} onBack={() => setView("home")} onSubmitted={(r) => { setLastRecord(r); setView("success"); }} />
+        <SubscribeView
+          initialPlanId={chosenPlan}
+          initialSwimmer={renewSwimmer}
+          onBack={() => { setRenewSwimmer(null); setView("home"); }}
+          onSubmitted={(r) => { setLastRecord(r); setRenewSwimmer(null); setView("success"); }}
+        />
       )}
 
       {view === "success" && lastRecord && <SuccessScreen record={lastRecord} onHome={() => setView("home")} />}
@@ -6419,6 +6642,16 @@ export default function App() {
       {view === "coach" && <CoachView onExit={() => setView("home")} />}
 
       {view === "staffportal" && <StaffPortal onExit={() => setView("home")} />}
+
+      {view === "parentportal" && (
+        <ParentPortalView
+          onRenew={(swimmer) => {
+            setRenewSwimmer(swimmer);
+            setView("subscribe");
+          }}
+          onExit={() => setView("home")}
+        />
+      )}
     </div>
     </ErrorBoundary>
   );
