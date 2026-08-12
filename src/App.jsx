@@ -239,6 +239,14 @@ function sessionTypeInfo(id) {
   return SESSION_TYPES.find((t) => t.id === id) || SESSION_TYPES[2];
 }
 
+// Exp / Exp 2 / Exp 3 are small groups — capped at 2 swimmers, not the
+// usual Group capacity — everywhere a "how full is this slot" check
+// happens should use this instead of sessionTypeInfo(...).capacity alone.
+function sessionCapacity(sessionType, level) {
+  if (sessionType === "group" && ["Exp", "Exp 2", "Exp 3"].includes(level)) return 2;
+  return sessionTypeInfo(sessionType).capacity;
+}
+
 /* Day groups the academy trains on */
 const DAY_GROUPS = [
   { id: "sun-tue", label: "Sunday & Tuesday" },
@@ -1358,6 +1366,9 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
     if (!newOptions.includes(time)) setTime(newOptions[0]);
     // Baby classes are always 1-on-1, so the session type follows automatically.
     if (newLevel === "Baby") setSessionType("private");
+    // Exp / Exp 2 / Exp 3 are small groups — 2 swimmers max, not the usual
+    // group size — so this also picks Group for them automatically.
+    if (["Exp", "Exp 2", "Exp 3"].includes(newLevel)) setSessionType("group");
   };
 
   const [saving, setSaving] = useState(false);
@@ -1393,7 +1404,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
     };
   }, [coachId, day, time, initial?.id]);
   const slotType = slotUsage[0]?.sessionType;
-  const capacity = sessionTypeInfo(sessionType).capacity;
+  const capacity = sessionCapacity(sessionType, level);
   const slotMismatch = coachId && slotUsage.length > 0 && slotType !== sessionType;
   const slotFull = coachId && !slotMismatch && slotUsage.length >= capacity;
 
@@ -1410,10 +1421,12 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
       if (usage.length > 0 && usage[0].sessionType !== sessionType) {
         return setError(`This coach already has a ${sessionTypeInfo(usage[0].sessionType).label} session at this time`);
       }
-      if (usage.length >= sessionTypeInfo(sessionType).capacity) {
-        return setError(`This coach is full for this time slot (${sessionTypeInfo(sessionType).capacity} max for ${sessionTypeInfo(sessionType).label})`);
+      const cap = sessionCapacity(sessionType, level);
+      if (usage.length >= cap) {
+        return setError(`This coach is full for this time slot (${cap} max for ${sessionTypeInfo(sessionType).label}${cap === 2 && sessionType === "group" ? " at this level" : ""})`);
       }
     }
+
 
     const record = {
       // Preserve every field this form doesn't manage (skills ratings,
@@ -2000,6 +2013,57 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
 
   // recording a cash payment (marks paid + logs it as revenue)
   const [cashModal, setCashModal] = useState(null); // swimmer, or null
+  const [makeupModal, setMakeupModal] = useState(null); // swimmer, or null
+  const [makeupDate, setMakeupDate] = useState("");
+  const [makeupTime, setMakeupTime] = useState("");
+  const [makeupCoachId, setMakeupCoachId] = useState("");
+  const [makeupNote, setMakeupNote] = useState("");
+  const [makeupError, setMakeupError] = useState("");
+  const [makeupSaving, setMakeupSaving] = useState(false);
+
+  const openMakeupModal = (swimmer) => {
+    setMakeupModal(swimmer);
+    setMakeupDate(todayISO());
+    setMakeupTime(swimmer.time || "");
+    setMakeupCoachId(swimmer.coachId || "");
+    setMakeupNote("");
+    setMakeupError("");
+  };
+
+  const saveMakeupSession = async () => {
+    setMakeupError("");
+    if (!makeupDate) return setMakeupError("Choose a date");
+    if (!makeupTime) return setMakeupError("Choose a time");
+    setMakeupSaving(true);
+    try {
+      await updateSwimmerById(makeupModal.id, (s) => ({
+        ...s,
+        makeupSessions: [
+          ...(s.makeupSessions || []),
+          { id: genId(), date: makeupDate, time: makeupTime, coachId: makeupCoachId || null, note: makeupNote.trim() },
+        ],
+      }));
+      setMakeupModal(null);
+      loadSwimmersPage({ offset: 0 });
+    } catch (e) {
+      setMakeupError("Could not save, please try again");
+    } finally {
+      setMakeupSaving(false);
+    }
+  };
+
+  const removeMakeupSession = async (swimmerId, makeupId) => {
+    try {
+      await updateSwimmerById(swimmerId, (s) => ({
+        ...s,
+        makeupSessions: (s.makeupSessions || []).filter((m) => m.id !== makeupId),
+      }));
+      loadSwimmersPage({ offset: 0 });
+    } catch (e) {
+      console.warn("Could not remove makeup session", e);
+    }
+  };
+
   const [cashAmount, setCashAmount] = useState("");
   const [cashNote, setCashNote] = useState("");
   const [cashReceiptNo, setCashReceiptNo] = useState("");
@@ -3598,6 +3662,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                     {canEdit && (
                       <>
                         <button
+                          onClick={() => openMakeupModal(s)}
+                          className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"
+                          title="Add a makeup session"
+                        >
+                          <CalendarCheck className="w-4 h-4" />
+                        </button>
+                        <button
                           onClick={() => { setEditingSwimmer(s); setPendingActivationId(null); setShowForm(true); }}
                           className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"
                         >
@@ -3612,6 +3683,24 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                 </div>
 
                 {s.notes && <div className="text-xs text-slate-400 border-t border-slate-100 pt-2 mt-3">{s.notes}</div>}
+
+                {(s.makeupSessions || []).filter((m) => m.date >= todayISO()).length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 border-t border-slate-100 pt-2 mt-3">
+                    {(s.makeupSessions || [])
+                      .filter((m) => m.date >= todayISO())
+                      .sort((a, b) => a.date.localeCompare(b.date))
+                      .map((m) => (
+                        <span key={m.id} className="text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 flex items-center gap-1.5">
+                          Makeup: {m.date} · {m.time}
+                          {canEdit && (
+                            <button onClick={() => removeMakeupSession(s.id, m.id)} className="text-amber-400 hover:text-amber-600">
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </span>
+                      ))}
+                  </div>
+                )}
 
                 {expandedId === s.id && (
                   <div className="border-t border-slate-100 mt-3 pt-3">
@@ -3971,7 +4060,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                                   </td>
                                 );
                               }
-                              const capacity = sessionTypeInfo(booking.sessionType).capacity;
+                              const smallGroupLevel = booking.levels.find((lv) => ["Exp", "Exp 2", "Exp 3"].includes(lv));
+                              const capacity = sessionCapacity(booking.sessionType, smallGroupLevel);
                               const spotsLeft = capacity - booking.count;
                               return (
                                 <td key={t} className="px-2 py-2 text-center whitespace-nowrap">
@@ -4811,6 +4901,81 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         </div>
       )}
 
+      {makeupModal && (
+        <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 px-4" onClick={() => setMakeupModal(null)}>
+          <div className="bg-white rounded-2xl p-5 max-w-sm w-full shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-bold text-slate-900 mb-1">Add a makeup session</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              For {makeupModal.name} — a one-time extra session, separate from their regular schedule. Shows up for the coach and pool staff on that date, then disappears automatically afterward.
+            </p>
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Date</label>
+                <input
+                  type="date"
+                  value={makeupDate}
+                  min={todayISO()}
+                  onChange={(e) => setMakeupDate(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Time</label>
+                <select
+                  value={makeupTime}
+                  onChange={(e) => setMakeupTime(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                >
+                  <option value="">— Choose —</option>
+                  {Array.from(new Set(Object.values(TIME_SLOTS[BRANCHES[0].id] || {}).flat())).map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="mb-3">
+              <label className="text-xs text-slate-500 mb-1 block">Coach</label>
+              <select
+                value={makeupCoachId}
+                onChange={(e) => setMakeupCoachId(e.target.value)}
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+              >
+                <option value="">No coach assigned</option>
+                {coaches.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="mb-3">
+              <label className="text-xs text-slate-500 mb-1 block">Note (optional)</label>
+              <input
+                value={makeupNote}
+                onChange={(e) => setMakeupNote(e.target.value)}
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                placeholder="e.g. making up for the missed session on Aug 3"
+              />
+            </div>
+            {makeupError && <div className="text-red-500 text-sm mb-3">{makeupError}</div>}
+            <div className="flex gap-2">
+              <button
+                onClick={saveMakeupSession}
+                disabled={makeupSaving}
+                className="flex-1 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+              >
+                {makeupSaving ? "Saving..." : "Add makeup session"}
+              </button>
+              <button
+                onClick={() => setMakeupModal(null)}
+                disabled={makeupSaving}
+                className="px-4 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {deleteAllModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 px-4" onClick={() => { setDeleteAllModalOpen(false); setDeleteAllConfirmText(""); setDeleteAllError(""); }}>
           <div className="bg-white rounded-2xl p-5 max-w-sm w-full shadow-xl" onClick={(e) => e.stopPropagation()}>
@@ -5213,6 +5378,33 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   );
   const [noteDraft, setNoteDraft] = useState({}); // swimmerId -> draft text
   const [noteStatus, setNoteStatus] = useState({}); // swimmerId -> "saving" | "saved" | "error"
+  const [makeupToday, setMakeupToday] = useState([]); // [{ swimmer, session }] for today, this branch
+
+  useEffect(() => {
+    if (!authed) return;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("swimmers")
+        .select("data")
+        .eq("academy_id", window.__academy?.id)
+        .eq("branch", branch)
+        .filter("data->makeupSessions", "cs", `[{"date":"${todayISO()}"}]`);
+      if (cancelled || error) return;
+      const today = todayISO();
+      const rows = [];
+      (data || []).forEach((r) => {
+        (r.data.makeupSessions || []).forEach((m) => {
+          if (m.date === today) rows.push({ swimmer: r.data, session: m });
+        });
+      });
+      rows.sort((a, b) => a.session.time.localeCompare(b.session.time));
+      setMakeupToday(rows);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authed, branch]);
 
   // When an account is restricted to one level (e.g. a "Baby only" technical
   // account), that level always wins over the manual 30-min toggle below.
@@ -5259,7 +5451,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
       const inSlot = swimmers.filter((s) => s.coachId === c.id);
       if (inSlot.length === 0) return { coach: c, free: true, label: "Free — no bookings" };
       const type = inSlot[0].sessionType;
-      const capacity = sessionTypeInfo(type).capacity;
+      const capacity = sessionCapacity(type, inSlot[0].level);
       const spotsLeft = capacity - inSlot.length;
       return {
         coach: c,
@@ -5466,6 +5658,23 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
         </button>
       </div>
 
+      {makeupToday.length > 0 && (
+        <div className="mb-4">
+          <div className="text-xs text-amber-600 font-medium mb-1.5">Makeup sessions today</div>
+          <div className="space-y-1.5">
+            {makeupToday.map(({ swimmer: s, session: m }) => (
+              <div key={m.id} className="text-sm bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
+                <span>
+                  <strong>{s.name}</strong> · {s.level} · {m.time}
+                  {m.coachId && ` · ${coaches.find((c) => c.id === m.coachId)?.name || ""}`}
+                  {m.note && <span className="text-amber-500"> — {m.note}</span>}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {coachAvailability.length > 0 && (
         <div className="mb-4">
           <div className="text-xs text-slate-400 mb-1.5">Coach availability for this day & time</div>
@@ -5603,6 +5812,36 @@ function CoachView({ onExit }) {
   const [swimmers, setSwimmers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [expandedSwimmerId, setExpandedSwimmerId] = useState(null);
+  const [upcomingMakeups, setUpcomingMakeups] = useState([]);
+
+  useEffect(() => {
+    if (!authedCoach) return;
+    let cancelled = false;
+    (async () => {
+      // Any swimmer with a makeup session assigned to THIS coach, today or
+      // later — this is separate from the coach's regular roster above,
+      // since a makeup session's coach can be different from the
+      // swimmer's usual one.
+      const { data, error } = await supabase
+        .from("swimmers")
+        .select("data")
+        .eq("academy_id", window.__academy?.id)
+        .filter("data->makeupSessions", "cs", `[{"coachId":"${authedCoach.id}"}]`);
+      if (cancelled || error) return;
+      const today = todayISO();
+      const rows = [];
+      (data || []).forEach((r) => {
+        (r.data.makeupSessions || []).forEach((m) => {
+          if (m.coachId === authedCoach.id && m.date >= today) rows.push({ swimmer: r.data, session: m });
+        });
+      });
+      rows.sort((a, b) => a.session.date.localeCompare(b.session.date) || a.session.time.localeCompare(b.session.time));
+      setUpcomingMakeups(rows);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authedCoach]);
 
   useEffect(() => {
     (async () => {
@@ -5720,6 +5959,20 @@ function CoachView({ onExit }) {
           </button>
         </div>
       </div>
+
+      {upcomingMakeups.length > 0 && (
+        <div className="mb-5">
+          <div className="text-xs text-amber-600 font-medium mb-1.5">Upcoming makeup sessions</div>
+          <div className="space-y-1.5">
+            {upcomingMakeups.map(({ swimmer: s, session: m }) => (
+              <div key={m.id} className="text-sm bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                <strong>{s.name}</strong> · {s.level} · {m.date === todayISO() ? "Today" : m.date} · {m.time}
+                {m.note && <span className="text-amber-500"> — {m.note}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {mySwimmers.length === 0 && (
         <div className="text-center text-slate-400 py-16">No swimmers assigned to you yet</div>
