@@ -360,6 +360,55 @@ function downloadReportHTML(filename, bodyHtml) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
+/* An official-looking payment receipt, one per confirmed payment — same
+   download-then-print-dialog mechanism as downloadReportHTML above, just
+   with its own receipt-shaped layout instead of a report layout. */
+function printReceipt({ swimmerName, phone, planName, price, receiptNo, paymentMethod, date }) {
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: #1e293b; padding: 40px; max-width: 480px; margin: 0 auto; }
+  .header { text-align: center; margin-bottom: 24px; }
+  .header img { width: 56px; height: 56px; object-fit: contain; margin-bottom: 8px; }
+  .header h1 { font-size: 17px; margin: 0; }
+  .title { text-align: center; font-size: 20px; font-weight: 700; margin: 20px 0; letter-spacing: 0.5px; }
+  .row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f1f5f9; font-size: 14px; }
+  .row .label { color: #64748b; }
+  .row .value { font-weight: 600; }
+  .amount { text-align: center; margin: 24px 0; }
+  .amount .num { font-size: 32px; font-weight: 800; color: #0b1e3a; }
+  .amount .cur { font-size: 13px; color: #64748b; }
+  .footer { text-align: center; margin-top: 32px; font-size: 11px; color: #94a3b8; }
+  @media print { body { padding: 0; } }
+</style></head><body>
+  <div class="header">
+    <img src="${CONFIG.logoDataUri}" />
+    <h1>${escapeHtml(CONFIG.academyName)}</h1>
+  </div>
+  <div class="title">Payment Receipt</div>
+  <div class="amount">
+    <div class="num">${price} <span class="cur">EGP</span></div>
+  </div>
+  <div class="row"><span class="label">Swimmer</span><span class="value">${escapeHtml(swimmerName)}</span></div>
+  ${phone ? `<div class="row"><span class="label">Phone</span><span class="value">${escapeHtml(phone)}</span></div>` : ""}
+  <div class="row"><span class="label">Plan</span><span class="value">${escapeHtml(planName)}</span></div>
+  ${paymentMethod ? `<div class="row"><span class="label">Payment method</span><span class="value">${escapeHtml(paymentMethod)}</span></div>` : ""}
+  ${receiptNo ? `<div class="row"><span class="label">Receipt #</span><span class="value">${escapeHtml(receiptNo)}</span></div>` : ""}
+  <div class="row"><span class="label">Date</span><span class="value">${escapeHtml(date)}</span></div>
+  <div class="footer">Thank you!</div>
+<script>window.onload = () => setTimeout(() => window.print(), 300);</script>
+</body></html>`;
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `receipt-${(swimmerName || "swimmer").replace(/[^a-zA-Z0-9أ-ي]/g, "-")}-${date}.html`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+
 /* window.storage can occasionally hiccup with a transient error —
    retry once before giving up, and surface one clear message either way */
 async function storageSet(key, value, shared = true) {
@@ -2067,6 +2116,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   const [cashAmount, setCashAmount] = useState("");
   const [cashNote, setCashNote] = useState("");
   const [cashReceiptNo, setCashReceiptNo] = useState("");
+  const [cashMethod, setCashMethod] = useState("cash"); // "cash" | "card" — paid in person, either way
   const [cashError, setCashError] = useState("");
   const [cashSaving, setCashSaving] = useState(false);
 
@@ -2290,7 +2340,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   // Cash payments never had a screenshot, so skip those entirely.
   useEffect(() => {
     if (!authed) return;
-    const missing = requests.filter((r) => r.method !== "cash" && !(r.id in photos)).map((r) => r.id);
+    const missing = requests.filter((r) => r.method !== "cash" && r.method !== "card" && !(r.id in photos)).map((r) => r.id);
     if (missing.length === 0) return;
     let cancelled = false;
     (async () => {
@@ -2586,6 +2636,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         paidMonths: [...(s.paidMonths || []), key],
         manualPayments: [...(s.manualPayments || []), { month: key, at: new Date().toISOString() }],
       }));
+      printReceipt({
+        swimmerName: swimmer.name,
+        phone: swimmer.phone,
+        planName: monthLabel(key),
+        price: "—",
+        paymentMethod: "Marked paid (no amount on file)",
+        date: todayISO(),
+      });
       loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
       setMarkPaidModal(null);
     } catch (e) {
@@ -2606,15 +2664,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     if (!amount || amount <= 0) return setCashError("Enter a valid amount");
     setCashSaving(true);
     const now = new Date().toISOString();
+    const methodLabel = cashMethod === "card" ? "Card (in person)" : "Cash";
     const paymentRecord = {
       id: genId(),
       name: swimmer.name,
       phone: swimmer.phone,
       planId: null,
-      planName: cashNote.trim() || "Cash payment",
+      planName: cashNote.trim() || `${methodLabel} payment`,
       price: amount,
       status: "confirmed",
-      method: "cash",
+      method: cashMethod,
       receiptNo: cashReceiptNo.trim(),
       createdAt: now,
       confirmedAt: now,
@@ -2630,6 +2689,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         await updateSwimmerById(swimmer.id, (s) => ({ ...s, paidMonths: [...(s.paidMonths || []), key] }));
         loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
       }
+      printReceipt({
+        swimmerName: swimmer.name,
+        phone: swimmer.phone,
+        planName: paymentRecord.planName,
+        price: amount,
+        receiptNo: cashReceiptNo.trim(),
+        paymentMethod: methodLabel,
+        date: todayISO(),
+      });
       setCashModal(null);
       setCashAmount("");
       setCashNote("");
@@ -2640,6 +2708,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       setCashSaving(false);
     }
   };
+
 
   // Suggests the next receipt number by looking at the highest numeric
   // receipt number already logged — still fully editable, so it can be
@@ -2655,6 +2724,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     setReceiptSaving(true);
     try {
       await setRequestStatus(receiptModal, "confirmed", receiptNoInput.trim(), receiptTargetMonth);
+      printReceipt({
+        swimmerName: receiptModal.name,
+        phone: receiptModal.phone,
+        planName: receiptModal.planName,
+        price: receiptModal.price,
+        receiptNo: receiptNoInput.trim(),
+        paymentMethod: "Instapay",
+        date: todayISO(),
+      });
       setReceiptModal(null);
       setReceiptNoInput("");
     } catch (e) {
@@ -3239,10 +3317,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           <div className="grid sm:grid-cols-2 gap-4">
             {filteredRequests.map((r) => (
               <div key={r.id} className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-                {r.method === "cash" ? (
+                {r.method === "cash" || r.method === "card" ? (
                   <div className="w-full h-40 bg-green-50 flex flex-col items-center justify-center text-green-700 gap-1">
                     <Wallet className="w-6 h-6" />
-                    <span className="text-xs font-medium">Cash payment</span>
+                    <span className="text-xs font-medium">{r.method === "card" ? "Card payment" : "Cash payment"}</span>
                   </div>
                 ) : photos[r.id] ? (
                   <img
@@ -3602,12 +3680,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                               setCashAmount("");
                               setCashNote("");
                               setCashReceiptNo(nextReceiptNo());
+                              setCashMethod("cash");
                               setCashError("");
                             }}
                             className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-950 text-white hover:bg-blue-900 transition"
-                            title="Cash payment — marks paid and logs it in the revenue report"
+                            title="Cash or card, paid in person — marks paid and logs it in the revenue report"
                           >
-                            <Wallet className="w-3.5 h-3.5" /> Cash payment
+                            <Wallet className="w-3.5 h-3.5" /> In-person payment
                           </button>
                           <button
                             onClick={() => openMarkPaidOnly(s)}
@@ -4220,7 +4299,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             ? incomeRows
                 .map(
                   (r) =>
-                    `<tr><td>${escapeHtml(r.receiptNo || "—")}</td><td>${escapeHtml((r.confirmedAt || r.createdAt || "").slice(0, 10))}</td><td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.planName)}</td><td>${r.method === "cash" ? "Cash" : "Instapay"}</td><td class="green">${r.price}</td></tr>`
+                    `<tr><td>${escapeHtml(r.receiptNo || "—")}</td><td>${escapeHtml((r.confirmedAt || r.createdAt || "").slice(0, 10))}</td><td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.planName)}</td><td>${r.method === "cash" ? "Cash" : r.method === "card" ? "Card" : "Instapay"}</td><td class="green">${r.price}</td></tr>`
                 )
                 .join("")
             : `<tr><td colspan="6" style="color:#94a3b8">No confirmed payments in this period</td></tr>`;
@@ -4494,7 +4573,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                             <td className="px-4 py-2 text-slate-500">{(r.confirmedAt || r.createdAt || "").slice(0, 10)}</td>
                             <td className="px-4 py-2 text-slate-800">{r.name}</td>
                             <td className="px-4 py-2 text-slate-600">{r.planName}</td>
-                            <td className="px-4 py-2 text-slate-400 text-xs">{r.method === "cash" ? "Cash" : "Instapay"}</td>
+                            <td className="px-4 py-2 text-slate-400 text-xs">{r.method === "cash" ? "Cash" : r.method === "card" ? "Card" : "Instapay"}</td>
                             <td className="px-4 py-2 text-green-600 font-semibold">{r.price}</td>
                           </tr>
                         ))}
@@ -4759,10 +4838,33 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       {cashModal && (
         <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 px-4" onClick={() => setCashModal(null)}>
           <div className="bg-white rounded-2xl p-5 max-w-sm w-full shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="font-bold text-slate-900 mb-1">Record cash payment</h3>
+            <h3 className="font-bold text-slate-900 mb-1">Record in-person payment</h3>
             <p className="text-sm text-slate-500 mb-4">
               For {cashModal.name} · {monthLabel(paymentMonthFilter)}. This marks the month as paid and adds it to the revenue report.
             </p>
+            <div className="mb-3">
+              <label className="text-xs text-slate-500 mb-1 block">Payment method</label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCashMethod("cash")}
+                  className={`flex-1 py-2 rounded-lg text-sm font-medium border transition ${
+                    cashMethod === "cash" ? "bg-blue-950 text-white border-blue-950" : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"
+                  }`}
+                >
+                  Cash
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCashMethod("card")}
+                  className={`flex-1 py-2 rounded-lg text-sm font-medium border transition ${
+                    cashMethod === "card" ? "bg-blue-950 text-white border-blue-950" : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"
+                  }`}
+                >
+                  Card (Visa)
+                </button>
+              </div>
+            </div>
             <div className="mb-3">
               <label className="text-xs text-slate-500 mb-1 block">Amount (EGP)</label>
               <input
