@@ -254,6 +254,11 @@ const DAY_GROUPS = [
   { id: "fri-sat", label: "Friday & Saturday" },
 ];
 
+// Which real calendar weekdays (JS Date.getDay(): Sun=0 ... Sat=6) each
+// day group covers — used to work out which day-group table a makeup
+// session's specific date belongs in.
+const DAY_GROUP_WEEKDAYS_LOOKUP = { "sun-tue": [0, 2], "mon-wed": [1, 3], "fri-sat": [5, 6] };
+
 /* The academy's two locations */
 const BRANCHES = [
   { id: "elalsson", name: "EL-ALSSON Branch (New Giza)" },
@@ -2212,18 +2217,6 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   useEffect(() => {
     if (tab === "schedule") loadUpcomingMakeups();
   }, [tab, loadUpcomingMakeups]);
-
-  const markMakeupAttendanceAdmin = async (swimmerId, date, status) => {
-    try {
-      await updateSwimmerById(swimmerId, (s) => ({
-        ...s,
-        attendance: { ...(s.attendance || {}), [date]: status },
-      }));
-      loadUpcomingMakeups();
-    } catch (e) {
-      console.warn("Could not mark attendance", e);
-    }
-  };
 
   const [exportingRoster, setExportingRoster] = useState(false);
 
@@ -4515,6 +4508,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           {upcomingMakeups.length > 0 && (
             <div className="mb-6">
               <div className="text-xs text-amber-600 font-medium mb-1.5">Makeup sessions — today & upcoming</div>
+              <p className="text-xs text-slate-400 mb-1.5">Attendance for these is marked by pool staff, from their own dashboard.</p>
               <div className="space-y-1.5">
                 {upcomingMakeups.map(({ swimmer: s, session: m }) => {
                   const isToday = m.date === todayISO();
@@ -4526,25 +4520,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                         {m.coachId && ` · ${coaches.find((c) => c.id === m.coachId)?.name || ""}`}
                         {m.note && <span className="text-amber-500"> — {m.note}</span>}
                       </span>
-                      {isToday && (
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            onClick={() => markMakeupAttendanceAdmin(s.id, m.date, "present")}
-                            className={`text-xs px-2.5 py-1 rounded-full font-medium transition ${
-                              status === "present" ? "bg-green-600 text-white" : "bg-white border border-green-300 text-green-700 hover:bg-green-50"
-                            }`}
-                          >
-                            Present
-                          </button>
-                          <button
-                            onClick={() => markMakeupAttendanceAdmin(s.id, m.date, "absent")}
-                            className={`text-xs px-2.5 py-1 rounded-full font-medium transition ${
-                              status === "absent" ? "bg-red-600 text-white" : "bg-white border border-red-300 text-red-600 hover:bg-red-50"
-                            }`}
-                          >
-                            Absent
-                          </button>
-                        </div>
+                      {isToday && status && (
+                        <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${status === "present" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
+                          {status === "present" ? "Present" : "Absent"}
+                        </span>
                       )}
                     </div>
                   );
@@ -4589,10 +4568,29 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                               const booking = (coachBookingsById[c.id] || []).find(
                                 (b) => b.day === dayGroup.id && b.time === t
                               );
+                              const cellMakeups = upcomingMakeups.filter(
+                                (um) =>
+                                  um.session.coachId === c.id &&
+                                  um.session.time === t &&
+                                  DAY_GROUP_WEEKDAYS_LOOKUP[dayGroup.id]?.includes(new Date(um.session.date + "T00:00:00").getDay())
+                              );
+                              const makeupBadge = cellMakeups.length > 0 && (
+                                <div className="flex flex-wrap gap-0.5 justify-center mt-0.5">
+                                  {cellMakeups.map((um) => (
+                                    <span
+                                      key={um.session.id}
+                                      className="text-[9px] leading-tight bg-amber-200 text-amber-800 rounded px-1 py-0.5 font-semibold"
+                                      title={`Makeup: ${um.swimmer.name} — ${um.session.date}`}
+                                    >
+                                      {um.swimmer.name.split(" ")[0]} ({um.session.date.slice(5)})
+                                    </span>
+                                  ))}
+                                </div>
+                              );
                               if (!booking) {
                                 return (
                                   <td key={t} className="px-2 py-2 text-center text-slate-300">
-                                    —
+                                    —{makeupBadge}
                                   </td>
                                 );
                               }
@@ -4611,6 +4609,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                                     <br />
                                     {booking.levels.join(", ")}
                                   </span>
+                                  {makeupBadge}
                                 </td>
                               );
                             })}
