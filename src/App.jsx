@@ -726,6 +726,241 @@ function coachSlotUsage(swimmers, coachId, day, time, excludeId) {
   );
 }
 
+/* ============================================================
+   Full-history import — for a sheet laid out with one 4-column block
+   per month (payment / level / day / time), like an academy's
+   month-by-month tracking sheet built up over a long time. Detected
+   automatically: if the sheet doesn't look like this, the normal
+   single-row importer below handles it instead.
+
+   This rebuilds each swimmer's whole levelHistory + scheduleHistory
+   from every month block that has real data (not just their current
+   state) — same logic proven out for the offline edition's migration,
+   ported here so it runs directly from the Import Excel button.
+   ============================================================ */
+const ARABIC_MONTH_NAMES = {
+  "يناير": 1, "فبراير": 2, "مارس": 3, "أبريل": 4, "ابريل": 4, "مايو": 5, "يونيو": 6,
+  "يوليو": 7, "أغسطس": 8, "اغسطس": 8, "سبتمبر": 9, "أكتوبر": 10, "اكتوبر": 10,
+  "نوفمبر": 11, "ديسمبر": 12,
+};
+
+function parseMonthBlockLabel(label, prevYear, prevMonth) {
+  const text = String(label || "").trim();
+  let year = null;
+  const yearMatch = text.match(/20\d{2}/);
+  if (yearMatch) year = Number(yearMatch[0]);
+  let month = null;
+  for (const name of Object.keys(ARABIC_MONTH_NAMES)) {
+    if (text.includes(name)) {
+      month = ARABIC_MONTH_NAMES[name];
+      break;
+    }
+  }
+  if (month && !year) {
+    // "شهر مارس" style, no year written — continue on from the previous
+    // block's month/year in sequence (this month comes right after it).
+    if (prevMonth != null) {
+      year = month > prevMonth ? prevYear : prevYear + 1;
+    } else {
+      year = new Date().getFullYear();
+    }
+  }
+  if (!month) return null; // not a month block (e.g. "رمضان" or similar one-off column)
+  return { year, month };
+}
+
+function findMonthBlocks(sheet) {
+  const merges = sheet["!merges"] || [];
+  const blocks = [];
+  let prevYear = null;
+  let prevMonth = null;
+  merges
+    .filter((m) => m.s.r === 0 && m.e.r === 0 && m.e.c - m.s.c >= 2) // row 1, at least 3-wide
+    .sort((a, b) => a.s.c - b.s.c)
+    .forEach((m) => {
+      const label = sheet[XLSX.utils.encode_cell({ r: 0, c: m.s.c })]?.v;
+      const parsed = parseMonthBlockLabel(label, prevYear, prevMonth);
+      if (!parsed) return;
+      blocks.push({ startCol: m.s.c, year: parsed.year, month: parsed.month });
+      prevYear = parsed.year;
+      prevMonth = parsed.month;
+    });
+  return blocks;
+}
+
+function cellStr(sheet, r, c) {
+  const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+  if (!cell || cell.v == null) return "";
+  return String(cell.v).trim();
+}
+
+const IMPORT_LEVEL_MAP = {
+  baby: "Baby", babya: "Baby",
+  exp: "Exp", exp1: "Exp",
+  exp2: "Exp 2", "exp 2": "Exp 2",
+  exp3: "Exp 3", "exp 3": "Exp 3",
+  "1": "Level 1", "2": "Level 2", "3": "Level 3", "4": "Level 4",
+  "5": "Level 5", "6": "Level 6", "7": "Level 7", "8": "Level 8",
+  star1: "Star 1", star2: "Star 2", star3: "Star 3", star4: "Star 4",
+  team: "Team",
+};
+const IMPORT_DAY_MAP = {
+  "الاحد": "sun-tue", "الاحد ": "sun-tue",
+  "الثلاثاء": "sun-tue", "ثلاثاء": "sun-tue",
+  "الاثنين": "mon-wed", "اثنين": "mon-wed",
+  "الاربعاء": "mon-wed", "الاربع": "mon-wed",
+  "الجمعة": "fri-sat", "الجمعه": "fri-sat", "جمعة": "fri-sat", "جمعه": "fri-sat",
+  "السبت": "fri-sat",
+};
+
+// Matches a bare hour/time from the sheet (e.g. "3", "3:30", or a real
+// Excel time) against this day group's actual valid time slots — those
+// are the only values the app's Time dropdown can show as selected, and
+// they carry the AM/PM the sheet's bare numbers don't specify. Matches
+// by hour number; falls back to a plain "H:MM" guess if nothing in the
+// day's slot list has that hour (so it's still visible, just won't
+// pre-select a dropdown option until someone confirms it by hand).
+function importMapTime(raw, day) {
+  if (raw == null || String(raw).trim() === "") return null;
+  let hour, minute;
+  if (raw instanceof Date) {
+    hour = raw.getHours();
+    minute = raw.getMinutes();
+  } else {
+    const s = String(raw).trim();
+    if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(s)) {
+      const [h, m] = s.split(":");
+      hour = Number(h);
+      minute = Number(m);
+    } else if (/^\d{1,2}$/.test(s)) {
+      hour = Number(s);
+      minute = 0;
+    } else {
+      return null;
+    }
+  }
+  const validSlots = (TIME_SLOTS[BRANCHES[0].id] && TIME_SLOTS[BRANCHES[0].id][day]) || [];
+  const matched = validSlots.find((slot) => {
+    const slotHour = parseInt(slot, 10);
+    const is12h = /PM/i.test(slot) && slotHour !== 12 ? slotHour + 12 : /AM/i.test(slot) && slotHour === 12 ? 0 : slotHour;
+    return is12h === hour || slotHour === hour; // match either 24h or plain hour number
+  });
+  if (matched) return matched;
+  return `${hour}:${String(minute).padStart(2, "0")}`;
+}
+
+function parseFullHistorySheet(sheet) {
+  const blocks = findMonthBlocks(sheet);
+  if (blocks.length === 0) return null; // not this kind of sheet
+
+  const range = XLSX.utils.decode_range(sheet["!ref"]);
+  // Find the name / phone / notes columns by their header text, rather
+  // than assuming fixed positions — more forgiving of small layout
+  // differences between exports.
+  let nameCol = null, birthCol = null, phoneCol = null, notesCol = null;
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const header = cellStr(sheet, 0, c) || cellStr(sheet, 1, c);
+    if (!header) continue;
+    if (nameCol == null && header.includes("اسم")) nameCol = c;
+    if (birthCol == null && header.includes("مواليد")) birthCol = c;
+    if (phoneCol == null && (header.includes("موبايل") || header.includes("تليفون") || header.includes("هاتف"))) phoneCol = c;
+    if (header.includes("ملاحظ")) notesCol = c;
+  }
+  if (nameCol == null || phoneCol == null) return null; // doesn't look like this format after all
+
+  const latestBlock = blocks[blocks.length - 1];
+  const latestKey = `${latestBlock.year}-${String(latestBlock.month).padStart(2, "0")}`;
+
+  const swimmers = [];
+  const warnings = [];
+  for (let r = 2; r <= range.e.r; r++) {
+    const name = cellStr(sheet, r, nameCol);
+    if (!name) continue;
+    const birthYear = cellStr(sheet, r, birthCol);
+    const phoneRaw = cellStr(sheet, r, phoneCol);
+    const notes = notesCol != null ? cellStr(sheet, r, notesCol) : "";
+
+    const phoneParts = phoneRaw.split(/[-/]/).map((p) => p.replace(/\D/g, "")).filter(Boolean);
+    const fixPhone = (p) => (p.length === 10 ? "0" + p : p);
+    const phone = phoneParts[0] ? fixPhone(phoneParts[0]) : "";
+    const altPhone = phoneParts[1] ? fixPhone(phoneParts[1]) : "";
+    if (!phone) continue; // no usable phone — skip rather than guess
+
+    const levelHistory = [];
+    const scheduleHistory = [];
+    const paidMonths = [];
+
+    blocks.forEach((b) => {
+      const monthKeyStr = `${b.year}-${String(b.month).padStart(2, "0")}`;
+      const monthDate = `${monthKeyStr}-01T00:00:00.000Z`;
+      const payRaw = cellStr(sheet, r, b.startCol).toLowerCase();
+      const lvlRaw = cellStr(sheet, r, b.startCol + 1);
+      const dayRaw = cellStr(sheet, r, b.startCol + 2);
+      const timeRaw = cellStr(sheet, r, b.startCol + 3);
+
+      if (payRaw === "تم" || payRaw === "done") paidMonths.push(monthKeyStr);
+
+      const lvlKey = lvlRaw.trim().toLowerCase();
+      const level = IMPORT_LEVEL_MAP[lvlKey];
+      if (level) levelHistory.push({ level, date: monthDate });
+
+      const day = IMPORT_DAY_MAP[dayRaw.trim()];
+      const time = importMapTime(timeRaw, day);
+      if (day && time) {
+        scheduleHistory.push({ day, time, date: monthDate });
+      } else {
+        // Category placeholders instead of a real day/time — same
+        // fallback schedule rules used for the offline migration.
+        const blob = `${lvlRaw} ${dayRaw} ${timeRaw} ${payRaw}`.toLowerCase();
+        if (blob.includes("star") || blob.includes("team") || blob.includes("بر تيم")) {
+          scheduleHistory.push({ day: "mon-wed", time: "7:30", date: monthDate });
+          scheduleHistory.push({ day: "fri-sat", time: "3:00", date: monthDate });
+        } else if (blob.includes("ladies")) {
+          scheduleHistory.push({ day: "fri-sat", time: "8:30", date: monthDate });
+        } else if (blob.includes("adult")) {
+          scheduleHistory.push({ day: "sun-tue", time: "7:30", date: monthDate });
+        }
+      }
+    });
+
+    const currentLevelEntry = [...levelHistory].sort((a, b) => a.date.localeCompare(b.date)).pop();
+    const currentLevel = currentLevelEntry ? currentLevelEntry.level : "";
+    const latestEntries = scheduleHistory.filter((h) => h.date.startsWith(latestKey));
+
+    const age = birthYear && /^\d{4}$/.test(birthYear) ? new Date().getFullYear() - Number(birthYear) : "";
+
+    swimmers.push({
+      id: genId(),
+      name,
+      age: age || "",
+      phone,
+      altPhone,
+      branch: BRANCHES[0].id,
+      level: currentLevel,
+      day: latestEntries[0]?.day || "",
+      time: latestEntries[0]?.time || "",
+      day2: latestEntries[1]?.day || "",
+      time2: latestEntries[1]?.time || "",
+      sessionType: "group",
+      sessionType2: latestEntries[1] ? "group" : "",
+      coachId: null,
+      coachId2: null,
+      notes,
+      parentPin: genParentPin(),
+      paidMonths,
+      frozenUntil: null,
+      freezeLog: [],
+      levelHistory,
+      scheduleHistory,
+      trainingDates: [],
+      attendance: {},
+      createdAt: `${blocks[0].year}-${String(blocks[0].month).padStart(2, "0")}-01T00:00:00.000Z`,
+    });
+  }
+
+  return { swimmers, monthsFound: blocks.length, latestMonthLabel: monthLabel(latestKey) };
+}
+
 /* Reads a raw spreadsheet row (keys are whatever the header cells said) and
    turns it into a swimmer record, being forgiving about column naming and
    casing. Returns { record, warnings } — warnings note any field that
@@ -2463,27 +2698,97 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     setExportingSwimmers(true);
     try {
       const all = await fetchAllSwimmers();
-      const rows = all
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map((s) => ({
-          Name: s.name,
-          Age: s.age,
-          Phone: s.phone,
-          Branch: BRANCHES.find((b) => b.id === s.branch)?.name || s.branch || "",
-          Level: s.level || "",
-          Day: DAY_GROUPS.find((d) => d.id === s.day)?.label || "Not scheduled",
-          Time: s.time || "",
-          "Session type": SESSION_TYPES.find((t) => t.id === s.sessionType)?.label || s.sessionType || "",
-          Coach: coaches.find((c) => c.id === s.coachId)?.name || "",
-          "Paid this month": isPaidThisMonth(s) ? "Yes" : "No",
-          Frozen: isFrozen(s) ? `Until ${s.frozenUntil}` : "No",
-          Notes: s.notes || "",
-          "Registered on": (s.createdAt || "").slice(0, 10),
-        }));
-      const ws = XLSX.utils.json_to_sheet(rows);
+      const sorted = all.slice().sort((a, b) => a.name.localeCompare(b.name));
+
+      // Same month-by-month layout as the import: every month from the
+      // earliest history entry on file through the current month, one
+      // 4-column block each (Day / Time / Level / Payment).
+      let minDate = null;
+      sorted.forEach((s) => {
+        [...(s.levelHistory || []), ...(s.scheduleHistory || [])].forEach((h) => {
+          if (!minDate || h.date < minDate) minDate = h.date;
+        });
+      });
+      const months = [];
+      if (minDate) {
+        const start = new Date(minDate.slice(0, 7) + "-01T00:00:00");
+        const end = new Date();
+        end.setDate(1);
+        const cur = new Date(start);
+        while (cur <= end) {
+          months.push({ key: monthKey(cur), label: monthLabel(monthKey(cur)) });
+          cur.setMonth(cur.getMonth() + 1);
+        }
+      } else {
+        months.push({ key: monthKey(), label: monthLabel(monthKey()) });
+      }
+
+      const valueAtMonth = (history, key, field) => {
+        const matches = (history || []).filter((h) => h.date && h.date.slice(0, 7) === key);
+        return matches.length ? matches.map((m) => m[field]).join(" + ") : "";
+      };
+
+      const headerRow1 = ["Name", "Age", "Phone", "Alt Phone", "Coach"];
+      const headerRow2 = ["", "", "", "", ""];
+      months.forEach((m) => {
+        headerRow1.push(m.label, "", "", "");
+        headerRow2.push("Day", "Time", "Level", "Payment");
+      });
+      headerRow1.push("Session type", "Notes", "Registered on");
+      headerRow2.push("", "", "");
+
+      const dataRows = sorted.map((s) => {
+        const row = [
+          s.name,
+          s.age,
+          s.phone,
+          s.altPhone || "",
+          coaches.find((c) => c.id === s.coachId)?.name || "",
+        ];
+        months.forEach((m, mi) => {
+          const isLatestMonth = mi === months.length - 1;
+          let dayRaw = valueAtMonth(s.scheduleHistory, m.key, "day");
+          let timeRaw = valueAtMonth(s.scheduleHistory, m.key, "time");
+          let levelRaw = valueAtMonth(s.levelHistory, m.key, "level");
+          // No history tracked for this swimmer at all (e.g. added
+          // directly through the form, not imported) — fall back to
+          // their current values for the latest month only, so they're
+          // not just blank across the board.
+          if (isLatestMonth && !(s.scheduleHistory || []).length && s.day && s.time) {
+            dayRaw = s.day;
+            timeRaw = s.time;
+          }
+          if (isLatestMonth && !(s.levelHistory || []).length && s.level) {
+            levelRaw = s.level;
+          }
+          row.push(
+            dayRaw ? dayRaw.split(" + ").map((d) => DAY_GROUPS.find((g) => g.id === d)?.label || d).join(" + ") : "",
+            timeRaw,
+            levelRaw,
+            (s.paidMonths || []).includes(m.key) ? "Yes" : ""
+          );
+        });
+        row.push(
+          SESSION_TYPES.find((t) => t.id === s.sessionType)?.label || s.sessionType || "",
+          s.notes || "",
+          (s.createdAt || "").slice(0, 10)
+        );
+        return row;
+      });
+
+      const aoa = [headerRow1, headerRow2, ...dataRows];
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      // Merge each month's 4 header cells in row 1 (0-indexed row 0)
+      const merges = [];
+      let col = 5; // after Name/Age/Phone/AltPhone/Coach
+      months.forEach(() => {
+        merges.push({ s: { r: 0, c: col }, e: { r: 0, c: col + 3 } });
+        col += 4;
+      });
+      ws["!merges"] = merges;
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Swimmers");
-      XLSX.writeFile(wb, `swimmers-${todayISO()}.xlsx`);
+      XLSX.writeFile(wb, `swimmers-full-history-${todayISO()}.xlsx`);
     } catch (e) {
       console.warn("Export failed", e);
     } finally {
@@ -2497,8 +2802,39 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     setImportPreview(null);
     try {
       const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: "array" });
+      const wb = XLSX.read(buf, { type: "array", cellDates: true });
       const sheet = wb.Sheets[wb.SheetNames[0]];
+
+      // Try the month-by-month tracking sheet format first (one 4-column
+      // block per month) — if it's not that kind of sheet, this returns
+      // null and the normal single-row importer below handles it instead.
+      const fullHistory = parseFullHistorySheet(sheet);
+      if (fullHistory) {
+        const existingAll = await fetchAllSwimmers();
+        const valid = [];
+        const duplicates = [];
+        const seenPhones = new Set();
+        fullHistory.swimmers.forEach((record, i) => {
+          const existing = existingAll.find((s) => s.phone === record.phone && s.name.trim().toLowerCase() === record.name.trim().toLowerCase());
+          if (existing || seenPhones.has(record.phone)) {
+            duplicates.push({ row: i + 3, record, reason: existing ? "already registered" : "duplicate row in this file" });
+            return;
+          }
+          seenPhones.add(record.phone);
+          const warnings = [];
+          if (!record.level) warnings.push("no level found in any month — left blank");
+          if (!record.day || !record.time) warnings.push(`no schedule found for ${fullHistory.latestMonthLabel} — left unscheduled`);
+          valid.push({ row: i + 3, record, warnings });
+        });
+        setImportPreview({
+          valid,
+          duplicates,
+          errors: [],
+          fullHistoryNote: `Full history sheet detected — ${fullHistory.monthsFound} months read, current schedule taken from ${fullHistory.latestMonthLabel}.`,
+        });
+        return;
+      }
+
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
       if (rows.length === 0) {
         setImportError("That file doesn't have any rows to import");
@@ -5178,6 +5514,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 px-4" onClick={() => setImportPreview(null)}>
           <div className="bg-white rounded-2xl p-5 max-w-lg w-full shadow-xl max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-bold text-slate-900 mb-1">Import swimmers</h3>
+            {importPreview.fullHistoryNote && (
+              <div className="text-xs bg-blue-50 text-blue-800 rounded-lg px-3 py-2 mb-3">{importPreview.fullHistoryNote}</div>
+            )}
             <p className="text-sm text-slate-500 mb-4">
               Found {importPreview.valid.length + importPreview.duplicates.length + importPreview.errors.length} row
               {importPreview.valid.length + importPreview.duplicates.length + importPreview.errors.length === 1 ? "" : "s"} —{" "}
