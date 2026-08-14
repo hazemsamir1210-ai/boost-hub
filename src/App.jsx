@@ -230,9 +230,9 @@ const PROGRAMS = [
 
 /* Session types — control how many swimmers a coach can take at once */
 const SESSION_TYPES = [
-  { id: "private", label: "Private", capacity: 1 },
-  { id: "semi-private", label: "Semi Private", capacity: 2 },
-  { id: "group", label: "Group", capacity: 4 },
+  { id: "private", label: "Private", capacity: 1, color: "#2563eb" },       // blue
+  { id: "semi-private", label: "Semi Private", capacity: 2, color: "#9333ea" }, // purple
+  { id: "group", label: "Group", capacity: 4, color: "#0d9488" },          // teal
 ];
 
 function sessionTypeInfo(id) {
@@ -2190,6 +2190,41 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   const [scheduleDayFilter, setScheduleDayFilter] = useState(dayGroupForToday() || DAY_GROUPS[0].id);
   const [scheduleTimeFilter, setScheduleTimeFilter] = useState("all"); // "all" or one specific time
   const [scheduleMonth, setScheduleMonth] = useState(monthKey()); // "YYYY-MM" — which month's sessions to report on
+  const [upcomingMakeups, setUpcomingMakeups] = useState([]); // [{ swimmer, session }] — today and later, whole academy
+
+  const loadUpcomingMakeups = useCallback(async () => {
+    try {
+      const all = await fetchAllSwimmers();
+      const today = todayISO();
+      const rows = [];
+      all.forEach((s) => {
+        (s.makeupSessions || []).forEach((m) => {
+          if (m.date >= today) rows.push({ swimmer: s, session: m });
+        });
+      });
+      rows.sort((a, b) => a.session.date.localeCompare(b.session.date) || a.session.time.localeCompare(b.session.time));
+      setUpcomingMakeups(rows);
+    } catch (e) {
+      console.warn("load makeup sessions failed", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === "schedule") loadUpcomingMakeups();
+  }, [tab, loadUpcomingMakeups]);
+
+  const markMakeupAttendanceAdmin = async (swimmerId, date, status) => {
+    try {
+      await updateSwimmerById(swimmerId, (s) => ({
+        ...s,
+        attendance: { ...(s.attendance || {}), [date]: status },
+      }));
+      loadUpcomingMakeups();
+    } catch (e) {
+      console.warn("Could not mark attendance", e);
+    }
+  };
+
   const [exportingRoster, setExportingRoster] = useState(false);
 
   // Which real calendar dates in the chosen month fall on this day-group's
@@ -3840,6 +3875,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                 </button>
               )}
             </div>
+            <div className="flex items-center gap-3 text-xs text-slate-400">
+              <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: "#2563eb" }} />Private</span>
+              <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: "#9333ea" }} />Semi</span>
+              <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: "#0d9488" }} />Group</span>
+              <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block bg-red-600" />Owes 2+ months</span>
+            </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => {
@@ -3927,12 +3968,28 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           )}
 
           <div className="space-y-2">
-            {swimmersPage.map((s) => (
-              <div key={s.id} className="bg-white rounded-2xl border border-slate-200 p-3">
+            {swimmersPage.map((s) => {
+              const typeColor = sessionTypeInfo(s.sessionType).color;
+              const prevMonthKey = (() => {
+                const d = new Date();
+                d.setMonth(d.getMonth() - 1);
+                return monthKey(d);
+              })();
+              const isOverdue = !(s.paidMonths || []).includes(monthKey()) && !(s.paidMonths || []).includes(prevMonthKey);
+              return (
+              <div
+                key={s.id}
+                className="bg-white rounded-2xl border border-slate-200 p-3"
+                style={{ borderLeftWidth: "4px", borderLeftColor: isOverdue ? "#dc2626" : typeColor }}
+              >
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="min-w-[120px]">
                     <div className="font-semibold text-slate-900 text-sm flex items-center gap-1.5">
-                      {s.level === "Baby" && <Baby className="w-3.5 h-3.5 text-blue-900" />}
+                      {s.level === "Baby" && (
+                        <span className="inline-flex items-center gap-0.5 bg-amber-100 text-amber-700 rounded-full px-1.5 py-0.5">
+                          <Baby className="w-3 h-3" />
+                        </span>
+                      )}
                       {s.name}
                     </div>
                     <div className="text-xs text-slate-400 flex items-center gap-1.5">
@@ -3954,6 +4011,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                     {isFrozen(s) && (
                       <div className="text-xs px-2 py-0.5 mt-1 inline-flex items-center rounded-full bg-cyan-50 text-cyan-700 font-medium">
                         ❄️ Frozen until {new Date(s.frozenUntil).toLocaleDateString("en-GB")}
+                      </div>
+                    )}
+                    {isOverdue && !isFrozen(s) && (
+                      <div className="text-xs px-2 py-0.5 mt-1 inline-flex items-center rounded-full bg-red-100 text-red-700 font-semibold">
+                        ⚠️ Owes 2+ months
                       </div>
                     )}
                   </div>
@@ -4301,7 +4363,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                   </div>
                 )}
               </div>
-            ))}
+            );
+            })}
           </div>
 
           {swimmersPage.length < swimmersPageTotal && (
@@ -4432,6 +4495,48 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
               </button>
             </div>
           </div>
+
+          {upcomingMakeups.length > 0 && (
+            <div className="mb-6">
+              <div className="text-xs text-amber-600 font-medium mb-1.5">Makeup sessions — today & upcoming</div>
+              <div className="space-y-1.5">
+                {upcomingMakeups.map(({ swimmer: s, session: m }) => {
+                  const isToday = m.date === todayISO();
+                  const status = s.attendance?.[m.date];
+                  return (
+                    <div key={m.id} className="text-sm bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-center justify-between gap-2 flex-wrap">
+                      <span>
+                        <strong>{s.name}</strong> · {s.level} · {isToday ? "Today" : m.date} · {m.time}
+                        {m.coachId && ` · ${coaches.find((c) => c.id === m.coachId)?.name || ""}`}
+                        {m.note && <span className="text-amber-500"> — {m.note}</span>}
+                      </span>
+                      {isToday && (
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => markMakeupAttendanceAdmin(s.id, m.date, "present")}
+                            className={`text-xs px-2.5 py-1 rounded-full font-medium transition ${
+                              status === "present" ? "bg-green-600 text-white" : "bg-white border border-green-300 text-green-700 hover:bg-green-50"
+                            }`}
+                          >
+                            Present
+                          </button>
+                          <button
+                            onClick={() => markMakeupAttendanceAdmin(s.id, m.date, "absent")}
+                            className={`text-xs px-2.5 py-1 rounded-full font-medium transition ${
+                              status === "absent" ? "bg-red-600 text-white" : "bg-white border border-red-300 text-red-600 hover:bg-red-50"
+                            }`}
+                          >
+                            Absent
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {coaches.length === 0 ? (
             <div className="text-center text-slate-400 py-16">No coaches added yet</div>
           ) : (
@@ -5821,17 +5926,21 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   const [noteStatus, setNoteStatus] = useState({}); // swimmerId -> "saving" | "saved" | "error"
   const [makeupToday, setMakeupToday] = useState([]); // [{ swimmer, session }] for today, this branch
 
-  useEffect(() => {
+  const loadMakeupToday = useCallback(async () => {
     if (!authed) return;
-    let cancelled = false;
-    (async () => {
+    try {
+      // Fetched and filtered in plain JS rather than a jsonb query — a
+      // branch's roster is small enough that this is simpler and more
+      // reliable than a partial-match query against a jsonb array.
       const { data, error } = await supabase
         .from("swimmers")
         .select("data")
         .eq("academy_id", window.__academy?.id)
-        .eq("branch", branch)
-        .filter("data->makeupSessions", "cs", `[{"date":"${todayISO()}"}]`);
-      if (cancelled || error) return;
+        .eq("branch", branch);
+      if (error) {
+        console.warn("load makeup sessions failed", error);
+        return;
+      }
       const today = todayISO();
       const rows = [];
       (data || []).forEach((r) => {
@@ -5841,11 +5950,30 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
       });
       rows.sort((a, b) => a.session.time.localeCompare(b.session.time));
       setMakeupToday(rows);
-    })();
-    return () => {
-      cancelled = true;
-    };
+    } catch (e) {
+      console.warn("load makeup sessions failed", e);
+    }
   }, [authed, branch]);
+
+  useEffect(() => {
+    loadMakeupToday();
+  }, [loadMakeupToday]);
+
+  // Present/Absent for a makeup session — stored on the swimmer's normal
+  // attendance map, keyed by the makeup's own date (not necessarily
+  // today's regular-session date), so it shows correctly in their
+  // history either way.
+  const markMakeupAttendance = async (swimmerId, date, status) => {
+    try {
+      await updateSwimmerById(swimmerId, (s) => ({
+        ...s,
+        attendance: { ...(s.attendance || {}), [date]: status },
+      }));
+      loadMakeupToday();
+    } catch (e) {
+      console.warn("Could not mark attendance", e);
+    }
+  };
 
   // When an account is restricted to one level (e.g. a "Baby only" technical
   // account), that level always wins over the manual 30-min toggle below.
@@ -6103,15 +6231,36 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
         <div className="mb-4">
           <div className="text-xs text-amber-600 font-medium mb-1.5">Makeup sessions today</div>
           <div className="space-y-1.5">
-            {makeupToday.map(({ swimmer: s, session: m }) => (
-              <div key={m.id} className="text-sm bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
-                <span>
-                  <strong>{s.name}</strong> · {s.level} · {m.time}
-                  {m.coachId && ` · ${coaches.find((c) => c.id === m.coachId)?.name || ""}`}
-                  {m.note && <span className="text-amber-500"> — {m.note}</span>}
-                </span>
-              </div>
-            ))}
+            {makeupToday.map(({ swimmer: s, session: m }) => {
+              const status = s.attendance?.[m.date];
+              return (
+                <div key={m.id} className="text-sm bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-center justify-between gap-2 flex-wrap">
+                  <span>
+                    <strong>{s.name}</strong> · {s.level} · {m.time}
+                    {m.coachId && ` · ${coaches.find((c) => c.id === m.coachId)?.name || ""}`}
+                    {m.note && <span className="text-amber-500"> — {m.note}</span>}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => markMakeupAttendance(s.id, m.date, "present")}
+                      className={`text-xs px-2.5 py-1 rounded-full font-medium transition ${
+                        status === "present" ? "bg-green-600 text-white" : "bg-white border border-green-300 text-green-700 hover:bg-green-50"
+                      }`}
+                    >
+                      Present
+                    </button>
+                    <button
+                      onClick={() => markMakeupAttendance(s.id, m.date, "absent")}
+                      className={`text-xs px-2.5 py-1 rounded-full font-medium transition ${
+                        status === "absent" ? "bg-red-600 text-white" : "bg-white border border-red-300 text-red-600 hover:bg-red-50"
+                      }`}
+                    >
+                      Absent
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
