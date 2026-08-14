@@ -2838,12 +2838,21 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     try {
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array", cellDates: true });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
 
       // Try the month-by-month tracking sheet format first (one 4-column
-      // block per month) — if it's not that kind of sheet, this returns
-      // null and the normal single-row importer below handles it instead.
-      const fullHistory = parseFullHistorySheet(sheet);
+      // block per month) — checks every sheet in the workbook (not just
+      // the first) and uses whichever one actually has month blocks, in
+      // case the file has other tabs before the real data. If none of
+      // them look like this format, this returns null and the normal
+      // single-row importer below handles the first sheet instead.
+      let fullHistory = null;
+      for (const sheetName of wb.SheetNames) {
+        const candidate = parseFullHistorySheet(wb.Sheets[sheetName]);
+        if (candidate && (!fullHistory || candidate.monthsFound > fullHistory.monthsFound)) {
+          fullHistory = candidate;
+        }
+      }
+      const sheet = wb.Sheets[wb.SheetNames[0]];
       if (fullHistory) {
         const existingAll = await fetchAllSwimmers();
         const valid = [];
@@ -2895,7 +2904,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         seenPhones.add(record.phone);
         valid.push({ row: i + 2, record, warnings });
       });
-      setImportPreview({ valid, duplicates, errors });
+      setImportPreview({
+        valid,
+        duplicates,
+        errors,
+        fullHistoryNote: wb.SheetNames.length > 1
+          ? "No month-by-month sheet detected in this file (checked every tab) — importing as a simple one-row-per-swimmer list instead. Current schedule/level only, no history."
+          : undefined,
+      });
     } catch (e) {
       setImportError("Couldn't read that file — make sure it's a .xlsx or .csv file");
     } finally {
@@ -5620,7 +5636,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           <div className="bg-white rounded-2xl p-5 max-w-lg w-full shadow-xl max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-bold text-slate-900 mb-1">Import swimmers</h3>
             {importPreview.fullHistoryNote && (
-              <div className="text-xs bg-blue-50 text-blue-800 rounded-lg px-3 py-2 mb-3">{importPreview.fullHistoryNote}</div>
+              <div className={`text-xs rounded-lg px-3 py-2 mb-3 ${importPreview.fullHistoryNote.startsWith("No month") ? "bg-amber-50 text-amber-800" : "bg-blue-50 text-blue-800"}`}>{importPreview.fullHistoryNote}</div>
             )}
             <p className="text-sm text-slate-500 mb-4">
               Found {importPreview.valid.length + importPreview.duplicates.length + importPreview.errors.length} row
@@ -5932,11 +5948,13 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
       // Fetched and filtered in plain JS rather than a jsonb query — a
       // branch's roster is small enough that this is simpler and more
       // reliable than a partial-match query against a jsonb array.
+      // Not filtered by branch — there's only ever one, and this way a
+      // swimmer with a slightly different/missing branch value still
+      // shows up here instead of silently vanishing.
       const { data, error } = await supabase
         .from("swimmers")
         .select("data")
-        .eq("academy_id", window.__academy?.id)
-        .eq("branch", branch);
+        .eq("academy_id", window.__academy?.id);
       if (error) {
         console.warn("load makeup sessions failed", error);
         return;
@@ -5953,7 +5971,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
     } catch (e) {
       console.warn("load makeup sessions failed", e);
     }
-  }, [authed, branch]);
+  }, [authed]);
 
   useEffect(() => {
     loadMakeupToday();
