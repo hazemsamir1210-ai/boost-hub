@@ -462,7 +462,31 @@ async function storageSet(key, value, shared = true) {
    and any save right after that can fail with "Couldn't save...".
    Instead, each data type now lives as a single array under one key, so
    loading or saving a whole collection is exactly one storage call. */
-const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all" };
+const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all" };
+
+// Records who did what, when — a simple audit trail so it's always
+// possible to tell who made a given change. Keeps only the most recent
+// 500 entries (oldest trimmed automatically) so this can't grow forever
+// and blow past the storage size cap. Never blocks or fails the action
+// it's logging — if writing the log itself fails, that's swallowed
+// silently rather than interrupting whatever the person was doing.
+async function logActivity(accountName, role, action, target) {
+  try {
+    const all = await loadCollection(STORE_KEYS.activityLog);
+    all.unshift({
+      id: genId(),
+      accountName: accountName || "Admin",
+      role: role || "admin",
+      action,
+      target: target || "",
+      at: new Date().toISOString(),
+    });
+    await saveCollection(STORE_KEYS.activityLog, all.slice(0, 500));
+  } catch (e) {
+    console.warn("logActivity failed", e);
+  }
+}
+
 
 const LEVEL_SKILLS_KEY = "level-skills-custom";
 const DEFAULT_LEVEL_SKILLS = JSON.parse(JSON.stringify(LEVEL_SKILLS)); // frozen snapshot of the built-in defaults, for the "Reset to default" option
@@ -2310,6 +2334,26 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   };
 
   const [tab, setTab] = useState("requests");
+  const [activityLog, setActivityLog] = useState([]);
+  const [activityLogLoading, setActivityLogLoading] = useState(false);
+
+  const loadActivityLog = useCallback(async () => {
+    if (!canEdit) return;
+    setActivityLogLoading(true);
+    try {
+      const items = await loadCollection(STORE_KEYS.activityLog);
+      setActivityLog(items);
+    } catch (e) {
+      console.warn("load activity log failed", e);
+    } finally {
+      setActivityLogLoading(false);
+    }
+  }, [canEdit]);
+
+  useEffect(() => {
+    if (tab === "activity") loadActivityLog();
+  }, [tab, loadActivityLog]);
+
   const [customLevelSkills, setCustomLevelSkills] = useState({});
   const [skillsRefreshKey, setSkillsRefreshKey] = useState(0); // bumped after saving, to force re-render of anything reading LEVEL_SKILLS
   const [newSkillText, setNewSkillText] = useState({}); // level -> draft text for the "add skill" input
@@ -3074,6 +3118,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     setRequests(nextRequests);
     try {
       await saveCollection(STORE_KEYS.subs, nextRequests);
+      logActivity(accountName, role, status === "confirmed" ? "Confirmed payment" : "Rejected payment", record.name);
     } catch (e) {
       loadRequests();
     }
@@ -3137,6 +3182,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
 
     const res = await saveCollection(STORE_KEYS.swimmers, next);
     if (!res) throw new Error("Could not save the swimmer, please try again");
+    logActivity(accountName, role, existing ? "Edited swimmer" : "Added swimmer", finalRecord.name);
 
     loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     setShowForm(false);
@@ -3153,6 +3199,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           const next = all.filter((s) => s.id !== swimmer.id);
           const res = await saveCollection(STORE_KEYS.swimmers, next);
           if (!res) throw new Error("delete failed");
+          logActivity(accountName, role, "Deleted swimmer", swimmer.name);
           loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
         } catch (e) {
           loadSwimmersPage({ offset: 0 });
@@ -3389,6 +3436,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         const has = (s.paidMonths || []).includes(key);
         return { ...s, paidMonths: has ? (s.paidMonths || []).filter((m) => m !== key) : [...(s.paidMonths || []), key] };
       });
+      logActivity(accountName, role, paidNow ? "Undid payment" : "Marked paid", `${swimmer.name} — ${monthLabel(key)}`);
       loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     } catch (e) {
       loadSwimmersPage({ offset: 0 });
@@ -3410,6 +3458,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     const swimmer = freezeModal;
     try {
       await updateSwimmerById(swimmer.id, (s) => freezeSwimmer(s, days, freezeNote.trim()));
+      logActivity(accountName, role, "Froze subscription", `${swimmer.name} — ${days} days`);
       loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
       setFreezeModal(null);
     } catch (e) {
@@ -3422,6 +3471,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   const confirmUnfreeze = async (swimmer) => {
     try {
       await updateSwimmerById(swimmer.id, unfreezeSwimmer);
+      logActivity(accountName, role, "Unfroze subscription", swimmer.name);
       loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     } catch (e) {
       loadSwimmersPage({ offset: 0 });
@@ -3459,6 +3509,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         paidMonths: [...(s.paidMonths || []), key],
         manualPayments: [...(s.manualPayments || []), { month: key, at: new Date().toISOString() }],
       }));
+      logActivity(accountName, role, "Marked paid only", `${swimmer.name} — ${monthLabel(key)}`);
       printReceipt({
         swimmerName: swimmer.name,
         phone: swimmer.phone,
@@ -3505,6 +3556,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       const nextRequests = [paymentRecord, ...requests];
       const res = await saveCollection(STORE_KEYS.subs, nextRequests);
       if (!res) throw new Error("Could not save the payment, please try again");
+      logActivity(accountName, role, `${methodLabel} payment`, `${swimmer.name} — ${amount} EGP`);
       setRequests(nextRequests);
 
       const key = paymentMonthFilter;
@@ -3587,6 +3639,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
 
     const res = await saveCollection(STORE_KEYS.coaches, nextCoaches);
     if (!res) throw new Error("Could not save the coach, please try again");
+    logActivity(accountName, role, exists ? "Edited coach" : "Added coach", record.name);
 
     setCoaches(nextCoaches);
     setShowCoachForm(false);
@@ -3603,6 +3656,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         const nextCoaches = coaches.filter((c) => c.id !== coach.id);
         try {
           await saveCollection(STORE_KEYS.coaches, nextCoaches);
+          logActivity(accountName, role, "Deleted coach", coach.name);
           setCoaches(nextCoaches);
           if (inUse) {
             const nextSwimmers = swimmers.map((s) => (s.coachId === coach.id ? { ...s, coachId: null } : s));
@@ -3624,6 +3678,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     const nextAccounts = exists ? accounts.map((a) => (a.id === record.id ? record : a)) : [...accounts, record];
     const res = await saveCollection(STORE_KEYS.accounts, nextAccounts);
     if (!res) throw new Error("Could not save the account, please try again");
+    logActivity(accountName, role, exists ? "Edited account" : "Added account", record.name);
     setAccounts(nextAccounts);
     setShowAccountForm(false);
     setEditingAccount(null);
@@ -3636,6 +3691,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         const nextAccounts = accounts.filter((a) => a.id !== account.id);
         try {
           await saveCollection(STORE_KEYS.accounts, nextAccounts);
+          logActivity(accountName, role, "Deleted account", account.name);
           setAccounts(nextAccounts);
         } catch (e) {
           loadAccounts();
@@ -3663,6 +3719,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       const nextExpenses = [record, ...expenses];
       const res = await saveCollection(STORE_KEYS.expenses, nextExpenses);
       if (!res) throw new Error("Could not save the expense, please try again");
+      logActivity(accountName, role, "Logged expense", `${amount} EGP — ${expNote.trim() || "no note"}`);
       setExpenses(nextExpenses);
       setExpAmount("");
       setExpNote("");
@@ -3680,6 +3737,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         const nextExpenses = expenses.filter((e) => e.id !== expense.id);
         try {
           await saveCollection(STORE_KEYS.expenses, nextExpenses);
+          logActivity(accountName, role, "Deleted expense", `${expense.amount} EGP — ${expense.note || "no note"}`);
           setExpenses(nextExpenses);
         } catch (e) {
           loadExpenses();
@@ -4091,6 +4149,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             }`}
           >
             <Lock className="w-4 h-4" /> Accounts
+          </button>
+        )}
+        {canEdit && (
+          <button
+            onClick={() => setTab("activity")}
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
+              tab === "activity" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
+            }`}
+          >
+            <Clock className="w-4 h-4" /> Activity Log
           </button>
         )}
       </div>
@@ -5942,6 +6010,46 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                         </tr>
                       );
                     })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "activity" && canEdit && (
+        <div>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="font-bold text-slate-900">Activity Log</h3>
+              <p className="text-xs text-slate-400">Who changed what, and when — the most recent 500 actions.</p>
+            </div>
+            <button onClick={loadActivityLog} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+              <RefreshCw className={`w-4 h-4 ${activityLogLoading ? "animate-spin" : ""}`} />
+            </button>
+          </div>
+          {activityLog.length === 0 ? (
+            <div className="text-center text-slate-400 py-16">No activity logged yet</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-slate-400 text-xs border-b border-slate-100">
+                    <th className="py-2 pr-3">When</th>
+                    <th className="py-2 pr-3">Who</th>
+                    <th className="py-2 pr-3">Action</th>
+                    <th className="py-2 pr-3">Details</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activityLog.map((entry) => (
+                    <tr key={entry.id} className="border-b border-slate-50">
+                      <td className="py-2 pr-3 text-slate-500 whitespace-nowrap">{new Date(entry.at).toLocaleString("en-GB")}</td>
+                      <td className="py-2 pr-3 font-medium text-slate-800">{entry.accountName}</td>
+                      <td className="py-2 pr-3 text-slate-600">{entry.action}</td>
+                      <td className="py-2 pr-3 text-slate-500">{entry.target}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
