@@ -2478,7 +2478,27 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     }
   };
 
-  const canEdit = role === "admin" || role === "branch_admin"; // branch_manager gets the same screens, view-only
+  // Full access / editor / viewer — admin is always full; branch_admin and
+  // branch_manager accounts read their own level from their account record
+  // (set in the Accounts tab), defaulting to what they used to be (full for
+  // branch_admin, viewer for branch_manager) if never explicitly set.
+  const [myAccessLevel, setMyAccessLevel] = useState(role === "admin" || role === "branch_admin" ? "full" : "viewer");
+  const loadMyAccessLevel = useCallback(async () => {
+    if (role === "admin") { setMyAccessLevel("full"); return; }
+    if (!accountName) return;
+    try {
+      const items = await loadCollection(STORE_KEYS.accounts);
+      const mine = items.find((a) => a.name === accountName);
+      setMyAccessLevel(mine?.accessLevel || (role === "branch_admin" ? "full" : "viewer"));
+    } catch (e) {
+      // keep the synchronous default above on failure
+    }
+  }, [role, accountName]);
+
+  const canEdit = myAccessLevel === "full"; // full access — delete, Accounts tab, settings
+  // Editor and full access can both add/edit swimmers, coaches, schedules,
+  // payments — everything short of deleting things or managing accounts.
+  const canEditContent = myAccessLevel === "full" || myAccessLevel === "editor";
 
   // Whether THIS logged-in person can see the Attendance/payroll tab
   // (everyone's net pay). True admin/branch_admin always can (canEdit).
@@ -2524,7 +2544,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   const [bookingOpenDateSaving, setBookingOpenDateSaving] = useState(false);
 
   useEffect(() => {
-    if (!authed || !canEdit) return;
+    if (!authed || !canEditContent) return;
     getBookingOpenDate().then((d) => {
       setBookingOpenDateInput(d);
       // Once, on load: if we're already past this month's "next month
@@ -2534,7 +2554,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       // afterwards; this only sets the starting point.
       if (d && todayISO() >= d) setPaymentMonthFilter(nextMonthKey());
     });
-  }, [authed, canEdit]);
+  }, [authed, canEditContent]);
 
   const saveBookingOpenDate = async (explicitValue) => {
     const value = explicitValue !== undefined ? explicitValue : bookingOpenDateInput;
@@ -2940,7 +2960,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   }, []);
 
   const loadAccounts = useCallback(async () => {
-    if (!canEdit) return;
+    if (!canEdit && !canViewPayroll) return;
     setAccountsLoading(true);
     try {
       const items = await loadCollection(STORE_KEYS.accounts);
@@ -2999,6 +3019,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     loadExpenses();
     loadAccounts();
     loadAchievements();
+    loadMyAccessLevel();
     loadMyPayrollAccess();
     // The full swimmers roster (loadSwimmers) is now ONLY loaded for the
     // Reports/Coaches tabs, which are the only places that genuinely need
@@ -3018,7 +3039,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       if (tab === "reports" || tab === "coaches" || tab === "schedule") loadSwimmers();
     }, 15000);
     return () => clearInterval(t);
-  }, [authed, tab, loadRequests, loadSwimmers, loadCoaches, loadExpenses, loadAccounts, loadAchievements, loadMyPayrollAccess]);
+  }, [authed, tab, loadRequests, loadSwimmers, loadCoaches, loadExpenses, loadAccounts, loadAchievements, loadMyAccessLevel, loadMyPayrollAccess]);
 
   // Fetch each request's screenshot only once, on demand — not bundled into
   // the requests list itself, and not re-fetched on every 15s poll.
@@ -3939,7 +3960,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           <ShieldCheck className="w-5 h-5 text-blue-900" />
           <h2 className="text-xl font-bold text-slate-900">Admin dashboard</h2>
           {accountName && <span className="text-xs text-slate-400">· {accountName}</span>}
-          {!canEdit && (
+          {!canEdit && myAccessLevel === "editor" && (
+            <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-medium">Editor — can't delete</span>
+          )}
+          {!canEdit && myAccessLevel === "viewer" && (
             <span className="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full font-medium">View only</span>
           )}
         </div>
@@ -4029,7 +4053,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         >
           <CalendarCheck className="w-4 h-4" /> Reports
         </button>
-        {canEdit && (
+        {canEditContent && (
           <button
             onClick={() => setTab("achievements")}
             className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
@@ -4083,7 +4107,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
               </button>
             </div>
           )}
-          {canEdit && (
+          {canEditContent && (
             <div className="mb-4 flex items-center gap-3 flex-wrap bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5">
               <span className="text-sm text-slate-600 font-medium">Next month's bookings open on:</span>
               <input
@@ -4204,7 +4228,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                     <Clock className="w-3 h-3" />
                     {new Date(r.createdAt).toLocaleString("en-GB")}
                   </div>
-                  {r.status === "pending" && canEdit && (
+                  {r.status === "pending" && canEditContent && (
                     <div className="flex gap-2">
                       <button
                         onClick={() => {
@@ -4364,7 +4388,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
               >
                 <RefreshCw className={`w-4 h-4 ${swimmersLoading || swimmersPageLoading ? "animate-spin" : ""}`} />
               </button>
-              {canEdit && (
+              {canEditContent && (
                 <>
                   <input
                     ref={fileInputRef}
@@ -4387,19 +4411,23 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                     {exportingSwimmers ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
                     {exportingSwimmers ? "Exporting..." : "Export Excel"}
                   </button>
-                  <button
-                    onClick={() => setDeleteAllModalOpen(true)}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-red-200 text-red-600 text-sm font-semibold hover:bg-red-50"
-                  >
-                    <Trash2 className="w-4 h-4" /> Delete all swimmers
-                  </button>
-                  <button
-                    onClick={() => { setEditingSwimmer(null); setPendingActivationId(null); setShowForm(true); }}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
-                  >
-                    <Plus className="w-4 h-4" /> Add swimmer
-                  </button>
                 </>
+              )}
+              {canEdit && (
+                <button
+                  onClick={() => setDeleteAllModalOpen(true)}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-red-200 text-red-600 text-sm font-semibold hover:bg-red-50"
+                >
+                  <Trash2 className="w-4 h-4" /> Delete all swimmers
+                </button>
+              )}
+              {canEditContent && (
+                <button
+                  onClick={() => { setEditingSwimmer(null); setPendingActivationId(null); setShowForm(true); }}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
+                >
+                  <Plus className="w-4 h-4" /> Add swimmer
+                </button>
               )}
             </div>
           </div>
@@ -4408,7 +4436,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             <div className="text-red-500 text-sm mb-4 bg-red-50 rounded-lg px-4 py-2.5">{importError}</div>
           )}
 
-          {showForm && canEdit && (
+          {showForm && canEditContent && (
             <SwimmerForm
               initial={editingSwimmer}
               coaches={coaches}
@@ -4533,7 +4561,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                         : `Not paid · ${monthLabel(paymentMonthFilter)}`}
                     </span>
                     {isFrozen(s) ? (
-                      canEdit && (
+                      canEditContent && (
                         <button
                           onClick={() => confirmUnfreeze(s)}
                           className="text-xs px-2.5 py-1.5 rounded-full font-medium text-cyan-700 hover:text-cyan-900 hover:bg-cyan-50 transition whitespace-nowrap"
@@ -4543,7 +4571,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                         </button>
                       )
                     ) : !(s.paidMonths || []).includes(paymentMonthFilter) ? (
-                      canEdit && (
+                      canEditContent && (
                         <div className="flex items-center gap-1">
                           <button
                             onClick={() => {
@@ -4593,7 +4621,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                   </div>
 
                   <div className="flex items-center gap-1">
-                    {canEdit && !isFrozen(s) && (
+                    {canEditContent && !isFrozen(s) && (
                       <button
                         onClick={() => openFreezeModal(s)}
                         className="p-2 rounded-lg hover:bg-cyan-50 text-cyan-600"
@@ -4609,7 +4637,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                     >
                       <Clock className="w-4 h-4" />
                     </button>
-                    {canEdit && (
+                    {canEditContent && (
                       <>
                         <button
                           onClick={() => openMakeupModal(s)}
@@ -4624,10 +4652,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                         >
                           <Pencil className="w-4 h-4" />
                         </button>
-                        <button onClick={() => deleteSwimmer(s)} className="p-2 rounded-lg hover:bg-red-50 text-red-500">
-                          <Trash2 className="w-4 h-4" />
-                        </button>
                       </>
+                    )}
+                    {canEdit && (
+                      <button onClick={() => deleteSwimmer(s)} className="p-2 rounded-lg hover:bg-red-50 text-red-500">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     )}
                   </div>
                 </div>
@@ -4642,7 +4672,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                       .map((m) => (
                         <span key={m.id} className="text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 flex items-center gap-1.5">
                           Makeup: {m.date} · {m.time}
-                          {canEdit && (
+                          {canEditContent && (
                             <button onClick={() => removeMakeupSession(s.id, m.id)} className="text-amber-400 hover:text-amber-600">
                               <X className="w-3 h-3" />
                             </button>
@@ -4713,7 +4743,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                           </div>
                         )}
                       </div>
-                      {canEdit && (
+                      {canEditContent && (
                         <div className="flex gap-1.5 mb-2">
                           <input
                             type="date"
@@ -4743,7 +4773,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                             return (
                               <div key={d} className="flex items-center justify-between text-xs bg-slate-50 rounded-lg px-2 py-1.5">
                                 <span className="text-slate-600">{dateLabel(d)}</span>
-                                {canEdit ? (
+                                {canEditContent ? (
                                   <div className="flex items-center gap-1">
                                     <button
                                       onClick={() => markAttendance(s, d, "present")}
@@ -4761,9 +4791,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                                     >
                                       <XCircle className="w-3 h-3" />
                                     </button>
-                                    <button onClick={() => removeTrainingDate(s, d)} className="p-0.5 text-slate-300 hover:text-red-500">
-                                      <X className="w-3 h-3" />
-                                    </button>
+                                    {canEdit && (
+                                      <button onClick={() => removeTrainingDate(s, d)} className="p-0.5 text-slate-300 hover:text-red-500">
+                                        <X className="w-3 h-3" />
+                                      </button>
+                                    )}
                                   </div>
                                 ) : (
                                   <span className={`px-2 py-0.5 rounded-full font-semibold ${
@@ -4822,7 +4854,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                               }`}
                             >
                               <span className={rating >= 5 ? "text-green-700 font-medium" : "text-slate-600"}>{skill}</span>
-                              {canEdit ? (
+                              {canEditContent ? (
                                 <StarRating value={rating} onChange={(n) => setSkillRating(s, skill, n)} />
                               ) : (
                                 <StarsDisplay value={rating} />
@@ -4862,7 +4894,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
               <button onClick={loadCoaches} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
                 <RefreshCw className={`w-4 h-4 ${coachesLoading ? "animate-spin" : ""}`} />
               </button>
-              {canEdit && (
+              {canEditContent && (
                 <button
                   onClick={() => { setEditingCoach(null); setShowCoachForm(true); }}
                   className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
@@ -4873,7 +4905,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             </div>
           </div>
 
-          {showCoachForm && canEdit && (
+          {showCoachForm && canEditContent && (
             <CoachForm
               initial={editingCoach}
               onSave={saveCoach}
@@ -4902,17 +4934,21 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                   <div className="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 font-medium">
                     {load} swimmer{load === 1 ? "" : "s"} assigned
                   </div>
-                  {canEdit && (
+                  {(canEditContent || canEdit) && (
                     <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => { setEditingCoach(c); setShowCoachForm(true); }}
-                        className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button onClick={() => deleteCoach(c)} className="p-2 rounded-lg hover:bg-red-50 text-red-500">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {canEditContent && (
+                        <button
+                          onClick={() => { setEditingCoach(c); setShowCoachForm(true); }}
+                          className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                      )}
+                      {canEdit && (
+                        <button onClick={() => deleteCoach(c)} className="p-2 rounded-lg hover:bg-red-50 text-red-500">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -5101,7 +5137,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         </div>
       )}
 
-      {tab === "achievements" && canEdit && (
+      {tab === "achievements" && canEditContent && (
         <div>
           <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
             <div>
@@ -6769,6 +6805,7 @@ function AccountForm({ initial, onSave, onCancel }) {
   const [monthlySalary, setMonthlySalary] = useState(initial?.monthlySalary || "");
   const [overtimeHourlyRate, setOvertimeHourlyRate] = useState(initial?.overtimeHourlyRate || "");
   const [canViewPayroll, setCanViewPayroll] = useState(initial?.canViewPayroll || false);
+  const [accessLevel, setAccessLevel] = useState(initial?.accessLevel || (initial?.role === "branch_manager" ? "viewer" : "full"));
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const recordIdRef = useRef(initial?.id || genId());
@@ -6791,6 +6828,7 @@ function AccountForm({ initial, onSave, onCancel }) {
         monthlySalary: monthlySalary ? Number(monthlySalary) : null,
         overtimeHourlyRate: overtimeHourlyRate ? Number(overtimeHourlyRate) : null,
         canViewPayroll: role === "admin" ? true : canViewPayroll,
+        accessLevel: role === "admin" ? "full" : accessLevel,
         createdAt: initial?.createdAt || new Date().toISOString(),
       });
     } catch (e) {
@@ -6816,6 +6854,16 @@ function AccountForm({ initial, onSave, onCancel }) {
             ))}
           </select>
         </div>
+        {role !== "admin" && role !== "technical" && (
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Access level</label>
+            <select value={accessLevel} onChange={(e) => setAccessLevel(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
+              <option value="full">Full access — everything, including delete & Accounts</option>
+              <option value="editor">Editor — add/edit swimmers, coaches & schedules, no deleting</option>
+              <option value="viewer">Viewer — view only, no changes</option>
+            </select>
+          </div>
+        )}
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Username</label>
           <input value={username} onChange={(e) => setUsername(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="e.g. sara" />
