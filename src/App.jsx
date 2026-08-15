@@ -1,13 +1,21 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import * as XLSX from "xlsx";
 import { createClient } from "@supabase/supabase-js";
+import jsQR from "jsqr";
+import QRCode from "qrcode";
 import {
   Waves, Upload, CheckCircle2, Lock, RefreshCw, Phone, User,
   ImageIcon, X, LogOut, Clock, Check, XCircle, Send, ChevronLeft,
   ShieldCheck, Copy, Bell, Users, Plus, Pencil, Trash2, Search,
   CalendarDays, Baby, Award, CalendarCheck, FileDown, Wallet, Star,
-  FileUp, Menu
+  FileUp, Menu, Camera, QrCode
 } from "lucide-react";
+
+// The single fixed code printed and hung at the pool entrance — every
+// coach/staff member scans this SAME code with their own phone camera,
+// from inside their own logged-in dashboard, to check themselves in or
+// out. Change this if the poster is ever lost/copied and needs replacing.
+const STAFF_CHECKIN_CODE = "BOOST-HUB-STAFF-CHECKIN";
 
 /* ============================================================
    Standalone storage — replaces Claude's built-in artifact storage
@@ -170,7 +178,13 @@ const LEVELS = [
    can rate what they've mastered (0-5 stars each). Exp / Exp 2 / Exp 3,
    Level 4 and Level 5 are the academy's real curriculum; the rest are a
    starter placeholder — edit freely to match your program. */
-const LEVEL_SKILLS = {
+// This starts out as the built-in default list — the "Skills" tab in the
+// admin dashboard lets the academy customize which skills are required at
+// each level, saved to storage. On load, any saved customization is merged
+// into this same object (mutated in place), so every existing place in the
+// app that reads LEVEL_SKILLS[level] automatically picks up the edited
+// list with no further changes needed.
+let LEVEL_SKILLS = {
   "Baby": ["Comfortable in water", "Blowing bubbles", "Kicking with support", "Floating with assistance", "Water entry & exit"],
   "Exp": ["Starfish Front", "Starfish Back", "Bubbles"],
   "Exp 2": ["Streamline Front", "Streamline Back", "Rollover Front to Back"],
@@ -247,6 +261,18 @@ function sessionCapacity(sessionType, level) {
   return sessionTypeInfo(sessionType).capacity;
 }
 
+// True if this coach isn't working at all this day, OR specifically
+// isn't working this exact day+time (a partial closed slot, on top of
+// their regular days) — checks both offDays (whole day) and offSlots
+// (specific hours) so every place that filters "is this coach free"
+// only needs this one function.
+function isCoachClosedAt(coach, day, time) {
+  if (!coach) return false;
+  if ((coach.offDays || []).includes(day)) return true;
+  if (time && (coach.offSlots || []).some((s) => s.day === day && s.time === time)) return true;
+  return false;
+}
+
 /* Day groups the academy trains on */
 const DAY_GROUPS = [
   { id: "sun-tue", label: "Sunday & Tuesday" },
@@ -269,9 +295,9 @@ const BRANCHES = [
    once Gezira's real timetable is confirmed. */
 const TIME_SLOTS = {
   elalsson: {
-    "sun-tue": ["3:30 PM", "4:30 PM", "5:30 PM", "6:30 PM"],
-    "mon-wed": ["3:30 PM", "4:30 PM", "5:30 PM", "6:30 PM"],
-    "fri-sat": ["10:00 AM", "11:00 AM", "12:00 PM", "1:00 PM", "2:00 PM", "3:00 PM", "4:00 PM"],
+    "sun-tue": ["3:30 PM", "4:30 PM", "5:30 PM", "6:30 PM", "7:30 PM", "8:30 PM", "9:30 PM"],
+    "mon-wed": ["3:30 PM", "4:30 PM", "5:30 PM", "6:30 PM", "7:30 PM", "8:30 PM", "9:30 PM"],
+    "fri-sat": ["10:00 AM", "11:00 AM", "12:00 PM", "1:00 PM", "2:00 PM", "3:00 PM", "4:00 PM", "5:00 PM", "6:00 PM"],
   },
 };
 
@@ -436,7 +462,32 @@ async function storageSet(key, value, shared = true) {
    and any save right after that can fail with "Couldn't save...".
    Instead, each data type now lives as a single array under one key, so
    loading or saving a whole collection is exactly one storage call. */
-const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all" };
+const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all" };
+
+const LEVEL_SKILLS_KEY = "level-skills-custom";
+const DEFAULT_LEVEL_SKILLS = JSON.parse(JSON.stringify(LEVEL_SKILLS)); // frozen snapshot of the built-in defaults, for the "Reset to default" option
+
+async function loadCustomLevelSkills() {
+  const res = await window.storage.get(LEVEL_SKILLS_KEY);
+  if (!res) return {};
+  try {
+    return JSON.parse(res.value);
+  } catch {
+    return {};
+  }
+}
+
+async function saveCustomLevelSkills(customSkills) {
+  return storageSet(LEVEL_SKILLS_KEY, JSON.stringify(customSkills));
+}
+
+// Applies saved customizations on top of the built-in defaults, mutating
+// the shared LEVEL_SKILLS object in place so every part of the app that
+// already reads from it sees the change immediately.
+function applyCustomLevelSkills(customSkills) {
+  LEVEL_SKILLS = { ...DEFAULT_LEVEL_SKILLS, ...customSkills };
+}
+
 
 /* Staff account roles and what each one can do:
    - admin: everything (same as the old single admin password)
@@ -657,6 +708,190 @@ async function updateSwimmerById(id, updateFn) {
   const res = await saveCollection(STORE_KEYS.swimmers, next);
   if (!res) throw new Error("Could not save, please try again");
   return updated;
+}
+
+const HISTORY_CLEANUP_KEY = "history-cleanup-settings";
+
+async function loadHistoryCleanupSettings() {
+  const res = await window.storage.get(HISTORY_CLEANUP_KEY);
+  if (!res) return { enabled: false, lastRunMonth: null };
+  try {
+    return JSON.parse(res.value);
+  } catch {
+    return { enabled: false, lastRunMonth: null };
+  }
+}
+
+async function saveHistoryCleanupSettings(settings) {
+  return storageSet(HISTORY_CLEANUP_KEY, JSON.stringify(settings));
+}
+
+function monthsBetween(aKey, bKey) {
+  const [ay, am] = aKey.split("-").map(Number);
+  const [by, bm] = bKey.split("-").map(Number);
+  return (by - ay) * 12 + (bm - am);
+}
+
+// Trims the detailed month-by-month level/schedule history down to the
+// most recent months only — removes the 3 OLDEST calendar months found
+// across every swimmer's levelHistory/scheduleHistory. Never touches
+// names, phones, notes, or paidMonths (payment record stays complete).
+async function runHistoryCleanup() {
+  const all = await fetchAllSwimmers();
+  const allMonthKeys = new Set();
+  all.forEach((s) => {
+    [...(s.levelHistory || []), ...(s.scheduleHistory || [])].forEach((h) => {
+      if (h.date) allMonthKeys.add(h.date.slice(0, 7));
+    });
+  });
+  const sortedMonths = [...allMonthKeys].sort();
+  const monthsToRemove = new Set(sortedMonths.slice(0, 3));
+  if (monthsToRemove.size === 0) return { removedMonths: [], swimmersTouched: 0 };
+
+  let swimmersTouched = 0;
+  const next = all.map((s) => {
+    const newLevelHistory = (s.levelHistory || []).filter((h) => !monthsToRemove.has((h.date || "").slice(0, 7)));
+    const newScheduleHistory = (s.scheduleHistory || []).filter((h) => !monthsToRemove.has((h.date || "").slice(0, 7)));
+    if (newLevelHistory.length !== (s.levelHistory || []).length || newScheduleHistory.length !== (s.scheduleHistory || []).length) {
+      swimmersTouched++;
+      return { ...s, levelHistory: newLevelHistory, scheduleHistory: newScheduleHistory };
+    }
+    return s;
+  });
+  await saveCollection(STORE_KEYS.swimmers, next);
+  return { removedMonths: [...monthsToRemove], swimmersTouched };
+}
+
+// Called once when the admin dashboard loads — checks whether it's been
+// 6+ months since the last cleanup (or it's never run), and if so and
+// it's turned on, runs it automatically without needing anyone to
+// remember to do it by hand.
+async function runHistoryCleanupIfDue() {
+  const settings = await loadHistoryCleanupSettings();
+  if (!settings.enabled) return null;
+  const currentMonth = monthKey();
+  if (settings.lastRunMonth && monthsBetween(settings.lastRunMonth, currentMonth) < 6) return null;
+  const result = await runHistoryCleanup();
+  await saveHistoryCleanupSettings({ ...settings, lastRunMonth: currentMonth });
+  return result;
+}
+
+// Staff check-in/check-out — one record per person per day. Uses the
+// account's own name (whoever's logged in) plus today's date as the key,
+// so checking in twice the same day just updates the same record.
+async function checkInStaff(accountName, role) {
+  const all = await loadCollection(STORE_KEYS.staffAttendance);
+  const today = todayISO();
+  const idx = all.findIndex((r) => r.accountName === accountName && r.date === today);
+  const now = new Date().toISOString();
+  if (idx === -1) {
+    all.push({ id: genId(), accountName, role, date: today, checkIn: now, checkOut: null });
+  } else {
+    all[idx] = { ...all[idx], checkIn: now };
+  }
+  await saveCollection(STORE_KEYS.staffAttendance, all);
+  return all;
+}
+
+async function checkOutStaff(accountName) {
+  const all = await loadCollection(STORE_KEYS.staffAttendance);
+  const today = todayISO();
+  const idx = all.findIndex((r) => r.accountName === accountName && r.date === today);
+  if (idx !== -1) {
+    all[idx] = { ...all[idx], checkOut: new Date().toISOString() };
+    await saveCollection(STORE_KEYS.staffAttendance, all);
+  }
+  return all;
+}
+
+// The academy's shared payroll calendar — one weekly day off (e.g.
+// Friday, for everyone), plus specific extra holiday dates added by
+// hand each month (a multi-day break, a public holiday, whatever it is
+// that month — no fixed count assumed). Stored once, academy-wide.
+const PAYROLL_SETTINGS_KEY = "payroll-settings";
+const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+async function loadPayrollSettings() {
+  const res = await window.storage.get(PAYROLL_SETTINGS_KEY);
+  if (!res) return { weeklyDayOff: null, extraHolidays: [] };
+  try {
+    const parsed = JSON.parse(res.value);
+    return { weeklyDayOff: parsed.weeklyDayOff ?? null, extraHolidays: parsed.extraHolidays || [] };
+  } catch {
+    return { weeklyDayOff: null, extraHolidays: [] };
+  }
+}
+
+async function savePayrollSettings(settings) {
+  return storageSet(PAYROLL_SETTINGS_KEY, JSON.stringify(settings));
+}
+
+// How many actual working days are in this month, given the weekly day
+// off and any extra holiday dates that fall inside it.
+function workingDaysInMonth(monthKeyStr, payrollSettings) {
+  const [y, m] = monthKeyStr.split("-").map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const weeklyOffIndex = payrollSettings.weeklyDayOff ? WEEKDAY_NAMES.indexOf(payrollSettings.weeklyDayOff) : -1;
+  let working = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = `${monthKeyStr}-${String(d).padStart(2, "0")}`;
+    const weekday = new Date(y, m - 1, d).getDay();
+    if (weekday === weeklyOffIndex) continue;
+    if ((payrollSettings.extraHolidays || []).includes(dateStr)) continue;
+    working++;
+  }
+  return Math.max(working, 1); // never divide by zero
+}
+
+// Lateness deduction — 10 minute grace period after the account's
+// expected start time, then 1-10 minutes late costs half an hour, and
+// more than 10 minutes late costs half a day. Returns null if there's
+// no expected time set, no check-in yet, or the record was manually
+// marked excused (excused attendance never gets a deduction).
+function computeLateDeduction(record, expectedStartTime) {
+  if (!record?.checkIn || !expectedStartTime || record.excused) return null;
+  const checkInDate = new Date(record.checkIn);
+  const [eh, em] = expectedStartTime.split(":").map(Number);
+  const expected = new Date(checkInDate);
+  expected.setHours(eh, em, 0, 0);
+  const lateMinutes = Math.round((checkInDate - expected) / 60000);
+  if (lateMinutes <= 10) return null; // on time, or within the grace period
+  if (lateMinutes <= 20) return { label: "−½ hour", minutesLate: lateMinutes, amountFraction: 1 / 16 };
+  return { label: "−½ day", minutesLate: lateMinutes, amountFraction: 1 / 2 };
+}
+
+// Net pay for one person for one month — monthly salary minus whatever
+// their late-checkin deductions add up to that month, plus any logged
+// overtime at this person's own overtime rate. The daily rate is the
+// salary divided by however many actual working days are in that month
+// (not a flat 30) — set once for the whole academy in the Attendance
+// tab (weekly day off + any extra holiday dates).
+function computePayroll(account, records, monthKeyStr, payrollSettings) {
+  if (!account?.monthlySalary) return null;
+  const workingDays = workingDaysInMonth(monthKeyStr, payrollSettings);
+  const dailyRate = account.monthlySalary / workingDays;
+  let totalDeduction = 0;
+  const deductionEvents = [];
+  let totalOvertimeHours = 0;
+  records.forEach((r) => {
+    const d = computeLateDeduction(r, account.expectedStartTime);
+    if (d) {
+      const amount = d.amountFraction === 1 / 2 ? dailyRate / 2 : dailyRate / 16;
+      totalDeduction += amount;
+      deductionEvents.push({ date: r.date, label: d.label, amount });
+    }
+    if (r.overtimeHours) totalOvertimeHours += Number(r.overtimeHours);
+  });
+  const overtimePay = totalOvertimeHours * (account.overtimeHourlyRate || 0);
+  return {
+    base: account.monthlySalary,
+    workingDays,
+    totalDeduction,
+    totalOvertimeHours,
+    overtimePay,
+    net: account.monthlySalary - totalDeduction + overtimePay,
+    deductionEvents,
+  };
 }
 
 
@@ -1628,7 +1863,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
     setDay2(newDay);
     const newOptions = getTimeOptions(branch, newDay, level);
     if (!newOptions.includes(time2)) setTime2(newOptions[0]);
-    if (coachId2 && (coaches || []).find((c) => c.id === coachId2)?.offDays?.includes(newDay)) setCoachId2("");
+    if (coachId2 && isCoachClosedAt((coaches || []).find((c) => c.id === coachId2), newDay, time2)) setCoachId2("");
   };
 
   const timeOptions = getTimeOptions(branch, day, level);
@@ -1646,7 +1881,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
     const newOptions = getTimeOptions(branch, newDay, level);
     if (!newOptions.includes(time)) setTime(newOptions[0]);
     // clear the assigned coach if they're off on the newly picked day
-    if (coachId && (coaches || []).find((c) => c.id === coachId)?.offDays?.includes(newDay)) setCoachId("");
+    if (coachId && isCoachClosedAt((coaches || []).find((c) => c.id === coachId), newDay, time)) setCoachId("");
   };
 
   const handleLevelChange = (newLevel) => {
@@ -1848,11 +2083,11 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
             className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
           >
             <option value="">No coach assigned</option>
-            {(coaches || []).filter((c) => c.branch === branch && !(c.offDays || []).includes(day)).map((c) => (
+            {(coaches || []).filter((c) => c.branch === branch && !isCoachClosedAt(c, day, time)).map((c) => (
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
-          {(coaches || []).filter((c) => c.branch === branch && !(c.offDays || []).includes(day)).length === 0 && (
+          {(coaches || []).filter((c) => c.branch === branch && !isCoachClosedAt(c, day, time)).length === 0 && (
             <div className="text-xs text-amber-600 mt-1">
               {(coaches || []).some((c) => c.branch === branch)
                 ? "Every coach at this branch is off on this day"
@@ -1916,7 +2151,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
               <label className="text-xs text-slate-500 mb-1 block">Coach</label>
               <select value={coachId2} onChange={(e) => setCoachId2(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
                 <option value="">No coach assigned</option>
-                {(coaches || []).filter((c) => c.branch === branch && !(c.offDays || []).includes(day2)).map((c) => (
+                {(coaches || []).filter((c) => c.branch === branch && !isCoachClosedAt(c, day2, time2)).map((c) => (
                   <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
               </select>
@@ -2074,6 +2309,162 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   };
 
   const [tab, setTab] = useState("requests");
+  const [customLevelSkills, setCustomLevelSkills] = useState({});
+  const [skillsRefreshKey, setSkillsRefreshKey] = useState(0); // bumped after saving, to force re-render of anything reading LEVEL_SKILLS
+  const [newSkillText, setNewSkillText] = useState({}); // level -> draft text for the "add skill" input
+  const [skillsSaving, setSkillsSaving] = useState(false);
+
+  useEffect(() => {
+    if (tab === "skills") {
+      loadCustomLevelSkills().then((custom) => {
+        setCustomLevelSkills(custom);
+        applyCustomLevelSkills(custom);
+        setSkillsRefreshKey((k) => k + 1);
+      });
+    }
+  }, [tab]);
+
+  // Load once as soon as the dashboard opens (not just when visiting the
+  // Skills tab), so customized skill lists show correctly everywhere else
+  // in the app (swimmer progress cards, reports...) right away.
+  useEffect(() => {
+    if (!authed) return;
+    loadCustomLevelSkills().then((custom) => {
+      setCustomLevelSkills(custom);
+      applyCustomLevelSkills(custom);
+      setSkillsRefreshKey((k) => k + 1);
+    });
+  }, [authed]);
+
+  const updateLevelSkills = async (level, nextSkillsForLevel) => {
+    setSkillsSaving(true);
+    try {
+      const next = { ...customLevelSkills, [level]: nextSkillsForLevel };
+      await saveCustomLevelSkills(next);
+      setCustomLevelSkills(next);
+      applyCustomLevelSkills(next);
+      setSkillsRefreshKey((k) => k + 1);
+    } finally {
+      setSkillsSaving(false);
+    }
+  };
+
+  const addSkill = (level) => {
+    const text = (newSkillText[level] || "").trim();
+    if (!text) return;
+    const current = LEVEL_SKILLS[level] || [];
+    if (current.includes(text)) return;
+    updateLevelSkills(level, [...current, text]);
+    setNewSkillText({ ...newSkillText, [level]: "" });
+  };
+
+  const removeSkill = (level, skill) => {
+    const current = LEVEL_SKILLS[level] || [];
+    updateLevelSkills(level, current.filter((s) => s !== skill));
+  };
+
+  const resetLevelSkills = (level) => {
+    const next = { ...customLevelSkills };
+    delete next[level];
+    updateLevelSkills(level, DEFAULT_LEVEL_SKILLS[level] || []);
+    // updateLevelSkills above sets customLevelSkills[level] to the default
+    // list explicitly, which is equivalent to "reset" for every place that
+    // reads LEVEL_SKILLS — simpler than tracking "customized vs not".
+  };
+
+  const [staffAttendance, setStaffAttendance] = useState([]);
+  const [attendanceMonth, setAttendanceMonth] = useState(monthKey());
+  const [qrPosterOpen, setQrPosterOpen] = useState(false);
+  const [attendanceEditModal, setAttendanceEditModal] = useState(null); // { id, accountName, date, checkInTime, checkOutTime, excused, overtimeHours }
+  const [attendanceEditSaving, setAttendanceEditSaving] = useState(false);
+  const [payrollSettings, setPayrollSettings] = useState({ weeklyDayOff: null, extraHolidays: [] });
+  const [payrollSettingsOpen, setPayrollSettingsOpen] = useState(false);
+  const [newHolidayDate, setNewHolidayDate] = useState("");
+
+  useEffect(() => {
+    if (tab === "attendance") loadPayrollSettings().then(setPayrollSettings);
+  }, [tab]);
+
+  const updatePayrollSettings = async (next) => {
+    setPayrollSettings(next);
+    await savePayrollSettings(next);
+  };
+
+  const addHolidayDate = () => {
+    if (!newHolidayDate || payrollSettings.extraHolidays.includes(newHolidayDate)) return;
+    updatePayrollSettings({ ...payrollSettings, extraHolidays: [...payrollSettings.extraHolidays, newHolidayDate].sort() });
+    setNewHolidayDate("");
+  };
+
+  const removeHolidayDate = (date) => {
+    updatePayrollSettings({ ...payrollSettings, extraHolidays: payrollSettings.extraHolidays.filter((d) => d !== date) });
+  };
+
+  const loadStaffAttendance = useCallback(async () => {
+    const all = await loadCollection(STORE_KEYS.staffAttendance);
+    setStaffAttendance(all);
+  }, []);
+
+  useEffect(() => {
+    if (tab === "attendance") loadStaffAttendance();
+  }, [tab, loadStaffAttendance]);
+
+  const saveAttendanceEdit = async () => {
+    if (!attendanceEditModal) return;
+    setAttendanceEditSaving(true);
+    try {
+      const all = await loadCollection(STORE_KEYS.staffAttendance);
+      const { id, accountName: editAccountName, date, checkInTime, checkOutTime, excused, overtimeHours } = attendanceEditModal;
+      const checkIn = checkInTime ? new Date(`${date}T${checkInTime}:00`).toISOString() : null;
+      const checkOut = checkOutTime ? new Date(`${date}T${checkOutTime}:00`).toISOString() : null;
+      const idx = id ? all.findIndex((r) => r.id === id) : all.findIndex((r) => r.accountName === editAccountName && r.date === date);
+      const account = accounts.find((a) => a.name === editAccountName);
+      const overtime = overtimeHours ? Number(overtimeHours) : 0;
+      if (idx === -1) {
+        all.push({ id: genId(), accountName: editAccountName, role: account?.role || "technical", date, checkIn, checkOut, excused, overtimeHours: overtime });
+      } else {
+        all[idx] = { ...all[idx], checkIn, checkOut, excused, overtimeHours: overtime };
+      }
+      await saveCollection(STORE_KEYS.staffAttendance, all);
+      setStaffAttendance(all);
+      setAttendanceEditModal(null);
+    } finally {
+      setAttendanceEditSaving(false);
+    }
+  };
+
+  const [myAttendanceToday, setMyAttendanceToday] = useState(null);
+  const [checkingInOut, setCheckingInOut] = useState(false);
+
+  useEffect(() => {
+    if (!authed || !accountName) return;
+    (async () => {
+      const all = await loadCollection(STORE_KEYS.staffAttendance);
+      const mine = all.find((r) => r.accountName === accountName && r.date === todayISO());
+      setMyAttendanceToday(mine || null);
+    })();
+  }, [authed, accountName]);
+
+  const handleCheckIn = async () => {
+    setCheckingInOut(true);
+    try {
+      const all = await checkInStaff(accountName, role);
+      setMyAttendanceToday(all.find((r) => r.accountName === accountName && r.date === todayISO()));
+    } finally {
+      setCheckingInOut(false);
+    }
+  };
+
+  const handleCheckOut = async () => {
+    setCheckingInOut(true);
+    try {
+      const all = await checkOutStaff(accountName);
+      setMyAttendanceToday(all.find((r) => r.accountName === accountName && r.date === todayISO()));
+    } finally {
+      setCheckingInOut(false);
+    }
+  };
+
   const canEdit = role === "admin"; // branch_manager gets the same screens, view-only
 
   // payment requests
@@ -3521,6 +3912,25 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             <span className="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full font-medium">View only</span>
           )}
         </div>
+        {accountName && role !== "admin" && (
+          <div className="flex items-center gap-2 bg-slate-50 rounded-xl px-3 py-2">
+            <span className="text-xs text-slate-500">
+              {myAttendanceToday?.checkIn && !myAttendanceToday?.checkOut && `In: ${new Date(myAttendanceToday.checkIn).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`}
+              {myAttendanceToday?.checkIn && myAttendanceToday?.checkOut && `${new Date(myAttendanceToday.checkIn).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} – ${new Date(myAttendanceToday.checkOut).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`}
+              {!myAttendanceToday?.checkIn && "Not checked in"}
+            </span>
+            {!myAttendanceToday?.checkIn && (
+              <button onClick={handleCheckIn} disabled={checkingInOut} className="text-xs px-3 py-1.5 rounded-full font-semibold bg-green-600 text-white hover:bg-green-700 disabled:opacity-60">
+                Check in
+              </button>
+            )}
+            {myAttendanceToday?.checkIn && !myAttendanceToday?.checkOut && (
+              <button onClick={handleCheckOut} disabled={checkingInOut} className="text-xs px-3 py-1.5 rounded-full font-semibold bg-red-600 text-white hover:bg-red-700 disabled:opacity-60">
+                Check out
+              </button>
+            )}
+          </div>
+        )}
         <div className="flex items-center gap-2">
           {canEdit && diagResult && (
             <span className={`text-xs font-medium truncate max-w-[140px] sm:max-w-none ${diagResult === "ok" ? "text-green-600" : "text-red-500"}`}>
@@ -3593,6 +4003,26 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             }`}
           >
             <Star className="w-4 h-4" /> Achievements
+          </button>
+        )}
+        {canEdit && (
+          <button
+            onClick={() => setTab("skills")}
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
+              tab === "skills" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
+            }`}
+          >
+            <Award className="w-4 h-4" /> Skills
+          </button>
+        )}
+        {canEdit && (
+          <button
+            onClick={() => setTab("attendance")}
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
+              tab === "attendance" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
+            }`}
+          >
+            <Clock className="w-4 h-4" /> Attendance
           </button>
         )}
         {canEdit && (
@@ -4565,6 +4995,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                               {c.name}
                             </td>
                             {times.map((t) => {
+                              if (isCoachClosedAt(c, dayGroup.id, t)) {
+                                return (
+                                  <td key={t} className="px-2 py-2 text-center">
+                                    <span className="inline-block px-1.5 py-0.5 rounded font-medium leading-tight bg-red-50 text-red-400" title="Coach closed this hour">
+                                      Closed
+                                    </span>
+                                  </td>
+                                );
+                              }
                               const booking = (coachBookingsById[c.id] || []).find(
                                 (b) => b.day === dayGroup.id && b.time === t
                               );
@@ -5193,6 +5632,245 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         );
       })()}
 
+      {tab === "skills" && canEdit && (
+        <div key={skillsRefreshKey}>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-bold text-slate-900">Required skills per level</h3>
+            {skillsSaving && <RefreshCw className="w-4 h-4 animate-spin text-slate-400" />}
+          </div>
+          <p className="text-sm text-slate-500 mb-5">
+            These are the skills shown (and starred) on each swimmer's progress card, per level. Add, remove, or reset to the built-in defaults — changes apply everywhere immediately.
+          </p>
+          <div className="space-y-4">
+            {LEVELS.map((level) => {
+              const skills = LEVEL_SKILLS[level] || [];
+              const isCustomized = customLevelSkills[level] != null;
+              return (
+                <div key={level} className="bg-white rounded-2xl border border-slate-200 p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="font-semibold text-slate-800">{level}</h4>
+                    {isCustomized && (
+                      <button
+                        onClick={() => resetLevelSkills(level)}
+                        className="text-xs text-slate-400 hover:text-slate-600 underline"
+                      >
+                        Reset to default
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {skills.length === 0 && <span className="text-xs text-slate-400">No skills set for this level</span>}
+                    {skills.map((skill) => (
+                      <span key={skill} className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-800 flex items-center gap-1.5">
+                        {skill}
+                        <button onClick={() => removeSkill(level, skill)} className="text-blue-400 hover:text-red-500">
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      value={newSkillText[level] || ""}
+                      onChange={(e) => setNewSkillText({ ...newSkillText, [level]: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") addSkill(level);
+                      }}
+                      className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                      placeholder="Add a skill..."
+                    />
+                    <button
+                      onClick={() => addSkill(level)}
+                      className="px-3 py-2 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200"
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {tab === "attendance" && canEdit && (
+        <div>
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+            <h3 className="font-bold text-slate-900">Staff attendance</h3>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setQrPosterOpen(true)}
+                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
+              >
+                <QrCode className="w-3.5 h-3.5" /> Show check-in code to print
+              </button>
+              <button
+                onClick={() => setPayrollSettingsOpen((v) => !v)}
+                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
+              >
+                <CalendarDays className="w-3.5 h-3.5" /> Payroll calendar
+              </button>
+              <button
+                onClick={() => {
+                  setAttendanceEditModal({ id: null, accountName: accounts[0]?.name || "", date: todayISO(), checkInTime: "", checkOutTime: "", excused: false, overtimeHours: "" });
+                }}
+                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
+              >
+                <Plus className="w-3.5 h-3.5" /> Add / fix a record
+              </button>
+              <input
+                type="month"
+                value={attendanceMonth}
+                onChange={(e) => setAttendanceMonth(e.target.value)}
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+              />
+            </div>
+          </div>
+
+          {payrollSettingsOpen && (
+            <div className="mb-5 bg-slate-50 rounded-xl p-4">
+              <div className="mb-3">
+                <label className="text-xs text-slate-500 mb-1 block">Weekly day off (everyone)</label>
+                <select
+                  value={payrollSettings.weeklyDayOff || ""}
+                  onChange={(e) => updatePayrollSettings({ ...payrollSettings, weeklyDayOff: e.target.value || null })}
+                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                >
+                  <option value="">None</option>
+                  {WEEKDAY_NAMES.map((d) => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Extra holiday dates (added as needed, any month)</label>
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {payrollSettings.extraHolidays.map((d) => (
+                    <span key={d} className="text-xs px-2.5 py-1 rounded-full bg-white border border-slate-200 text-slate-600 flex items-center gap-1.5">
+                      {d}
+                      <button onClick={() => removeHolidayDate(d)} className="text-slate-400 hover:text-red-500">
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                  {payrollSettings.extraHolidays.length === 0 && <span className="text-xs text-slate-400">None added yet</span>}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="date"
+                    value={newHolidayDate}
+                    onChange={(e) => setNewHolidayDate(e.target.value)}
+                    className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                  />
+                  <button onClick={addHolidayDate} disabled={!newHolidayDate} className="px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-medium hover:bg-slate-700 disabled:opacity-50">
+                    Add
+                  </button>
+                </div>
+              </div>
+              <div className="text-xs text-slate-400 mt-3">
+                {monthLabel(attendanceMonth)} has {workingDaysInMonth(attendanceMonth, payrollSettings)} working days with this calendar.
+              </div>
+            </div>
+          )}
+
+          {accounts.some((a) => a.monthlySalary) && (
+            <div className="mb-5">
+              <div className="text-xs text-slate-400 font-medium mb-1.5">Net pay — {monthLabel(attendanceMonth)}</div>
+              <div className="grid sm:grid-cols-2 gap-2">
+                {accounts
+                  .filter((a) => a.monthlySalary)
+                  .map((a) => {
+                    const records = staffAttendance.filter((r) => r.accountName === a.name && r.date.startsWith(attendanceMonth));
+                    const payroll = computePayroll(a, records, attendanceMonth, payrollSettings);
+                    if (!payroll) return null;
+                    return (
+                      <div key={a.id} className="bg-slate-50 rounded-xl px-4 py-3">
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium text-slate-800 text-sm">{a.name}</span>
+                          <span className="font-bold text-slate-900">{payroll.net.toFixed(0)} EGP</span>
+                        </div>
+                        <div className="text-xs text-slate-400 mt-0.5">
+                          {payroll.base} base ({payroll.workingDays} working days)
+                          {payroll.totalDeduction > 0 && ` − ${payroll.totalDeduction.toFixed(0)} deducted (${payroll.deductionEvents.length} late check-in${payroll.deductionEvents.length === 1 ? "" : "s"})`}
+                          {payroll.overtimePay > 0 && ` + ${payroll.overtimePay.toFixed(0)} overtime (${payroll.totalOvertimeHours}h)`}
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+
+          {staffAttendance.filter((r) => r.date.startsWith(attendanceMonth)).length === 0 ? (
+            <div className="text-center text-slate-400 py-16">No check-ins recorded for {monthLabel(attendanceMonth)}</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-slate-400 text-xs border-b border-slate-100">
+                    <th className="py-2 pr-3">Name</th>
+                    <th className="py-2 pr-3">Date</th>
+                    <th className="py-2 pr-3">Check in</th>
+                    <th className="py-2 pr-3">Check out</th>
+                    <th className="py-2 pr-3">Hours</th>
+                    <th className="py-2 pr-3">Deduction</th>
+                    <th className="py-2 pr-3">Overtime</th>
+                    <th className="py-2 pr-3"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {staffAttendance
+                    .filter((r) => r.date.startsWith(attendanceMonth))
+                    .sort((a, b) => b.date.localeCompare(a.date) || a.accountName.localeCompare(b.accountName))
+                    .map((r) => {
+                      const hours = r.checkIn && r.checkOut ? ((new Date(r.checkOut) - new Date(r.checkIn)) / 3600000).toFixed(1) : "—";
+                      const account = accounts.find((a) => a.name === r.accountName);
+                      const deduction = computeLateDeduction(r, account?.expectedStartTime);
+                      return (
+                        <tr key={r.id} className="border-b border-slate-50">
+                          <td className="py-2 pr-3 font-medium text-slate-800">{r.accountName}</td>
+                          <td className="py-2 pr-3 text-slate-500">{r.date}</td>
+                          <td className="py-2 pr-3 text-slate-500">{r.checkIn ? new Date(r.checkIn).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "—"}</td>
+                          <td className="py-2 pr-3 text-slate-500">{r.checkOut ? new Date(r.checkOut).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "—"}</td>
+                          <td className="py-2 pr-3 text-slate-500">{hours}</td>
+                          <td className="py-2 pr-3">
+                            {r.excused ? (
+                              <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">Excused</span>
+                            ) : deduction ? (
+                              <span className="text-xs px-2 py-0.5 rounded-full bg-red-50 text-red-600 font-medium">{deduction.label} ({deduction.minutesLate}m late)</span>
+                            ) : (
+                              <span className="text-slate-300">—</span>
+                            )}
+                          </td>
+                          <td className="py-2 pr-3 text-slate-500">{r.overtimeHours ? `${r.overtimeHours}h` : "—"}</td>
+                          <td className="py-2 pr-3">
+                            <button
+                              onClick={() =>
+                                setAttendanceEditModal({
+                                  id: r.id,
+                                  accountName: r.accountName,
+                                  date: r.date,
+                                  checkInTime: r.checkIn ? new Date(r.checkIn).toTimeString().slice(0, 5) : "",
+                                  checkOutTime: r.checkOut ? new Date(r.checkOut).toTimeString().slice(0, 5) : "",
+                                  excused: !!r.excused,
+                                  overtimeHours: r.overtimeHours || "",
+                                })
+                              }
+                              className="text-slate-400 hover:text-slate-600"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       {tab === "accounts" && canEdit && (
         <div>
           <div className="flex items-center justify-between mb-4 gap-2">
@@ -5450,6 +6128,96 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
               <button
                 onClick={() => setFreezeModal(null)}
                 disabled={freezeSaving}
+                className="px-4 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {qrPosterOpen && <QRPosterModal onClose={() => setQrPosterOpen(false)} />}
+
+      {attendanceEditModal && (
+        <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 px-4" onClick={() => setAttendanceEditModal(null)}>
+          <div className="bg-white rounded-2xl p-5 max-w-sm w-full shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-bold text-slate-900 mb-1">{attendanceEditModal.id ? "Fix attendance record" : "Add attendance record"}</h3>
+            <p className="text-sm text-slate-500 mb-4">For a forgotten check-in, an excuse, or a correction.</p>
+            <div className="mb-3">
+              <label className="text-xs text-slate-500 mb-1 block">Staff member</label>
+              <select
+                value={attendanceEditModal.accountName}
+                onChange={(e) => setAttendanceEditModal({ ...attendanceEditModal, accountName: e.target.value })}
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+              >
+                {accounts.map((a) => (
+                  <option key={a.id} value={a.name}>{a.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="mb-3">
+              <label className="text-xs text-slate-500 mb-1 block">Date</label>
+              <input
+                type="date"
+                value={attendanceEditModal.date}
+                onChange={(e) => setAttendanceEditModal({ ...attendanceEditModal, date: e.target.value })}
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Check in</label>
+                <input
+                  type="time"
+                  value={attendanceEditModal.checkInTime}
+                  onChange={(e) => setAttendanceEditModal({ ...attendanceEditModal, checkInTime: e.target.value })}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Check out</label>
+                <input
+                  type="time"
+                  value={attendanceEditModal.checkOutTime}
+                  onChange={(e) => setAttendanceEditModal({ ...attendanceEditModal, checkOutTime: e.target.value })}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                />
+              </div>
+            </div>
+            <div className="mb-3">
+              <label className="text-xs text-slate-500 mb-1 block">Overtime hours (optional)</label>
+              <input
+                type="number"
+                min="0"
+                step="0.5"
+                value={attendanceEditModal.overtimeHours}
+                onChange={(e) => setAttendanceEditModal({ ...attendanceEditModal, overtimeHours: e.target.value })}
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                placeholder="e.g. 2"
+              />
+              <div className="text-xs text-slate-400 mt-1">Added to net pay at this person's own overtime rate (set in Accounts).</div>
+            </div>
+            <label className="flex items-center gap-2 text-sm text-slate-600 mb-4 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={attendanceEditModal.excused}
+                onChange={(e) => setAttendanceEditModal({ ...attendanceEditModal, excused: e.target.checked })}
+                className="w-4 h-4"
+              />
+              Excused (has a valid reason — no lateness deduction)
+            </label>
+            <div className="flex gap-2">
+              <button
+                onClick={saveAttendanceEdit}
+                disabled={attendanceEditSaving}
+                className="flex-1 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+              >
+                {attendanceEditSaving ? "Saving..." : "Save"}
+              </button>
+              <button
+                onClick={() => setAttendanceEditModal(null)}
+                disabled={attendanceEditSaving}
                 className="px-4 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200 disabled:opacity-60"
               >
                 Cancel
@@ -5727,12 +6495,26 @@ function CoachForm({ initial, onSave, onCancel }) {
   const [branch, setBranch] = useState(initial?.branch || BRANCHES[0].id);
   const [pin, setPin] = useState(initial?.pin || "");
   const [offDays, setOffDays] = useState(initial?.offDays || []);
+  const [offSlots, setOffSlots] = useState(initial?.offSlots || []); // [{ day, time }] — specific closed hours, on a day they otherwise work
+  const [newOffSlotDay, setNewOffSlotDay] = useState(DAY_GROUPS[0].id);
+  const [newOffSlotTime, setNewOffSlotTime] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const recordIdRef = useRef(initial?.id || genId());
 
   const toggleOffDay = (dayId) => {
     setOffDays((prev) => (prev.includes(dayId) ? prev.filter((d) => d !== dayId) : [...prev, dayId]));
+  };
+
+  const addOffSlot = () => {
+    if (!newOffSlotTime) return;
+    if (offSlots.some((s) => s.day === newOffSlotDay && s.time === newOffSlotTime)) return;
+    setOffSlots((prev) => [...prev, { day: newOffSlotDay, time: newOffSlotTime }]);
+    setNewOffSlotTime("");
+  };
+
+  const removeOffSlot = (day, time) => {
+    setOffSlots((prev) => prev.filter((s) => !(s.day === day && s.time === time)));
   };
 
   const save = async () => {
@@ -5748,6 +6530,7 @@ function CoachForm({ initial, onSave, onCancel }) {
         branch,
         pin: pin.trim(),
         offDays,
+        offSlots,
         createdAt: initial?.createdAt || new Date().toISOString(),
       });
     } catch (e) {
@@ -5810,6 +6593,51 @@ function CoachForm({ initial, onSave, onCancel }) {
             Off days won't show up in the Schedule tab or as bookable in the swimmer form.
           </div>
         </div>
+        <div className="sm:col-span-2">
+          <label className="text-xs text-slate-500 mb-1 block">Closed hours (specific times off, on days they otherwise work)</label>
+          <div className="flex flex-wrap gap-2 mb-2">
+            {offSlots.map((s) => (
+              <span key={`${s.day}-${s.time}`} className="text-xs px-2.5 py-1 rounded-full bg-red-50 text-red-700 flex items-center gap-1.5">
+                {DAY_GROUPS.find((d) => d.id === s.day)?.label || s.day} · {s.time}
+                <button type="button" onClick={() => removeOffSlot(s.day, s.time)} className="text-red-400 hover:text-red-600">
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <select
+              value={newOffSlotDay}
+              onChange={(e) => {
+                setNewOffSlotDay(e.target.value);
+                setNewOffSlotTime("");
+              }}
+              className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+            >
+              {DAY_GROUPS.map((d) => (
+                <option key={d.id} value={d.id}>{d.label}</option>
+              ))}
+            </select>
+            <select
+              value={newOffSlotTime}
+              onChange={(e) => setNewOffSlotTime(e.target.value)}
+              className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+            >
+              <option value="">— Time —</option>
+              {(TIME_SLOTS[BRANCHES[0].id]?.[newOffSlotDay] || []).map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={addOffSlot}
+              disabled={!newOffSlotTime}
+              className="px-3 py-2 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200 disabled:opacity-50"
+            >
+              Add
+            </button>
+          </div>
+        </div>
       </div>
       {error && <div className="text-red-500 text-sm mb-3">{error}</div>}
       <div className="flex gap-2">
@@ -5835,6 +6663,9 @@ function AccountForm({ initial, onSave, onCancel }) {
   const [password, setPassword] = useState(initial?.password || "");
   const [role, setRole] = useState(initial?.role || "technical");
   const [levelRestriction, setLevelRestriction] = useState(initial?.levelRestriction || "");
+  const [expectedStartTime, setExpectedStartTime] = useState(initial?.expectedStartTime || "");
+  const [monthlySalary, setMonthlySalary] = useState(initial?.monthlySalary || "");
+  const [overtimeHourlyRate, setOvertimeHourlyRate] = useState(initial?.overtimeHourlyRate || "");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const recordIdRef = useRef(initial?.id || genId());
@@ -5853,6 +6684,9 @@ function AccountForm({ initial, onSave, onCancel }) {
         password: password.trim(),
         role,
         levelRestriction: role === "technical" ? levelRestriction || null : null,
+        expectedStartTime: expectedStartTime || null,
+        monthlySalary: monthlySalary ? Number(monthlySalary) : null,
+        overtimeHourlyRate: overtimeHourlyRate ? Number(overtimeHourlyRate) : null,
         createdAt: initial?.createdAt || new Date().toISOString(),
       });
     } catch (e) {
@@ -5901,6 +6735,46 @@ function AccountForm({ initial, onSave, onCancel }) {
             </select>
           </div>
         )}
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Expected start time (optional)</label>
+          <input
+            type="time"
+            value={expectedStartTime}
+            onChange={(e) => setExpectedStartTime(e.target.value)}
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+          />
+          <div className="text-xs text-slate-400 mt-1">
+            Used for late-checkin deductions in the Attendance tab. 10 min grace period, then 1–10 min late = half hour deducted, more than 10 min late = half day deducted.
+          </div>
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Monthly salary (EGP, optional)</label>
+          <input
+            type="number"
+            min="0"
+            value={monthlySalary}
+            onChange={(e) => setMonthlySalary(e.target.value)}
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+            placeholder="e.g. 5000"
+          />
+          <div className="text-xs text-slate-400 mt-1">
+            Used to calculate net pay in the Attendance tab, based on the working-day calendar set there.
+          </div>
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Overtime rate (EGP/hour, optional)</label>
+          <input
+            type="number"
+            min="0"
+            value={overtimeHourlyRate}
+            onChange={(e) => setOvertimeHourlyRate(e.target.value)}
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+            placeholder="e.g. 50"
+          />
+          <div className="text-xs text-slate-400 mt-1">
+            This coach's own rate for extra hours — added to their net pay for any overtime logged in the Attendance tab.
+          </div>
+        </div>
       </div>
       {error && <div className="text-red-500 text-sm mb-3">{error}</div>}
       <div className="flex gap-2">
@@ -5923,6 +6797,109 @@ function AccountForm({ initial, onSave, onCancel }) {
 /* ============================================================
    Pool staff dashboard — today's sessions, attendance & notes
    ============================================================ */
+/* Renders the fixed staff check-in code as an actual QR image, ready to
+   screenshot or print and hang by the door. Generated client-side with
+   the qrcode package. */
+function QRPosterModal({ onClose }) {
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    if (canvasRef.current) {
+      QRCode.toCanvas(canvasRef.current, STAFF_CHECKIN_CODE, { width: 280, margin: 2 });
+    }
+  }, []);
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 px-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl p-6 max-w-xs w-full shadow-xl text-center" onClick={(e) => e.stopPropagation()}>
+        <h3 className="font-bold text-slate-900 mb-1">Staff check-in code</h3>
+        <p className="text-xs text-slate-500 mb-4">Print this and hang it by the pool entrance. Every coach/staff member scans it from their own dashboard.</p>
+        <canvas ref={canvasRef} className="mx-auto" />
+        <button
+          onClick={() => window.print()}
+          className="mt-4 w-full py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
+        >
+          Print
+        </button>
+        <button onClick={onClose} className="mt-2 w-full py-2 text-slate-400 text-sm hover:text-slate-600">
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* A small camera-based QR scanner — opens the device camera, continuously
+   scans frames with jsQR, and calls onScan(text) the moment it reads
+   anything (whether or not it's the right code — the caller decides what
+   counts as a match). Cleans up the camera stream when closed. */
+function QRScanner({ onScan, onClose }) {
+  const videoRef = useRef(null);
+  const canvasRef = useRef(document.createElement("canvas"));
+  const streamRef = useRef(null);
+  const rafRef = useRef(null);
+  const [cameraError, setCameraError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    navigator.mediaDevices
+      .getUserMedia({ video: { facingMode: "environment" } })
+      .then((stream) => {
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play();
+        }
+        const tick = () => {
+          const video = videoRef.current;
+          const canvas = canvasRef.current;
+          if (video && video.readyState === video.HAVE_ENOUGH_DATA) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsQR(imageData.data, imageData.width, imageData.height);
+            if (code && code.data) {
+              onScan(code.data);
+              return; // stop scanning once something is found
+            }
+          }
+          rafRef.current = requestAnimationFrame(tick);
+        };
+        rafRef.current = requestAnimationFrame(tick);
+      })
+      .catch(() => setCameraError("Couldn't access the camera — check your browser's camera permission for this site."));
+    return () => {
+      cancelled = true;
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
+    };
+  }, [onScan]);
+
+  return (
+    <div className="fixed inset-0 bg-black z-50 flex flex-col items-center justify-center px-4">
+      <button onClick={onClose} className="absolute top-4 right-4 text-white p-2 rounded-full bg-white/10 hover:bg-white/20">
+        <X className="w-6 h-6" />
+      </button>
+      {cameraError ? (
+        <div className="text-white text-center max-w-xs">
+          <div className="text-sm">{cameraError}</div>
+        </div>
+      ) : (
+        <>
+          <video ref={videoRef} className="w-full max-w-sm rounded-xl" muted playsInline />
+          <div className="text-white text-sm mt-4">Point the camera at the check-in code by the door</div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = null }) {
   const [authed, setAuthed] = useState(preAuthed);
   const [pass, setPass] = useState("");
@@ -5940,6 +6917,49 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   const [noteDraft, setNoteDraft] = useState({}); // swimmerId -> draft text
   const [noteStatus, setNoteStatus] = useState({}); // swimmerId -> "saving" | "saved" | "error"
   const [makeupToday, setMakeupToday] = useState([]); // [{ swimmer, session }] for today, this branch
+  const [myAttendanceToday, setMyAttendanceToday] = useState(null); // { checkIn, checkOut } or null
+  const [checkingInOut, setCheckingInOut] = useState(false);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scanMessage, setScanMessage] = useState("");
+
+  useEffect(() => {
+    if (!authed || !accountName) return;
+    (async () => {
+      const all = await loadCollection(STORE_KEYS.staffAttendance);
+      const mine = all.find((r) => r.accountName === accountName && r.date === todayISO());
+      setMyAttendanceToday(mine || null);
+    })();
+  }, [authed, accountName]);
+
+  // One scan does whichever makes sense — checks in if not checked in
+  // yet today, checks out if already checked in. Wrong code just shows
+  // a message and lets them try again.
+  const handleQRScan = async (data) => {
+    setScannerOpen(false);
+    if (data !== STAFF_CHECKIN_CODE) {
+      setScanMessage("That's not the check-in code — try again.");
+      setTimeout(() => setScanMessage(""), 3000);
+      return;
+    }
+    setCheckingInOut(true);
+    try {
+      if (!myAttendanceToday?.checkIn) {
+        const all = await checkInStaff(accountName, "technical");
+        setMyAttendanceToday(all.find((r) => r.accountName === accountName && r.date === todayISO()));
+        setScanMessage("Checked in!");
+      } else if (!myAttendanceToday?.checkOut) {
+        const all = await checkOutStaff(accountName);
+        setMyAttendanceToday(all.find((r) => r.accountName === accountName && r.date === todayISO()));
+        setScanMessage("Checked out!");
+      } else {
+        setScanMessage("Already checked in and out for today.");
+      }
+    } finally {
+      setCheckingInOut(false);
+      setTimeout(() => setScanMessage(""), 3000);
+    }
+  };
+
 
   const loadMakeupToday = useCallback(async () => {
     if (!authed) return;
@@ -6032,7 +7052,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   // `swimmers` is already scoped to just this slot, so no extra fetch is
   // needed to work this out. Coaches off on this day are left out entirely.
   const coachAvailability = coaches
-    .filter((c) => c.branch === branch && !(c.offDays || []).includes(dayGroup))
+    .filter((c) => c.branch === branch && !isCoachClosedAt(c, dayGroup, time))
     .map((c) => {
       const inSlot = swimmers.filter((s) => s.coachId === c.id);
       if (inSlot.length === 0) return { coach: c, free: true, label: "Free — no bookings" };
@@ -6159,7 +7179,31 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
           <LogOut className="w-4 h-4" />
         </button>
       </div>
-      <div className="text-sm text-slate-400 mb-5">{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</div>
+      <div className="text-sm text-slate-400 mb-3">{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</div>
+
+      {accountName && (
+        <div className="mb-5">
+          <div className="flex items-center gap-2 bg-slate-50 rounded-xl px-3 py-2.5">
+            <span className="text-xs text-slate-500 flex-1">
+              {myAttendanceToday?.checkIn && !myAttendanceToday?.checkOut && `Checked in at ${new Date(myAttendanceToday.checkIn).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`}
+              {myAttendanceToday?.checkIn && myAttendanceToday?.checkOut && `${new Date(myAttendanceToday.checkIn).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} – ${new Date(myAttendanceToday.checkOut).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`}
+              {!myAttendanceToday?.checkIn && "Not checked in yet"}
+            </span>
+            {(!myAttendanceToday?.checkIn || !myAttendanceToday?.checkOut) && (
+              <button
+                onClick={() => setScannerOpen(true)}
+                disabled={checkingInOut}
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-950 text-white hover:bg-blue-900 disabled:opacity-60"
+              >
+                <QrCode className="w-3.5 h-3.5" /> {!myAttendanceToday?.checkIn ? "Scan to check in" : "Scan to check out"}
+              </button>
+            )}
+          </div>
+          {scanMessage && <div className="text-xs text-center text-blue-800 bg-blue-50 rounded-lg py-1.5 mt-1.5">{scanMessage}</div>}
+        </div>
+      )}
+
+      {scannerOpen && <QRScanner onScan={handleQRScan} onClose={() => setScannerOpen(false)} />}
 
       {!todaysGroup && (
         <div className="mb-4 text-sm bg-amber-50 text-amber-700 rounded-lg px-4 py-2.5">
@@ -8043,6 +9087,13 @@ export default function App() {
     if (isSuperAdminRoute || isGatewayRoute) return;
     resolveAcademy().then((academy) => {
       setAcademyStatus(academy ? "ready" : "not-found");
+      if (academy) {
+        // Applies any saved skill-list customizations on top of the
+        // built-in defaults, once per page load — every view (admin,
+        // staff, coach, parent) reads from the same LEVEL_SKILLS object,
+        // so this one load covers all of them.
+        loadCustomLevelSkills().then(applyCustomLevelSkills);
+      }
     });
   }, [isSuperAdminRoute, isGatewayRoute]);
 
