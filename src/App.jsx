@@ -439,6 +439,50 @@ function printReceipt({ swimmerName, phone, planName, price, receiptNo, paymentM
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
+/* A printable daily training plan — logo, academy name, coach name, date,
+   and the three sections a swim workout is normally broken into. Same
+   download-then-print-dialog approach as the receipt above. */
+function printWorkout({ coachName, date, warmUp, mainSet, coolDown }) {
+  const section = (title, text) => `
+    <div class="section">
+      <div class="section-title">${escapeHtml(title)}</div>
+      <div class="section-body">${escapeHtml(text || "—").replace(/\n/g, "<br>")}</div>
+    </div>`;
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Training Plan</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: #1e293b; padding: 40px; max-width: 640px; margin: 0 auto; }
+  .header { text-align: center; margin-bottom: 8px; }
+  .header img { width: 56px; height: 56px; object-fit: contain; margin-bottom: 8px; }
+  .header h1 { font-size: 17px; margin: 0; }
+  .meta { text-align: center; color: #64748b; font-size: 13px; margin-bottom: 28px; }
+  .title { text-align: center; font-size: 20px; font-weight: 700; margin: 4px 0 24px; letter-spacing: 0.5px; }
+  .section { margin-bottom: 20px; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; }
+  .section-title { background: #0b1e3a; color: #fff; font-weight: 700; padding: 8px 14px; font-size: 13px; letter-spacing: 0.5px; text-transform: uppercase; }
+  .section-body { padding: 14px; font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
+  @media print { body { padding: 0; } }
+</style></head><body>
+  <div class="header">
+    <img src="${CONFIG.logoDataUri}" />
+    <h1>${escapeHtml(CONFIG.academyName)}</h1>
+  </div>
+  <div class="title">Daily Training Plan</div>
+  <div class="meta">Coach: ${escapeHtml(coachName)} &nbsp;·&nbsp; ${escapeHtml(date)}</div>
+  ${section("Warm up", warmUp)}
+  ${section("Main set", mainSet)}
+  ${section("Cool down", coolDown)}
+<script>window.onload = () => setTimeout(() => window.print(), 300);</script>
+</body></html>`;
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `workout-${(coachName || "coach").replace(/[^a-zA-Z0-9أ-ي]/g, "-")}-${date}.html`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
 
 /* window.storage can occasionally hiccup with a transient error —
    retry once before giving up, and surface one clear message either way */
@@ -462,7 +506,7 @@ async function storageSet(key, value, shared = true) {
    and any save right after that can fail with "Couldn't save...".
    Instead, each data type now lives as a single array under one key, so
    loading or saving a whole collection is exactly one storage call. */
-const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all" };
+const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all" };
 
 // Records who did what, when — a simple audit trail so it's always
 // possible to tell who made a given change. Keeps only the most recent
@@ -2337,23 +2381,6 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   const [activityLog, setActivityLog] = useState([]);
   const [activityLogLoading, setActivityLogLoading] = useState(false);
 
-  const loadActivityLog = useCallback(async () => {
-    if (!canEdit) return;
-    setActivityLogLoading(true);
-    try {
-      const items = await loadCollection(STORE_KEYS.activityLog);
-      setActivityLog(items);
-    } catch (e) {
-      console.warn("load activity log failed", e);
-    } finally {
-      setActivityLogLoading(false);
-    }
-  }, [canEdit]);
-
-  useEffect(() => {
-    if (tab === "activity") loadActivityLog();
-  }, [tab, loadActivityLog]);
-
   const [customLevelSkills, setCustomLevelSkills] = useState({});
   const [skillsRefreshKey, setSkillsRefreshKey] = useState(0); // bumped after saving, to force re-render of anything reading LEVEL_SKILLS
   const [newSkillText, setNewSkillText] = useState({}); // level -> draft text for the "add skill" input
@@ -2543,6 +2570,23 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   // Editor and full access can both add/edit swimmers, coaches, schedules,
   // payments — everything short of deleting things or managing accounts.
   const canEditContent = myAccessLevel === "full" || myAccessLevel === "editor";
+
+  const loadActivityLog = useCallback(async () => {
+    if (!canEdit) return;
+    setActivityLogLoading(true);
+    try {
+      const items = await loadCollection(STORE_KEYS.activityLog);
+      setActivityLog(items);
+    } catch (e) {
+      console.warn("load activity log failed", e);
+    } finally {
+      setActivityLogLoading(false);
+    }
+  }, [canEdit]);
+
+  useEffect(() => {
+    if (tab === "activity") loadActivityLog();
+  }, [tab, loadActivityLog]);
 
   // Whether THIS logged-in person can see the Attendance/payroll tab
   // (everyone's net pay). True admin/branch_admin always can (canEdit).
@@ -3304,6 +3348,22 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         col += 4;
       });
       ws["!merges"] = merges;
+      // Sensible column widths (default is far too narrow for names/phones)
+      // and a frozen header so it stays visible while scrolling down a
+      // long roster.
+      const colWidths = [
+        { wch: 22 }, // Name
+        { wch: 6 },  // Age
+        { wch: 13 }, // Phone
+        { wch: 13 }, // Alt Phone
+        { wch: 14 }, // Coach
+      ];
+      months.forEach(() => {
+        colWidths.push({ wch: 15 }, { wch: 8 }, { wch: 9 }, { wch: 8 }); // Day, Time, Level, Payment
+      });
+      colWidths.push({ wch: 12 }, { wch: 24 }, { wch: 13 }); // Session type, Notes, Registered on
+      ws["!cols"] = colWidths;
+      ws["!rows"] = [{ hpx: 20 }, { hpx: 20 }];
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Swimmers");
       XLSX.writeFile(wb, `swimmers-full-history-${todayISO()}.xlsx`);
@@ -6686,6 +6746,7 @@ function CoachForm({ initial, onSave, onCancel }) {
   const [monthlySalary, setMonthlySalary] = useState(initial?.monthlySalary || "");
   const [overtimeHourlyRate, setOvertimeHourlyRate] = useState(initial?.overtimeHourlyRate || "");
   const [showOwnSalary, setShowOwnSalary] = useState(initial?.showOwnSalary || false);
+  const [canWriteWorkouts, setCanWriteWorkouts] = useState(initial?.canWriteWorkouts || false);
   const [newOffSlotDay, setNewOffSlotDay] = useState(DAY_GROUPS[0].id);
   const [newOffSlotTime, setNewOffSlotTime] = useState("");
   const [error, setError] = useState("");
@@ -6721,6 +6782,7 @@ function CoachForm({ initial, onSave, onCancel }) {
         pin: pin.trim(),
         offDays,
         offSlots,
+        canWriteWorkouts,
         expectedStartTime: expectedStartTime || null,
         monthlySalary: monthlySalary ? Number(monthlySalary) : null,
         overtimeHourlyRate: overtimeHourlyRate ? Number(overtimeHourlyRate) : null,
@@ -6882,6 +6944,18 @@ function CoachForm({ initial, onSave, onCancel }) {
           />
           <label htmlFor="coach-show-own-salary" className="text-sm text-slate-600">
             Let this coach see their own net pay on their dashboard
+          </label>
+        </div>
+        <div className="sm:col-span-2 flex items-center gap-2 bg-slate-50 rounded-lg px-3 py-2.5">
+          <input
+            type="checkbox"
+            id="coach-can-write-workouts"
+            checked={canWriteWorkouts}
+            onChange={(e) => setCanWriteWorkouts(e.target.checked)}
+            className="w-4 h-4"
+          />
+          <label htmlFor="coach-can-write-workouts" className="text-sm text-slate-600">
+            Let this coach write and print daily training plans (Warm up / Main set / Cool down)
           </label>
         </div>
       </div>
@@ -7734,6 +7808,49 @@ function CoachView({ onExit }) {
   const [loginError, setLoginError] = useState("");
   const [authedCoach, setAuthedCoach] = useState(null);
   const [myPayroll, setMyPayroll] = useState(null); // this coach's own net pay, this month — only computed if showOwnSalary is on
+  const [workoutDate, setWorkoutDate] = useState(todayISO());
+  const [warmUp, setWarmUp] = useState("");
+  const [mainSet, setMainSet] = useState("");
+  const [coolDown, setCoolDown] = useState("");
+  const [workoutSaving, setWorkoutSaving] = useState(false);
+  const [workoutSaved, setWorkoutSaved] = useState(false);
+  const [pastWorkouts, setPastWorkouts] = useState([]);
+
+  const loadWorkoutForDate = useCallback(
+    async (date) => {
+      if (!authedCoach) return;
+      const all = await loadCollection(STORE_KEYS.workouts);
+      const mine = all.filter((w) => w.coachId === authedCoach.id);
+      setPastWorkouts(mine.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 14));
+      const existing = mine.find((w) => w.date === date);
+      setWarmUp(existing?.warmUp || "");
+      setMainSet(existing?.mainSet || "");
+      setCoolDown(existing?.coolDown || "");
+    },
+    [authedCoach]
+  );
+
+  useEffect(() => {
+    if (authedCoach?.canWriteWorkouts) loadWorkoutForDate(workoutDate);
+  }, [authedCoach, workoutDate, loadWorkoutForDate]);
+
+  const saveWorkout = async () => {
+    setWorkoutSaving(true);
+    setWorkoutSaved(false);
+    try {
+      const all = await loadCollection(STORE_KEYS.workouts);
+      const idx = all.findIndex((w) => w.coachId === authedCoach.id && w.date === workoutDate);
+      const record = { id: idx === -1 ? genId() : all[idx].id, coachId: authedCoach.id, coachName: authedCoach.name, date: workoutDate, warmUp, mainSet, coolDown };
+      const next = idx === -1 ? [...all, record] : all.map((w, i) => (i === idx ? record : w));
+      await saveCollection(STORE_KEYS.workouts, next);
+      setWorkoutSaved(true);
+      loadWorkoutForDate(workoutDate);
+      setTimeout(() => setWorkoutSaved(false), 2500);
+    } finally {
+      setWorkoutSaving(false);
+    }
+  };
+
 
   useEffect(() => {
     if (!authedCoach?.showOwnSalary || !authedCoach?.monthlySalary) { setMyPayroll(null); return; }
@@ -7992,6 +8109,85 @@ function CoachView({ onExit }) {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {authedCoach?.canWriteWorkouts && (
+        <div className="mb-6 bg-white rounded-2xl border border-slate-200 p-4">
+          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <h3 className="font-bold text-slate-900">Daily training plan</h3>
+            <input
+              type="date"
+              value={workoutDate}
+              onChange={(e) => setWorkoutDate(e.target.value)}
+              className="border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-blue-900 bg-white"
+            />
+          </div>
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Warm up</label>
+              <textarea
+                value={warmUp}
+                onChange={(e) => setWarmUp(e.target.value)}
+                rows={3}
+                className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                placeholder="e.g. 400m easy freestyle, 200m kick"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Main set</label>
+              <textarea
+                value={mainSet}
+                onChange={(e) => setMainSet(e.target.value)}
+                rows={4}
+                className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                placeholder="e.g. 8x100m freestyle @1:30, 4x50m sprint"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Cool down</label>
+              <textarea
+                value={coolDown}
+                onChange={(e) => setCoolDown(e.target.value)}
+                rows={2}
+                className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                placeholder="e.g. 200m easy swim"
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-2 mt-3">
+            <button
+              onClick={saveWorkout}
+              disabled={workoutSaving}
+              className="flex-1 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+            >
+              {workoutSaving ? "Saving..." : workoutSaved ? "Saved ✓" : "Save"}
+            </button>
+            <button
+              onClick={() => printWorkout({ coachName: authedCoach.name, date: workoutDate, warmUp, mainSet, coolDown })}
+              className="px-4 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200"
+            >
+              Print
+            </button>
+          </div>
+          {pastWorkouts.length > 0 && (
+            <div className="mt-4 pt-4 border-t border-slate-100">
+              <div className="text-xs text-slate-400 mb-1.5">Recent plans</div>
+              <div className="flex flex-wrap gap-1.5">
+                {pastWorkouts.map((w) => (
+                  <button
+                    key={w.id}
+                    onClick={() => setWorkoutDate(w.date)}
+                    className={`text-xs px-2.5 py-1 rounded-full font-medium ${
+                      w.date === workoutDate ? "bg-blue-950 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    }`}
+                  >
+                    {w.date}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
