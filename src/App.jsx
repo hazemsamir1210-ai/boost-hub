@@ -2480,6 +2480,23 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
 
   const canEdit = role === "admin" || role === "branch_admin"; // branch_manager gets the same screens, view-only
 
+  // Whether THIS logged-in person can see the Attendance/payroll tab
+  // (everyone's net pay). True admin/branch_admin always can (canEdit).
+  // Anyone else (branch_manager, technical) only if their own account
+  // was explicitly given "canViewPayroll" — off by default.
+  const [canViewPayroll, setCanViewPayroll] = useState(canEdit);
+  const loadMyPayrollAccess = useCallback(async () => {
+    if (canEdit) { setCanViewPayroll(true); return; }
+    if (!accountName) { setCanViewPayroll(false); return; }
+    try {
+      const items = await loadCollection(STORE_KEYS.accounts);
+      const mine = items.find((a) => a.name === accountName);
+      setCanViewPayroll(!!mine?.canViewPayroll);
+    } catch (e) {
+      setCanViewPayroll(false);
+    }
+  }, [canEdit, accountName]);
+
   // payment requests
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -2982,6 +2999,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     loadExpenses();
     loadAccounts();
     loadAchievements();
+    loadMyPayrollAccess();
     // The full swimmers roster (loadSwimmers) is now ONLY loaded for the
     // Reports/Coaches tabs, which are the only places that genuinely need
     // to see everyone at once for their totals. Continuously holding
@@ -3000,7 +3018,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       if (tab === "reports" || tab === "coaches" || tab === "schedule") loadSwimmers();
     }, 15000);
     return () => clearInterval(t);
-  }, [authed, tab, loadRequests, loadSwimmers, loadCoaches, loadExpenses, loadAccounts, loadAchievements]);
+  }, [authed, tab, loadRequests, loadSwimmers, loadCoaches, loadExpenses, loadAccounts, loadAchievements, loadMyPayrollAccess]);
 
   // Fetch each request's screenshot only once, on demand — not bundled into
   // the requests list itself, and not re-fetched on every 15s poll.
@@ -4031,7 +4049,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             <Award className="w-4 h-4" /> Skills
           </button>
         )}
-        {canEdit && (
+        {canViewPayroll && (
           <button
             onClick={() => setTab("attendance")}
             className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
@@ -5709,31 +5727,37 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         </div>
       )}
 
-      {tab === "attendance" && canEdit && (
+      {tab === "attendance" && canViewPayroll && (
         <div>
           <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
             <h3 className="font-bold text-slate-900">Staff attendance</h3>
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => setQrPosterOpen(true)}
-                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
-              >
-                <QrCode className="w-3.5 h-3.5" /> Show check-in code to print
-              </button>
-              <button
-                onClick={() => setPayrollSettingsOpen((v) => !v)}
-                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
-              >
-                <CalendarDays className="w-3.5 h-3.5" /> Payroll calendar
-              </button>
-              <button
-                onClick={() => {
-                  setAttendanceEditModal({ id: null, accountName: accounts[0]?.name || "", date: todayISO(), checkInTime: "", checkOutTime: "", excused: false, overtimeHours: "" });
-                }}
-                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
-              >
-                <Plus className="w-3.5 h-3.5" /> Add / fix a record
-              </button>
+              {canEdit && (
+                <button
+                  onClick={() => setQrPosterOpen(true)}
+                  className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
+                >
+                  <QrCode className="w-3.5 h-3.5" /> Show check-in code to print
+                </button>
+              )}
+              {canEdit && (
+                <button
+                  onClick={() => setPayrollSettingsOpen((v) => !v)}
+                  className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
+                >
+                  <CalendarDays className="w-3.5 h-3.5" /> Payroll calendar
+                </button>
+              )}
+              {canEdit && (
+                <button
+                  onClick={() => {
+                    setAttendanceEditModal({ id: null, accountName: accounts[0]?.name || "", date: todayISO(), checkInTime: "", checkOutTime: "", excused: false, overtimeHours: "" });
+                  }}
+                  className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Add / fix a record
+                </button>
+              )}
               <input
                 type="month"
                 value={attendanceMonth}
@@ -5743,7 +5767,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             </div>
           </div>
 
-          {payrollSettingsOpen && (
+          {payrollSettingsOpen && canEdit && (
             <div className="mb-5 bg-slate-50 rounded-xl p-4">
               <div className="mb-3">
                 <label className="text-xs text-slate-500 mb-1 block">Weekly day off (everyone)</label>
@@ -5789,11 +5813,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             </div>
           )}
 
-          {accounts.some((a) => a.monthlySalary) && (
+          {[...accounts, ...coaches].some((a) => a.monthlySalary) && (
             <div className="mb-5">
               <div className="text-xs text-slate-400 font-medium mb-1.5">Net pay — {monthLabel(attendanceMonth)}</div>
               <div className="grid sm:grid-cols-2 gap-2">
-                {accounts
+                {[...accounts, ...coaches]
                   .filter((a) => a.monthlySalary)
                   .map((a) => {
                     const records = staffAttendance.filter((r) => r.accountName === a.name && r.date.startsWith(attendanceMonth));
@@ -5840,7 +5864,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                     .sort((a, b) => b.date.localeCompare(a.date) || a.accountName.localeCompare(b.accountName))
                     .map((r) => {
                       const hours = r.checkIn && r.checkOut ? ((new Date(r.checkOut) - new Date(r.checkIn)) / 3600000).toFixed(1) : "—";
-                      const account = accounts.find((a) => a.name === r.accountName);
+                      const account = accounts.find((a) => a.name === r.accountName) || coaches.find((c) => c.name === r.accountName);
                       const deduction = computeLateDeduction(r, account?.expectedStartTime);
                       return (
                         <tr key={r.id} className="border-b border-slate-50">
@@ -5860,22 +5884,24 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                           </td>
                           <td className="py-2 pr-3 text-slate-500">{r.overtimeHours ? `${r.overtimeHours}h` : "—"}</td>
                           <td className="py-2 pr-3">
-                            <button
-                              onClick={() =>
-                                setAttendanceEditModal({
-                                  id: r.id,
-                                  accountName: r.accountName,
-                                  date: r.date,
-                                  checkInTime: r.checkIn ? new Date(r.checkIn).toTimeString().slice(0, 5) : "",
-                                  checkOutTime: r.checkOut ? new Date(r.checkOut).toTimeString().slice(0, 5) : "",
-                                  excused: !!r.excused,
-                                  overtimeHours: r.overtimeHours || "",
-                                })
-                              }
-                              className="text-slate-400 hover:text-slate-600"
-                            >
-                              <Pencil className="w-3.5 h-3.5" />
-                            </button>
+                            {canEdit && (
+                              <button
+                                onClick={() =>
+                                  setAttendanceEditModal({
+                                    id: r.id,
+                                    accountName: r.accountName,
+                                    date: r.date,
+                                    checkInTime: r.checkIn ? new Date(r.checkIn).toTimeString().slice(0, 5) : "",
+                                    checkOutTime: r.checkOut ? new Date(r.checkOut).toTimeString().slice(0, 5) : "",
+                                    excused: !!r.excused,
+                                    overtimeHours: r.overtimeHours || "",
+                                  })
+                                }
+                                className="text-slate-400 hover:text-slate-600"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </td>
                         </tr>
                       );
@@ -6167,7 +6193,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                 onChange={(e) => setAttendanceEditModal({ ...attendanceEditModal, accountName: e.target.value })}
                 className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
               >
-                {accounts.map((a) => (
+                {[...accounts, ...coaches].map((a) => (
                   <option key={a.id} value={a.name}>{a.name}</option>
                 ))}
               </select>
@@ -6512,6 +6538,10 @@ function CoachForm({ initial, onSave, onCancel }) {
   const [pin, setPin] = useState(initial?.pin || "");
   const [offDays, setOffDays] = useState(initial?.offDays || []);
   const [offSlots, setOffSlots] = useState(initial?.offSlots || []); // [{ day, time }] — specific closed hours, on a day they otherwise work
+  const [expectedStartTime, setExpectedStartTime] = useState(initial?.expectedStartTime || "");
+  const [monthlySalary, setMonthlySalary] = useState(initial?.monthlySalary || "");
+  const [overtimeHourlyRate, setOvertimeHourlyRate] = useState(initial?.overtimeHourlyRate || "");
+  const [showOwnSalary, setShowOwnSalary] = useState(initial?.showOwnSalary || false);
   const [newOffSlotDay, setNewOffSlotDay] = useState(DAY_GROUPS[0].id);
   const [newOffSlotTime, setNewOffSlotTime] = useState("");
   const [error, setError] = useState("");
@@ -6547,6 +6577,10 @@ function CoachForm({ initial, onSave, onCancel }) {
         pin: pin.trim(),
         offDays,
         offSlots,
+        expectedStartTime: expectedStartTime || null,
+        monthlySalary: monthlySalary ? Number(monthlySalary) : null,
+        overtimeHourlyRate: overtimeHourlyRate ? Number(overtimeHourlyRate) : null,
+        showOwnSalary,
         createdAt: initial?.createdAt || new Date().toISOString(),
       });
     } catch (e) {
@@ -6654,6 +6688,58 @@ function CoachForm({ initial, onSave, onCancel }) {
             </button>
           </div>
         </div>
+        <div className="sm:col-span-2 border-t border-slate-100 pt-3 mt-1">
+          <div className="text-xs font-semibold text-slate-600 mb-2">Pay (optional — leave blank if you don't track this coach's salary here)</div>
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Expected start time (optional)</label>
+          <input
+            type="time"
+            value={expectedStartTime}
+            onChange={(e) => setExpectedStartTime(e.target.value)}
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+          />
+          <div className="text-xs text-slate-400 mt-1">
+            Used for late-checkin deductions in the Attendance tab.
+          </div>
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Monthly salary (EGP, optional)</label>
+          <input
+            type="number"
+            min="0"
+            value={monthlySalary}
+            onChange={(e) => setMonthlySalary(e.target.value)}
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+            placeholder="e.g. 5000"
+          />
+          <div className="text-xs text-slate-400 mt-1">
+            Used to calculate net pay in the Attendance tab, based on the coach's own check-in/check-out via QR.
+          </div>
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Overtime rate (EGP/hour, optional)</label>
+          <input
+            type="number"
+            min="0"
+            value={overtimeHourlyRate}
+            onChange={(e) => setOvertimeHourlyRate(e.target.value)}
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+            placeholder="e.g. 50"
+          />
+        </div>
+        <div className="sm:col-span-2 flex items-center gap-2 bg-slate-50 rounded-lg px-3 py-2.5">
+          <input
+            type="checkbox"
+            id="coach-show-own-salary"
+            checked={showOwnSalary}
+            onChange={(e) => setShowOwnSalary(e.target.checked)}
+            className="w-4 h-4"
+          />
+          <label htmlFor="coach-show-own-salary" className="text-sm text-slate-600">
+            Let this coach see their own net pay on their dashboard
+          </label>
+        </div>
       </div>
       {error && <div className="text-red-500 text-sm mb-3">{error}</div>}
       <div className="flex gap-2">
@@ -6682,6 +6768,7 @@ function AccountForm({ initial, onSave, onCancel }) {
   const [expectedStartTime, setExpectedStartTime] = useState(initial?.expectedStartTime || "");
   const [monthlySalary, setMonthlySalary] = useState(initial?.monthlySalary || "");
   const [overtimeHourlyRate, setOvertimeHourlyRate] = useState(initial?.overtimeHourlyRate || "");
+  const [canViewPayroll, setCanViewPayroll] = useState(initial?.canViewPayroll || false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const recordIdRef = useRef(initial?.id || genId());
@@ -6703,6 +6790,7 @@ function AccountForm({ initial, onSave, onCancel }) {
         expectedStartTime: expectedStartTime || null,
         monthlySalary: monthlySalary ? Number(monthlySalary) : null,
         overtimeHourlyRate: overtimeHourlyRate ? Number(overtimeHourlyRate) : null,
+        canViewPayroll: role === "admin" ? true : canViewPayroll,
         createdAt: initial?.createdAt || new Date().toISOString(),
       });
     } catch (e) {
@@ -6791,6 +6879,20 @@ function AccountForm({ initial, onSave, onCancel }) {
             This coach's own rate for extra hours — added to their net pay for any overtime logged in the Attendance tab.
           </div>
         </div>
+        {role !== "admin" && (
+          <div className="sm:col-span-2 flex items-center gap-2 bg-slate-50 rounded-lg px-3 py-2.5">
+            <input
+              type="checkbox"
+              id="account-can-view-payroll"
+              checked={canViewPayroll}
+              onChange={(e) => setCanViewPayroll(e.target.checked)}
+              className="w-4 h-4"
+            />
+            <label htmlFor="account-can-view-payroll" className="text-sm text-slate-600">
+              Let this account see the Attendance / payroll tab (everyone's net pay). Off by default — only Admin sees it unless you turn this on.
+            </label>
+          </div>
+        )}
       </div>
       {error && <div className="text-red-500 text-sm mb-3">{error}</div>}
       <div className="flex gap-2">
@@ -7475,6 +7577,24 @@ function CoachView({ onExit }) {
   const [pin, setPin] = useState("");
   const [loginError, setLoginError] = useState("");
   const [authedCoach, setAuthedCoach] = useState(null);
+  const [myPayroll, setMyPayroll] = useState(null); // this coach's own net pay, this month — only computed if showOwnSalary is on
+
+  useEffect(() => {
+    if (!authedCoach?.showOwnSalary || !authedCoach?.monthlySalary) { setMyPayroll(null); return; }
+    (async () => {
+      try {
+        const month = todayISO().slice(0, 7);
+        const [allAttendance, settings] = await Promise.all([
+          loadCollection(STORE_KEYS.staffAttendance),
+          loadPayrollSettings(),
+        ]);
+        const myRecords = allAttendance.filter((r) => r.accountName === authedCoach.name && r.date.startsWith(month));
+        setMyPayroll({ month, payroll: computePayroll(authedCoach, myRecords, month, settings) });
+      } catch (e) {
+        setMyPayroll(null);
+      }
+    })();
+  }, [authedCoach]);
 
   const [swimmers, setSwimmers] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -7668,6 +7788,20 @@ function CoachView({ onExit }) {
           </button>
         </div>
       </div>
+
+      {myPayroll?.payroll && (
+        <div className="bg-slate-50 rounded-xl px-4 py-3 mb-4 flex items-center justify-between">
+          <div>
+            <div className="text-xs text-slate-400 font-medium">Your net pay — {monthLabel(myPayroll.month)}</div>
+            <div className="text-xs text-slate-400 mt-0.5">
+              {myPayroll.payroll.base} base
+              {myPayroll.payroll.totalDeduction > 0 && ` − ${myPayroll.payroll.totalDeduction.toFixed(0)} deducted`}
+              {myPayroll.payroll.overtimePay > 0 && ` + ${myPayroll.payroll.overtimePay.toFixed(0)} overtime`}
+            </div>
+          </div>
+          <span className="font-bold text-slate-900 text-lg">{myPayroll.payroll.net.toFixed(0)} EGP</span>
+        </div>
+      )}
 
       <div className="mb-5">
         <div className="flex items-center gap-2 bg-slate-50 rounded-xl px-3 py-2.5">
