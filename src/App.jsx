@@ -496,6 +496,7 @@ function applyCustomLevelSkills(customSkills) {
      already registered — can't create swimmers or see anything else */
 const ROLES = [
   { id: "admin", label: "Admin (full access)" },
+  { id: "branch_admin", label: "Branch admin manager (full access)" },
   { id: "branch_manager", label: "Branch manager (view only)" },
   { id: "technical", label: "Technical (search & check-in only)" },
 ];
@@ -2436,6 +2437,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   const [myAttendanceToday, setMyAttendanceToday] = useState(null);
   const [checkingInOut, setCheckingInOut] = useState(false);
 
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scanMessage, setScanMessage] = useState("");
+
   useEffect(() => {
     if (!authed || !accountName) return;
     (async () => {
@@ -2445,27 +2449,36 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     })();
   }, [authed, accountName]);
 
-  const handleCheckIn = async () => {
+  // One scan does whichever makes sense — checks in if not checked in
+  // yet today, checks out if already checked in. Wrong code just shows
+  // a message and lets them try again.
+  const handleQRScan = async (data) => {
+    setScannerOpen(false);
+    if (data !== STAFF_CHECKIN_CODE) {
+      setScanMessage("That's not the check-in code — try again.");
+      setTimeout(() => setScanMessage(""), 3000);
+      return;
+    }
     setCheckingInOut(true);
     try {
-      const all = await checkInStaff(accountName, role);
-      setMyAttendanceToday(all.find((r) => r.accountName === accountName && r.date === todayISO()));
+      if (!myAttendanceToday?.checkIn) {
+        const all = await checkInStaff(accountName, role);
+        setMyAttendanceToday(all.find((r) => r.accountName === accountName && r.date === todayISO()));
+        setScanMessage("Checked in!");
+      } else if (!myAttendanceToday?.checkOut) {
+        const all = await checkOutStaff(accountName);
+        setMyAttendanceToday(all.find((r) => r.accountName === accountName && r.date === todayISO()));
+        setScanMessage("Checked out!");
+      } else {
+        setScanMessage("Already checked in and out for today.");
+      }
     } finally {
       setCheckingInOut(false);
+      setTimeout(() => setScanMessage(""), 3000);
     }
   };
 
-  const handleCheckOut = async () => {
-    setCheckingInOut(true);
-    try {
-      const all = await checkOutStaff(accountName);
-      setMyAttendanceToday(all.find((r) => r.accountName === accountName && r.date === todayISO()));
-    } finally {
-      setCheckingInOut(false);
-    }
-  };
-
-  const canEdit = role === "admin"; // branch_manager gets the same screens, view-only
+  const canEdit = role === "admin" || role === "branch_admin"; // branch_manager gets the same screens, view-only
 
   // payment requests
   const [requests, setRequests] = useState([]);
@@ -2910,7 +2923,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   }, []);
 
   const loadAccounts = useCallback(async () => {
-    if (role !== "admin") return;
+    if (!canEdit) return;
     setAccountsLoading(true);
     try {
       const items = await loadCollection(STORE_KEYS.accounts);
@@ -3913,24 +3926,27 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           )}
         </div>
         {accountName && role !== "admin" && (
-          <div className="flex items-center gap-2 bg-slate-50 rounded-xl px-3 py-2">
-            <span className="text-xs text-slate-500">
-              {myAttendanceToday?.checkIn && !myAttendanceToday?.checkOut && `In: ${new Date(myAttendanceToday.checkIn).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`}
-              {myAttendanceToday?.checkIn && myAttendanceToday?.checkOut && `${new Date(myAttendanceToday.checkIn).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} – ${new Date(myAttendanceToday.checkOut).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`}
-              {!myAttendanceToday?.checkIn && "Not checked in"}
-            </span>
-            {!myAttendanceToday?.checkIn && (
-              <button onClick={handleCheckIn} disabled={checkingInOut} className="text-xs px-3 py-1.5 rounded-full font-semibold bg-green-600 text-white hover:bg-green-700 disabled:opacity-60">
-                Check in
-              </button>
-            )}
-            {myAttendanceToday?.checkIn && !myAttendanceToday?.checkOut && (
-              <button onClick={handleCheckOut} disabled={checkingInOut} className="text-xs px-3 py-1.5 rounded-full font-semibold bg-red-600 text-white hover:bg-red-700 disabled:opacity-60">
-                Check out
-              </button>
-            )}
+          <div>
+            <div className="flex items-center gap-2 bg-slate-50 rounded-xl px-3 py-2">
+              <span className="text-xs text-slate-500">
+                {myAttendanceToday?.checkIn && !myAttendanceToday?.checkOut && `In: ${new Date(myAttendanceToday.checkIn).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`}
+                {myAttendanceToday?.checkIn && myAttendanceToday?.checkOut && `${new Date(myAttendanceToday.checkIn).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} – ${new Date(myAttendanceToday.checkOut).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`}
+                {!myAttendanceToday?.checkIn && "Not checked in"}
+              </span>
+              {(!myAttendanceToday?.checkIn || !myAttendanceToday?.checkOut) && (
+                <button
+                  onClick={() => setScannerOpen(true)}
+                  disabled={checkingInOut}
+                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-950 text-white hover:bg-blue-900 disabled:opacity-60"
+                >
+                  <QrCode className="w-3.5 h-3.5" /> {!myAttendanceToday?.checkIn ? "Scan to check in" : "Scan to check out"}
+                </button>
+              )}
+            </div>
+            {scanMessage && <div className="text-xs text-center text-blue-800 bg-blue-50 rounded-lg py-1 mt-1">{scanMessage}</div>}
           </div>
         )}
+        {scannerOpen && <QRScanner onScan={handleQRScan} onClose={() => setScannerOpen(false)} />}
         <div className="flex items-center gap-2">
           {canEdit && diagResult && (
             <span className={`text-xs font-medium truncate max-w-[140px] sm:max-w-none ${diagResult === "ok" ? "text-green-600" : "text-red-500"}`}>
@@ -7464,6 +7480,48 @@ function CoachView({ onExit }) {
   const [loading, setLoading] = useState(false);
   const [expandedSwimmerId, setExpandedSwimmerId] = useState(null);
   const [upcomingMakeups, setUpcomingMakeups] = useState([]);
+  const [myAttendanceToday, setMyAttendanceToday] = useState(null);
+  const [checkingInOut, setCheckingInOut] = useState(false);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scanMessage, setScanMessage] = useState("");
+
+  useEffect(() => {
+    if (!authedCoach) return;
+    (async () => {
+      const all = await loadCollection(STORE_KEYS.staffAttendance);
+      const mine = all.find((r) => r.accountName === authedCoach.name && r.date === todayISO());
+      setMyAttendanceToday(mine || null);
+    })();
+  }, [authedCoach]);
+
+  // One scan does whichever makes sense — checks in if not checked in
+  // yet today, checks out if already checked in. Wrong code just shows
+  // a message and lets them try again.
+  const handleQRScan = async (data) => {
+    setScannerOpen(false);
+    if (data !== STAFF_CHECKIN_CODE) {
+      setScanMessage("That's not the check-in code — try again.");
+      setTimeout(() => setScanMessage(""), 3000);
+      return;
+    }
+    setCheckingInOut(true);
+    try {
+      if (!myAttendanceToday?.checkIn) {
+        const all = await checkInStaff(authedCoach.name, "coach");
+        setMyAttendanceToday(all.find((r) => r.accountName === authedCoach.name && r.date === todayISO()));
+        setScanMessage("Checked in!");
+      } else if (!myAttendanceToday?.checkOut) {
+        const all = await checkOutStaff(authedCoach.name);
+        setMyAttendanceToday(all.find((r) => r.accountName === authedCoach.name && r.date === todayISO()));
+        setScanMessage("Checked out!");
+      } else {
+        setScanMessage("Already checked in and out for today.");
+      }
+    } finally {
+      setCheckingInOut(false);
+      setTimeout(() => setScanMessage(""), 3000);
+    }
+  };
 
   useEffect(() => {
     if (!authedCoach) return;
@@ -7610,6 +7668,28 @@ function CoachView({ onExit }) {
           </button>
         </div>
       </div>
+
+      <div className="mb-5">
+        <div className="flex items-center gap-2 bg-slate-50 rounded-xl px-3 py-2.5">
+          <span className="text-xs text-slate-500 flex-1">
+            {myAttendanceToday?.checkIn && !myAttendanceToday?.checkOut && `Checked in at ${new Date(myAttendanceToday.checkIn).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`}
+            {myAttendanceToday?.checkIn && myAttendanceToday?.checkOut && `${new Date(myAttendanceToday.checkIn).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} – ${new Date(myAttendanceToday.checkOut).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`}
+            {!myAttendanceToday?.checkIn && "Not checked in yet"}
+          </span>
+          {(!myAttendanceToday?.checkIn || !myAttendanceToday?.checkOut) && (
+            <button
+              onClick={() => setScannerOpen(true)}
+              disabled={checkingInOut}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-950 text-white hover:bg-blue-900 disabled:opacity-60"
+            >
+              <QrCode className="w-3.5 h-3.5" /> {!myAttendanceToday?.checkIn ? "Scan to check in" : "Scan to check out"}
+            </button>
+          )}
+        </div>
+        {scanMessage && <div className="text-xs text-center text-blue-800 bg-blue-50 rounded-lg py-1.5 mt-1.5">{scanMessage}</div>}
+      </div>
+
+      {scannerOpen && <QRScanner onScan={handleQRScan} onClose={() => setScannerOpen(false)} />}
 
       {upcomingMakeups.length > 0 && (
         <div className="mb-5">
