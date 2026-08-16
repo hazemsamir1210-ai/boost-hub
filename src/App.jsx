@@ -499,6 +499,24 @@ async function storageSet(key, value, shared = true) {
   throw new Error("Couldn't save — check your connection and try again");
 }
 
+// The admin password starts out as whatever CONFIG.adminPassword says
+// (the built-in default), but once changed from the dashboard, the saved
+// value here takes over — CONFIG itself never gets edited at runtime.
+const ADMIN_PASSWORD_KEY = "admin-password-override";
+
+async function getEffectiveAdminPassword() {
+  try {
+    const res = await window.storage.get(ADMIN_PASSWORD_KEY);
+    return res?.value || CONFIG.adminPassword;
+  } catch (e) {
+    return CONFIG.adminPassword;
+  }
+}
+
+async function setAdminPasswordOverride(newPassword) {
+  return storageSet(ADMIN_PASSWORD_KEY, newPassword);
+}
+
 /* Every subs/swimmers/coaches record used to live under its own storage key
    (sub:id, swimmer:id, coach:id). That meant one storage.list() + one
    storage.get() PER RECORD every time the app loaded data — which trips
@@ -2378,6 +2396,36 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   };
 
   const [tab, setTab] = useState("requests");
+  const [currentAdminPass, setCurrentAdminPass] = useState("");
+  const [newAdminPass, setNewAdminPass] = useState("");
+  const [confirmAdminPass, setConfirmAdminPass] = useState("");
+  const [adminPassError, setAdminPassError] = useState("");
+  const [adminPassSuccess, setAdminPassSuccess] = useState(false);
+  const [adminPassSaving, setAdminPassSaving] = useState(false);
+
+  const changeAdminPassword = async () => {
+    setAdminPassError("");
+    setAdminPassSuccess(false);
+    const real = await getEffectiveAdminPassword();
+    if (currentAdminPass !== real) return setAdminPassError("Current password is wrong");
+    if (!newAdminPass || newAdminPass.length < 4) return setAdminPassError("New password should be at least 4 characters");
+    if (newAdminPass !== confirmAdminPass) return setAdminPassError("New passwords don't match");
+    setAdminPassSaving(true);
+    try {
+      await setAdminPasswordOverride(newAdminPass);
+      logActivity(accountName, role, "Changed admin password", "");
+      setCurrentAdminPass("");
+      setNewAdminPass("");
+      setConfirmAdminPass("");
+      setAdminPassSuccess(true);
+      setTimeout(() => setAdminPassSuccess(false), 4000);
+    } catch (e) {
+      setAdminPassError("Could not save, please try again");
+    } finally {
+      setAdminPassSaving(false);
+    }
+  };
+
   const [activityLog, setActivityLog] = useState([]);
   const [activityLogLoading, setActivityLogLoading] = useState(false);
 
@@ -4030,8 +4078,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                 onChange={(e) => setPass(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
-                    if (pass === CONFIG.adminPassword) setAuthed(true);
-                    else setPassError("Wrong password");
+                    getEffectiveAdminPassword().then((real) => {
+                      if (pass === real) setAuthed(true);
+                      else setPassError("Wrong password");
+                    });
                   }
                 }}
                 className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
@@ -4040,8 +4090,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
               {passError && <div className="text-red-500 text-sm mb-3">{passError}</div>}
               <button
                 onClick={() => {
-                  if (pass === CONFIG.adminPassword) setAuthed(true);
-                  else setPassError("Wrong password");
+                  getEffectiveAdminPassword().then((real) => {
+                    if (pass === real) setAuthed(true);
+                    else setPassError("Wrong password");
+                  });
                 }}
                 className="w-full py-2.5 rounded-xl bg-slate-100 text-slate-600 font-medium hover:bg-slate-200 transition mb-2"
               >
@@ -4219,6 +4271,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             }`}
           >
             <Clock className="w-4 h-4" /> Activity Log
+          </button>
+        )}
+        {role === "admin" && (
+          <button
+            onClick={() => setTab("password")}
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
+              tab === "password" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
+            }`}
+          >
+            <Lock className="w-4 h-4" /> Password
           </button>
         )}
       </div>
@@ -6074,6 +6136,54 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {tab === "password" && role === "admin" && (
+        <div className="max-w-sm">
+          <h3 className="font-bold text-slate-900 mb-1">Change admin password</h3>
+          <p className="text-sm text-slate-500 mb-4">
+            This is the master password used for the "admin" bootstrap login — not a staff account. Keep it somewhere safe once you change it.
+          </p>
+          <div className="mb-3">
+            <label className="text-xs text-slate-500 mb-1 block">Current password</label>
+            <input
+              type="password"
+              value={currentAdminPass}
+              onChange={(e) => setCurrentAdminPass(e.target.value)}
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+            />
+          </div>
+          <div className="mb-3">
+            <label className="text-xs text-slate-500 mb-1 block">New password</label>
+            <input
+              type="password"
+              value={newAdminPass}
+              onChange={(e) => setNewAdminPass(e.target.value)}
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+            />
+          </div>
+          <div className="mb-4">
+            <label className="text-xs text-slate-500 mb-1 block">Confirm new password</label>
+            <input
+              type="password"
+              value={confirmAdminPass}
+              onChange={(e) => setConfirmAdminPass(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") changeAdminPassword();
+              }}
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+            />
+          </div>
+          {adminPassError && <div className="text-red-500 text-sm mb-3">{adminPassError}</div>}
+          {adminPassSuccess && <div className="text-green-700 text-sm mb-3 bg-green-50 rounded-lg px-3 py-2">Password changed successfully.</div>}
+          <button
+            onClick={changeAdminPassword}
+            disabled={adminPassSaving}
+            className="w-full py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+          >
+            {adminPassSaving ? "Saving..." : "Change password"}
+          </button>
         </div>
       )}
 
@@ -8430,14 +8540,15 @@ function StaffPortal({ onExit }) {
     })();
   }, []);
 
-  const login = () => {
+  const login = async () => {
     setLoginError("");
     const u = username.trim();
     if (!u || !password) return setLoginError("Enter your username and password");
 
     // Bootstrap: the original admin password always logs in as full admin,
     // so you're never locked out before creating proper staff accounts.
-    if (u.toLowerCase() === "admin" && password === CONFIG.adminPassword) {
+    const realAdminPassword = await getEffectiveAdminPassword();
+    if (u.toLowerCase() === "admin" && password === realAdminPassword) {
       setSession({ role: "admin", name: "Admin" });
       return;
     }
