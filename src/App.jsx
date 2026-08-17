@@ -10732,14 +10732,9 @@ export default function App() {
   // A reserved path that never maps to a real academy — the super admin's
   // own panel for registering new academies.
   const isSuperAdminRoute = academySlugFromPath() === "_admin";
-  // No slug at all (the bare root URL) — this is now the general
-  // "Swimming Academy Management" login gateway, not any one academy's
-  // page. Each academy's own public page lives at its own link, e.g.
-  // yoursite.com/boost-hub.
-  const isGatewayRoute = !isSuperAdminRoute && !academySlugFromPath();
 
   useEffect(() => {
-    if (isSuperAdminRoute || isGatewayRoute) return;
+    if (isSuperAdminRoute) return;
     resolveAcademy().then((academy) => {
       setAcademyStatus(academy ? "ready" : "not-found");
       if (academy) {
@@ -10760,20 +10755,12 @@ export default function App() {
         );
       }
     });
-  }, [isSuperAdminRoute, isGatewayRoute]);
+  }, [isSuperAdminRoute]);
 
   if (isSuperAdminRoute) {
     return (
       <ErrorBoundary>
         <SuperAdminView />
-      </ErrorBoundary>
-    );
-  }
-
-  if (isGatewayRoute) {
-    return (
-      <ErrorBoundary>
-        <GatewayView />
       </ErrorBoundary>
     );
   }
