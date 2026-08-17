@@ -1,12 +1,32 @@
-self.addEventListener("install", () => { self.skipWaiting(); });
-self.addEventListener("activate", (event) => {
+// Service worker — only handles push notifications (show one when it
+// arrives, and focus/open the app when the person taps it). No offline
+// caching here; that's a separate concern this app doesn't need.
+self.addEventListener("push", (event) => {
+  let data = { title: "New message", body: "You have a new message", url: "/" };
+  try {
+    if (event.data) data = { ...data, ...event.data.json() };
+  } catch (e) {
+    // non-JSON payload — fall back to the defaults above
+  }
   event.waitUntil(
-    (async () => {
-      const keys = await caches.keys();
-      await Promise.all(keys.map((k) => caches.delete(k)));
-      await self.registration.unregister();
-      const clientsList = await self.clients.matchAll({ type: "window" });
-      clientsList.forEach((client) => client.navigate(client.url));
-    })()
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: data.icon || "/favicon.ico",
+      badge: data.icon || "/favicon.ico",
+      data: { url: data.url || "/" },
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = event.notification.data?.url || "/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if (client.url.includes(self.location.origin) && "focus" in client) return client.focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(url);
+    })
   );
 });
