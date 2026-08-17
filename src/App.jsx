@@ -4590,44 +4590,45 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         </div>
       </div>
 
-      {/* main tabs */}
-      <div className="flex gap-2 mb-6 border-b border-slate-200 overflow-x-auto">
+      {/* main tabs — vertical sidebar on the left, content on the right (stacks on narrow/mobile screens) */}
+      <div className="flex flex-col sm:flex-row gap-6 items-start">
+      <div className="w-full sm:w-52 shrink-0 flex flex-row sm:flex-col gap-0.5 overflow-x-auto sm:overflow-visible pb-1 sm:pb-0">
         <button
           onClick={() => setTab("requests")}
-          className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
-            tab === "requests" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
+          className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+            tab === "requests" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
           }`}
         >
           <Bell className="w-4 h-4" /> Payment requests
         </button>
         <button
           onClick={() => setTab("swimmers")}
-          className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
-            tab === "swimmers" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
+          className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+            tab === "swimmers" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
           }`}
         >
           <Users className="w-4 h-4" /> Swimmers
         </button>
         <button
           onClick={() => setTab("coaches")}
-          className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
-            tab === "coaches" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
+          className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+            tab === "coaches" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
           }`}
         >
           <Award className="w-4 h-4" /> Coaches
         </button>
         <button
           onClick={() => setTab("schedule")}
-          className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
-            tab === "schedule" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
+          className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+            tab === "schedule" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
           }`}
         >
           <CalendarDays className="w-4 h-4" /> Schedule
         </button>
         <button
           onClick={() => setTab("reports")}
-          className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
-            tab === "reports" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
+          className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+            tab === "reports" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
           }`}
         >
           <CalendarCheck className="w-4 h-4" /> Reports
@@ -4635,8 +4636,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         {canEditContent && (
           <button
             onClick={() => setTab("achievements")}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
-              tab === "achievements" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+              tab === "achievements" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             }`}
           >
             <Star className="w-4 h-4" /> Achievements
@@ -4645,8 +4646,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         {canEdit && (
           <button
             onClick={() => setTab("skills")}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
-              tab === "skills" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+              tab === "skills" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             }`}
           >
             <Award className="w-4 h-4" /> Skills
@@ -4655,8 +4656,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         {canViewPayroll && (
           <button
             onClick={() => setTab("attendance")}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
-              tab === "attendance" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+              tab === "attendance" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             }`}
           >
             <Clock className="w-4 h-4" /> Attendance
@@ -4665,8 +4666,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         {canEdit && (
           <button
             onClick={() => setTab("accounts")}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
-              tab === "accounts" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+              tab === "accounts" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             }`}
           >
             <Lock className="w-4 h-4" /> Accounts
@@ -4675,8 +4676,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         {canEdit && (
           <button
             onClick={() => setTab("activity")}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
-              tab === "activity" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+              tab === "activity" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             }`}
           >
             <Clock className="w-4 h-4" /> Activity Log
@@ -4685,8 +4686,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         {role === "admin" && (
           <button
             onClick={() => setTab("password")}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
-              tab === "password" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+              tab === "password" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             }`}
           >
             <Lock className="w-4 h-4" /> Password
@@ -4695,8 +4696,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         {canEdit && (
           <button
             onClick={() => setTab("settings")}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
-              tab === "settings" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+              tab === "settings" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             }`}
           >
             <ShieldCheck className="w-4 h-4" /> Settings
@@ -4705,14 +4706,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         {(accountName || role === "admin") && (
           <button
             onClick={() => setTab("chat")}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
-              tab === "chat" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+              tab === "chat" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             }`}
           >
             <Send className="w-4 h-4" /> Chat
           </button>
         )}
       </div>
+
+      <div className="flex-1 min-w-0">
 
       {tab === "requests" && (
         <div>
@@ -7043,6 +7046,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           )}
         </div>
       )}
+
+      </div>
+      </div>
 
       {confirmAction && (
         <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 px-4" onClick={() => setConfirmAction(null)}>
