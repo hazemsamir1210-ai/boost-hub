@@ -601,7 +601,120 @@ async function setAdminPasswordOverride(newPassword) {
    and any save right after that can fail with "Couldn't save...".
    Instead, each data type now lives as a single array under one key, so
    loading or saving a whole collection is exactly one storage call. */
-const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all" };
+const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all" };
+
+// Private staff-to-staff messages — every message lives in one shared
+// list; a "conversation" between two people is just every message where
+// they're the sender or the recipient, threaded together in the UI.
+async function sendStaffMessage(senderName, senderRole, recipientName, text) {
+  const all = await loadCollection(STORE_KEYS.messages);
+  all.push({ id: genId(), senderName, senderRole, recipientName, text, read: false, createdAt: new Date().toISOString() });
+  await saveCollection(STORE_KEYS.messages, all);
+  return all;
+}
+
+async function markMessagesRead(myName, otherName) {
+  const all = await loadCollection(STORE_KEYS.messages);
+  let changed = false;
+  const next = all.map((m) => {
+    if (m.recipientName === myName && m.senderName === otherName && !m.read) {
+      changed = true;
+      return { ...m, read: true };
+    }
+    return m;
+  });
+  if (changed) await saveCollection(STORE_KEYS.messages, next);
+  return next;
+}
+
+// ---- Push notifications for chat (works even with the browser fully
+// closed) ----
+// This public key has no secret value — it's meant to ship in the
+// bundle. The matching private key lives only in the Vercel serverless
+// function's environment variables, never in this file.
+const VAPID_PUBLIC_KEY = "BNjnAUi85ypT-Jc211NkI69eB-R0BvZJlxbPZt2QmiJuJLV-lLwqm6uqXvsq-l-32xku9VO8aGf64L24uF_mCtc";
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+}
+
+// Registers the service worker, asks the browser for notification
+// permission, subscribes to push, and saves the subscription against
+// this account so other people's messages can reach them later — even
+// with the tab or browser fully closed. Call this from a real button
+// tap (permission prompts need a user gesture); safe to call again on
+// an already-subscribed device, it just re-saves the same subscription.
+async function subscribeToPushNotifications(accountName) {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    throw new Error("This browser doesn't support push notifications");
+  }
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") throw new Error("Notification permission was not granted");
+
+  const registration = await navigator.serviceWorker.register("/sw.js");
+  await navigator.serviceWorker.ready;
+  let subscription = await registration.pushManager.getSubscription();
+  if (!subscription) {
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+    });
+  }
+  if (!window.__academy) throw new Error("No academy selected");
+  const { error } = await supabase.from("push_subscriptions").insert({
+    academy_id: window.__academy.id,
+    account_name: accountName,
+    subscription: subscription.toJSON(),
+  });
+  if (error) throw error;
+  return subscription;
+}
+
+async function isPushSubscribed() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return false;
+  const registration = await navigator.serviceWorker.getRegistration("/sw.js");
+  if (!registration) return false;
+  const subscription = await registration.pushManager.getSubscription();
+  return !!subscription;
+}
+
+// Sends a push notification to every device a given account has ever
+// subscribed on. Fire-and-forget — a failed or missing subscription
+// should never block sending the actual chat message.
+async function notifyAccountByPush(recipientName, { title, body, url }) {
+  if (!window.__academy) return;
+  try {
+    const { data, error } = await supabase
+      .from("push_subscriptions")
+      .select("id, subscription")
+      .eq("academy_id", window.__academy.id)
+      .eq("account_name", recipientName);
+    if (error || !data) return;
+    await Promise.all(
+      data.map(async (row) => {
+        try {
+          const res = await fetch("/api/send-push", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ subscription: row.subscription, title, body, url, icon: CONFIG.logoDataUri }),
+          });
+          if (res.status === 410) {
+            // Subscription is dead (permissions revoked, browser data
+            // cleared) — clean it up so we stop trying it every time.
+            await supabase.from("push_subscriptions").delete().eq("id", row.id);
+          }
+        } catch (e) {
+          // one device failing to notify shouldn't affect the others
+        }
+      })
+    );
+  } catch (e) {
+    // never let a notification failure interrupt the actual chat send
+  }
+}
 
 // Records who did what, when — a simple audit trail so it's always
 // possible to tell who made a given change. Keeps only the most recent
@@ -3390,7 +3503,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   }, []);
 
   const loadAccounts = useCallback(async () => {
-    if (!canEdit && !canViewPayroll) return;
+    // Chat needs the account list too (to know who else to message), so
+    // it's allowed through even without payroll/edit access.
+    if (!canEdit && !canViewPayroll && tab !== "chat") return;
     setAccountsLoading(true);
     try {
       const items = await loadCollection(STORE_KEYS.accounts);
@@ -3400,7 +3515,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     } finally {
       setAccountsLoading(false);
     }
-  }, [role]);
+  }, [role, tab, canEdit, canViewPayroll]);
 
   const loadAchievements = useCallback(async () => {
     setAchievementsLoading(true);
@@ -4585,6 +4700,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             }`}
           >
             <ShieldCheck className="w-4 h-4" /> Settings
+          </button>
+        )}
+        {(accountName || role === "admin") && (
+          <button
+            onClick={() => setTab("chat")}
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition whitespace-nowrap ${
+              tab === "chat" ? "border-blue-950 text-blue-950" : "border-transparent text-slate-400 hover:text-slate-600"
+            }`}
+          >
+            <Send className="w-4 h-4" /> Chat
           </button>
         )}
       </div>
@@ -6743,6 +6868,21 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         </div>
       )}
 
+      {tab === "chat" && (accountName || role === "admin") && (
+        <div>
+          <h3 className="font-bold text-slate-900 mb-1">Staff chat</h3>
+          <p className="text-sm text-slate-500 mb-4">Private messages between you and other staff accounts.</p>
+          <ChatPanel
+            myName={accountName || "Admin"}
+            myRole={role}
+            contacts={[
+              ...(role !== "admin" ? [{ name: "Admin", role: "admin" }] : []),
+              ...accounts.filter((a) => a.name !== (accountName || "Admin")).map((a) => ({ name: a.name, role: a.role })),
+            ]}
+          />
+        </div>
+      )}
+
       {tab === "password" && role === "admin" && (
         <div className="max-w-sm">
           <h3 className="font-bold text-slate-900 mb-1">Change admin password</h3>
@@ -7884,6 +8024,170 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
 /* Renders the fixed staff check-in code as an actual QR image, ready to
    screenshot or print and hang by the door. Generated client-side with
    the qrcode package. */
+/* Private staff-to-staff messaging — a contact list on the left (or top,
+   on narrow screens) and a conversation thread on the right. Reused as-is
+   across AdminView and StaffView; each just passes in who's logged in and
+   who they're allowed to message. */
+function ChatPanel({ myName, myRole, contacts }) {
+  const [messages, setMessages] = useState([]);
+  const [selected, setSelected] = useState(null); // contact name
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [pushSubscribed, setPushSubscribed] = useState(null); // null = still checking, true/false once known
+  const [pushError, setPushError] = useState("");
+  const [pushSubscribing, setPushSubscribing] = useState(false);
+
+  useEffect(() => {
+    isPushSubscribed().then(setPushSubscribed);
+  }, []);
+
+  const enableNotifications = async () => {
+    setPushError("");
+    setPushSubscribing(true);
+    try {
+      await subscribeToPushNotifications(myName);
+      setPushSubscribed(true);
+    } catch (e) {
+      setPushError(e?.message || "Could not enable notifications");
+    } finally {
+      setPushSubscribing(false);
+    }
+  };
+
+  const loadMessages = useCallback(async () => {
+    const all = await loadCollection(STORE_KEYS.messages);
+    setMessages(all.filter((m) => m.senderName === myName || m.recipientName === myName));
+  }, [myName]);
+
+  useEffect(() => {
+    loadMessages();
+    const t = setInterval(loadMessages, 8000);
+    return () => clearInterval(t);
+  }, [loadMessages]);
+
+  useEffect(() => {
+    if (selected) markMessagesRead(myName, selected).then(() => loadMessages());
+  }, [selected, myName, loadMessages]);
+
+  const conversationWith = (name) =>
+    messages
+      .filter((m) => m.senderName === name || m.recipientName === name)
+      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+  const unreadFrom = (name) => messages.filter((m) => m.senderName === name && m.recipientName === myName && !m.read).length;
+
+  const lastMessageWith = (name) => {
+    const conv = conversationWith(name);
+    return conv.length ? conv[conv.length - 1] : null;
+  };
+
+  const send = async () => {
+    if (!draft.trim() || !selected) return;
+    setSending(true);
+    const text = draft.trim();
+    try {
+      await sendStaffMessage(myName, myRole, selected, text);
+      notifyAccountByPush(selected, { title: myName, body: text, url: "/" }); // fire-and-forget, never blocks sending
+      setDraft("");
+      loadMessages();
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div>
+      {pushSubscribed === false && (
+        <div className="flex items-center justify-between gap-3 bg-blue-50 text-blue-900 text-sm rounded-xl px-4 py-2.5 mb-3">
+          <span>Turn on notifications to hear about new messages even when this tab is closed.</span>
+          <button
+            onClick={enableNotifications}
+            disabled={pushSubscribing}
+            className="px-3 py-1.5 rounded-full bg-blue-950 text-white text-xs font-semibold hover:bg-blue-900 disabled:opacity-60 whitespace-nowrap"
+          >
+            {pushSubscribing ? "Enabling..." : "Enable notifications"}
+          </button>
+        </div>
+      )}
+      {pushError && <div className="text-red-500 text-xs mb-2">{pushError}</div>}
+      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden" style={{ minHeight: 420 }}>
+      <div className="grid sm:grid-cols-[220px_1fr] h-full">
+        <div className="border-b sm:border-b-0 sm:border-r border-slate-100">
+          {contacts.length === 0 ? (
+            <div className="p-4 text-sm text-slate-400">No other staff accounts yet.</div>
+          ) : (
+            contacts.map((c) => {
+              const unread = unreadFrom(c.name);
+              const last = lastMessageWith(c.name);
+              return (
+                <button
+                  key={c.name}
+                  onClick={() => setSelected(c.name)}
+                  className={`w-full text-left px-4 py-3 border-b border-slate-50 hover:bg-slate-50 transition ${
+                    selected === c.name ? "bg-blue-50" : ""
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-slate-800">{c.name}</span>
+                    {unread > 0 && <span className="text-[10px] bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center">{unread}</span>}
+                  </div>
+                  {last && <div className="text-xs text-slate-400 truncate mt-0.5">{last.senderName === myName ? "You: " : ""}{last.text}</div>}
+                </button>
+              );
+            })
+          )}
+        </div>
+        <div className="flex flex-col">
+          {!selected ? (
+            <div className="flex-1 flex items-center justify-center text-sm text-slate-400 p-6 text-center">
+              Pick someone on the left to start or continue a conversation.
+            </div>
+          ) : (
+            <>
+              <div className="px-4 py-3 border-b border-slate-100 font-semibold text-slate-800 text-sm">{selected}</div>
+              <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2" style={{ maxHeight: 320 }}>
+                {conversationWith(selected).map((m) => (
+                  <div key={m.id} className={`flex ${m.senderName === myName ? "justify-end" : "justify-start"}`}>
+                    <div
+                      className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm ${
+                        m.senderName === myName ? "bg-blue-950 text-white" : "bg-slate-100 text-slate-700"
+                      }`}
+                    >
+                      {m.text}
+                      <div className={`text-[10px] mt-1 ${m.senderName === myName ? "text-blue-200" : "text-slate-400"}`}>
+                        {new Date(m.createdAt).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="p-3 border-t border-slate-100 flex gap-2">
+                <input
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") send();
+                  }}
+                  placeholder="Type a message..."
+                  className="flex-1 border border-slate-200 rounded-full py-2 px-4 text-sm outline-none focus:border-blue-900"
+                />
+                <button
+                  onClick={send}
+                  disabled={sending || !draft.trim()}
+                  className="px-4 py-2 rounded-full bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-50"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+      </div>
+    </div>
+  );
+}
+
 function QRPosterModal({ onClose }) {
   const canvasRef = useRef(null);
 
@@ -8005,6 +8309,12 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   const [checkingInOut, setCheckingInOut] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanMessage, setScanMessage] = useState("");
+  const [chatOpen, setChatOpen] = useState(false);
+  const [staffAccounts, setStaffAccounts] = useState([]);
+
+  useEffect(() => {
+    if (chatOpen) loadCollection(STORE_KEYS.accounts).then(setStaffAccounts);
+  }, [chatOpen]);
 
   useEffect(() => {
     if (!authed || !accountName) return;
@@ -8259,9 +8569,14 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
           <h2 className="text-xl font-bold text-slate-900">Today's session</h2>
           {accountName && <div className="text-xs text-slate-400">{accountName}</div>}
         </div>
-        <button onClick={onExit} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
-          <LogOut className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button onClick={() => setChatOpen(true)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+            <Send className="w-4 h-4" />
+          </button>
+          <button onClick={onExit} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
       </div>
       <div className="text-sm text-slate-400 mb-3">{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</div>
 
@@ -8288,6 +8603,24 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
       )}
 
       {scannerOpen && <QRScanner onScan={handleQRScan} onClose={() => setScannerOpen(false)} />}
+
+      {chatOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 px-4" onClick={() => setChatOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-bold text-slate-900">Staff chat</h3>
+              <button onClick={() => setChatOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <ChatPanel
+              myName={accountName}
+              myRole="technical"
+              contacts={[{ name: "Admin", role: "admin" }, ...staffAccounts.filter((a) => a.name !== accountName).map((a) => ({ name: a.name, role: a.role }))]}
+            />
+          </div>
+        </div>
+      )}
 
       {!todaysGroup && (
         <div className="mb-4 text-sm bg-amber-50 text-amber-700 rounded-lg px-4 py-2.5">
