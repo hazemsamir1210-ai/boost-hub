@@ -99,7 +99,10 @@ async function resolveAcademy() {
   if (data.logo_data_uri) CONFIG.logoDataUri = data.logo_data_uri;
   if (data.instapay_handle) CONFIG.instapayHandle = data.instapay_handle;
   if (data.instapay_phone) CONFIG.instapayPhone = data.instapay_phone;
-  if (data.hero_data_uri) CONFIG.heroPhotos = [data.hero_data_uri];
+  // Note: hero photos are NOT read from here anymore — the Settings tab's
+  // homepage content (loaded separately, see loadHomepageContent) is the
+  // one source of truth for those now, so there's no longer a legacy
+  // value that could race with it and cause a visible flash on load.
   return window.__academy;
 }
 
@@ -10726,7 +10729,6 @@ export default function App() {
   const [renewSwimmer, setRenewSwimmer] = useState(null);
   const [lastRecord, setLastRecord] = useState(null);
   const [academyStatus, setAcademyStatus] = useState("loading"); // "loading" | "ready" | "not-found"
-  const [contentVersion, setContentVersion] = useState(0); // bumped once homepage/programs content finishes loading, to force HomeView to re-render with it
 
   // A reserved path that never maps to a real academy — the super admin's
   // own panel for registering new academies.
@@ -10735,24 +10737,24 @@ export default function App() {
   useEffect(() => {
     if (isSuperAdminRoute) return;
     resolveAcademy().then((academy) => {
-      setAcademyStatus(academy ? "ready" : "not-found");
-      if (academy) {
-        // Applies any saved skill-list customizations on top of the
-        // built-in defaults, once per page load — every view (admin,
-        // staff, coach, parent) reads from the same LEVEL_SKILLS object,
-        // so this one load covers all of them.
-        loadCustomLevelSkills().then(applyCustomLevelSkills);
-        // Same idea for the day/time slot options.
-        loadCustomTimeSlots().then(applyCustomTimeSlots);
-        // Same idea for the public homepage's hero text/photos and the
-        // "Our Programs" section content — these mutate module-level
-        // variables that HomeView reads directly (not React state), so a
-        // version bump afterwards is what actually gets HomeView to
-        // re-render with the loaded values instead of staying on defaults.
-        Promise.all([loadHomepageContent().then(applyHomepageContent), loadCustomPrograms().then(applyCustomPrograms)]).then(() =>
-          setContentVersion((v) => v + 1)
-        );
+      if (!academy) {
+        setAcademyStatus("not-found");
+        return;
       }
+      // Wait for every customization (skills, time slots, hero text/photos,
+      // programs) to finish loading before marking the academy "ready" —
+      // that's what HomeView's first render actually uses, so waiting here
+      // means it only ever renders once, with the real final content.
+      // Setting "ready" earlier and patching things in afterwards is what
+      // used to cause a visible flash (default photo, then the real one).
+      Promise.all([
+        loadCustomLevelSkills().then(applyCustomLevelSkills),
+        loadCustomTimeSlots().then(applyCustomTimeSlots),
+        loadHomepageContent().then(applyHomepageContent),
+        loadCustomPrograms().then(applyCustomPrograms),
+      ]).then(() => {
+        setAcademyStatus("ready");
+      });
     });
   }, [isSuperAdminRoute]);
 
@@ -10798,7 +10800,6 @@ export default function App() {
 
       {view === "home" && (
         <HomeView
-          key={contentVersion}
           onChoosePlan={(id) => { setChosenPlan(id); setView("subscribe"); }}
           onAdmin={() => setView("admin")}
           onStaff={() => setView("staff")}
