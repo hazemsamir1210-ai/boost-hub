@@ -165,7 +165,7 @@ window.storage = {
    Academy settings — edit these values easily
    ============================================================ */
 const CONFIG = {
-  academyName: "BOOST_HUB EL - ALSSON Branch ( New Giza )",
+  academyName: "Swim Junior",
   logoDataUri: "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%22200%22%20height%3D%22200%22%3E%3Crect%20width%3D%22200%22%20height%3D%22200%22%20fill%3D%22%230b1e4a%22/%3E%3Ctext%20x%3D%22100%22%20y%3D%22115%22%20font-family%3D%22sans-serif%22%20font-size%3D%2260%22%20text-anchor%3D%22middle%22%3E%F0%9F%8F%8A%3C/text%3E%3C/svg%3E", // academy logo
   instapayHandle: "mahfathy.aaib@instapay", // your Instapay handle
   instapayLink: "https://ipn.eg/S/mahfathy.aaib/instapay/74AH24", // opens the Instapay app directly
@@ -362,10 +362,36 @@ const DAY_GROUPS = [
 // session's specific date belongs in.
 const DAY_GROUP_WEEKDAYS_LOOKUP = { "sun-tue": [0, 2], "mon-wed": [1, 3], "fri-sat": [5, 6] };
 
-/* The academy's two locations */
-const BRANCHES = [
-  { id: "elalsson", name: "EL-ALSSON Branch (New Giza)" },
+/* The academy's branch(es). This starts out as a single default branch —
+   the "Settings" tab lets the academy rename it and add more branches
+   later if they ever expand, saved to storage and merged in on load. The
+   original branch keeps its internal id ("elalsson") even if renamed, so
+   existing swimmers/coaches/time-slot data already tagged with that id
+   stays correctly linked — only the display name changes. */
+let BRANCHES = [
+  { id: "elalsson", name: "Main Branch" },
 ];
+const DEFAULT_BRANCHES = JSON.parse(JSON.stringify(BRANCHES));
+const BRANCHES_KEY = "branches-custom";
+
+async function loadCustomBranches() {
+  const res = await window.storage.get(BRANCHES_KEY);
+  if (!res) return null;
+  try {
+    const parsed = JSON.parse(res.value);
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function saveCustomBranches(list) {
+  return storageSet(BRANCHES_KEY, JSON.stringify(list));
+}
+
+function applyCustomBranches(list) {
+  BRANCHES = list && list.length > 0 ? list : DEFAULT_BRANCHES;
+}
 
 /* Available start times per branch + day group. This starts out as the
    built-in default — the "Settings" tab in the admin dashboard lets the
@@ -2807,6 +2833,48 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     const next = { ...customTimeSlots };
     delete next[dayId];
     saveTimeSlotsFor(next);
+  };
+
+  // ---- Settings tab: manage branches ----
+  const [branchesDraft, setBranchesDraft] = useState([]);
+  const [newBranchName, setNewBranchName] = useState("");
+  const [branchesSaving, setBranchesSaving] = useState(false);
+
+  useEffect(() => {
+    if (tab === "settings") setBranchesDraft(BRANCHES);
+  }, [tab]);
+
+  const saveBranches = async (next) => {
+    setBranchesSaving(true);
+    try {
+      await saveCustomBranches(next);
+      applyCustomBranches(next);
+      setBranchesDraft(next);
+      logActivity(accountName, role, "Updated branches", "");
+    } finally {
+      setBranchesSaving(false);
+    }
+  };
+
+  const renameBranch = (id, name) => {
+    setBranchesDraft((prev) => prev.map((b) => (b.id === id ? { ...b, name } : b)));
+  };
+
+  const commitBranchRename = () => saveBranches(branchesDraft);
+
+  const addBranch = () => {
+    const name = newBranchName.trim();
+    if (!name) return;
+    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || genId();
+    if (branchesDraft.some((b) => b.id === id)) return; // avoid duplicate ids
+    const next = [...branchesDraft, { id, name }];
+    setNewBranchName("");
+    saveBranches(next);
+  };
+
+  const removeBranch = (id) => {
+    if (branchesDraft.length <= 1) return; // always keep at least one
+    saveBranches(branchesDraft.filter((b) => b.id !== id));
   };
 
   // ---- Settings tab: public homepage content (hero + programs) ----
@@ -6735,6 +6803,54 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           </div>
 
           <div>
+            <h3 className="font-bold text-slate-900 mb-1">Branches</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              You're on one branch right now — this is here so you can add more later if the academy expands. A new branch won't have
+              its own schedule/time slots set up automatically; you'd still manage those from the "Day & time slots" section above.
+            </p>
+            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <div className="space-y-2 mb-4">
+                {branchesDraft.map((b) => (
+                  <div key={b.id} className="flex items-center gap-2">
+                    <input
+                      value={b.name}
+                      onChange={(e) => renameBranch(b.id, e.target.value)}
+                      onBlur={commitBranchRename}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitBranchRename();
+                      }}
+                      className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                    />
+                    {branchesDraft.length > 1 && (
+                      <button onClick={() => removeBranch(b.id)} className="p-2 text-slate-300 hover:text-red-500">
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={newBranchName}
+                  onChange={(e) => setNewBranchName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") addBranch();
+                  }}
+                  placeholder="New branch name"
+                  className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                />
+                <button
+                  onClick={addBranch}
+                  disabled={branchesSaving || !newBranchName.trim()}
+                  className="px-4 py-2 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200 disabled:opacity-50"
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div>
             <h3 className="font-bold text-slate-900 mb-1">Public homepage — hero section</h3>
             <p className="text-sm text-slate-500 mb-4">The banner text and big background photos at the top of your public page.</p>
             <div className="bg-white rounded-2xl border border-slate-200 p-5">
@@ -9499,7 +9615,18 @@ function StaffPortal({ onExit }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState("");
-  const [session, setSession] = useState(null); // { role, name, coach? }
+  // Restored from localStorage on load, if a previous login left one there —
+  // this is what keeps someone logged in after their browser tab gets
+  // suspended/reloaded (switching apps on mobile, etc.), instead of having
+  // to log in again every single time.
+  const [session, setSession] = useState(() => {
+    try {
+      const saved = localStorage.getItem("swim_staff_session");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
 
   useEffect(() => {
     (async () => {
@@ -9508,6 +9635,22 @@ function StaffPortal({ onExit }) {
       setCoaches(coachItems);
     })();
   }, []);
+
+  const setSessionAndPersist = (next) => {
+    setSession(next);
+    try {
+      if (next) localStorage.setItem("swim_staff_session", JSON.stringify(next));
+      else localStorage.removeItem("swim_staff_session");
+    } catch {
+      // localStorage can fail (private browsing, storage full) — the
+      // session still works for this tab, it just won't survive a reload
+    }
+  };
+
+  const handleExit = () => {
+    setSessionAndPersist(null);
+    onExit();
+  };
 
   const login = async () => {
     setLoginError("");
@@ -9518,7 +9661,7 @@ function StaffPortal({ onExit }) {
     // so you're never locked out before creating proper staff accounts.
     const realAdminPassword = await getEffectiveAdminPassword();
     if (u.toLowerCase() === "admin" && password === realAdminPassword) {
-      setSession({ role: "admin", name: "Admin" });
+      setSessionAndPersist({ role: "admin", name: "Admin" });
       return;
     }
     const acct = accounts.find((a) => a.username.toLowerCase() === u.toLowerCase() && a.password === password);
@@ -9526,10 +9669,10 @@ function StaffPortal({ onExit }) {
     if (acct.role === "coach") {
       const coach = coaches.find((c) => c.id === acct.linkedCoachId);
       if (!coach) return setLoginError("This account isn't linked to a coach anymore — ask an admin to fix it");
-      setSession({ role: "coach", name: acct.name, coach });
+      setSessionAndPersist({ role: "coach", name: acct.name, coach });
       return;
     }
-    setSession({ role: acct.role, name: acct.name, levelRestriction: acct.levelRestriction || null });
+    setSessionAndPersist({ role: acct.role, name: acct.name, levelRestriction: acct.levelRestriction || null });
   };
 
   if (!session) {
@@ -9570,14 +9713,14 @@ function StaffPortal({ onExit }) {
   }
 
   if (session.role === "technical") {
-    return <StaffView accountName={session.name} levelRestriction={session.levelRestriction} preAuthed onExit={onExit} />;
+    return <StaffView accountName={session.name} levelRestriction={session.levelRestriction} preAuthed onExit={handleExit} />;
   }
 
   if (session.role === "coach") {
-    return <CoachView preAuthedCoach={session.coach} onExit={onExit} />;
+    return <CoachView preAuthedCoach={session.coach} onExit={handleExit} />;
   }
 
-  return <AdminView role={session.role} preAuthed accountName={session.name} onExit={onExit} />;
+  return <AdminView role={session.role} preAuthed accountName={session.name} onExit={handleExit} />;
 }
 
 /* ============================================================
@@ -10752,6 +10895,7 @@ export default function App() {
         loadCustomTimeSlots().then(applyCustomTimeSlots),
         loadHomepageContent().then(applyHomepageContent),
         loadCustomPrograms().then(applyCustomPrograms),
+        loadCustomBranches().then(applyCustomBranches),
       ]).then(() => {
         setAcademyStatus("ready");
       });
