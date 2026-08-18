@@ -694,24 +694,25 @@ async function printCertificate({ swimmerName, level, date }) {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Certificate</title>
 ${fontImport}
 <style>
-  @page { size: landscape; margin: 0; }
+  @page { size: A4 landscape; margin: 0; }
+  html, body { width: 297mm; height: 210mm; }
   body { font-family: ${fontChoice.body}; color: #1e293b; padding: 0; margin: 0; background: #e2e8f0; }
-  .cert { border: 10px solid ${color}; margin: 24px auto; padding: 40px 64px; text-align: center; box-sizing: border-box; position: relative; width: 900px; height: 560px; display: flex; flex-direction: column; justify-content: center; background: white; }
-  .cert::before { content: ""; position: absolute; inset: 14px; border: 1px solid #cbd5e1; pointer-events: none; }
-  .header img { width: 56px; height: 56px; object-fit: contain; margin-bottom: 4px; }
-  .academy { font-size: 14px; letter-spacing: 1px; text-transform: uppercase; color: #64748b; font-family: ${fontChoice.ui}; }
-  .title { font-size: 32px; font-weight: 700; color: ${color}; margin: 20px 0 4px; letter-spacing: 1px; }
-  .subtitle { font-size: 13px; color: #64748b; font-family: ${fontChoice.ui}; margin-bottom: 18px; }
-  .name { font-size: 28px; font-weight: 700; color: ${color}; margin: 10px 0; border-bottom: 2px solid #cbd5e1; display: inline-block; padding: 0 20px 6px; }
-  .desc { font-size: 15px; color: #334155; margin: 16px auto 0; max-width: 560px; line-height: 1.6; font-family: ${fontChoice.ui}; }
+  .cert { border: 6mm solid ${color}; margin: 0 auto; padding: 12mm 20mm; text-align: center; box-sizing: border-box; position: relative; width: 297mm; height: 210mm; display: flex; flex-direction: column; justify-content: center; background: white; }
+  .cert::before { content: ""; position: absolute; inset: 5mm; border: 0.5mm solid #cbd5e1; pointer-events: none; }
+  .header img { width: 20mm; height: 20mm; object-fit: contain; margin-bottom: 2mm; }
+  .academy { font-size: 4.2mm; letter-spacing: 1px; text-transform: uppercase; color: #64748b; font-family: ${fontChoice.ui}; }
+  .title { font-size: 10mm; font-weight: 700; color: ${color}; margin: 6mm 0 2mm; letter-spacing: 1px; }
+  .subtitle { font-size: 4mm; color: #64748b; font-family: ${fontChoice.ui}; margin-bottom: 5mm; }
+  .name { font-size: 9mm; font-weight: 700; color: ${color}; margin: 3mm 0; border-bottom: 0.6mm solid #cbd5e1; display: inline-block; padding: 0 8mm 2mm; }
+  .desc { font-size: 4.6mm; color: #334155; margin: 5mm auto 0; max-width: 180mm; line-height: 1.6; font-family: ${fontChoice.ui}; }
   .level { font-weight: 700; color: ${color}; }
-  .footer { margin-top: 32px; display: flex; justify-content: space-between; align-items: flex-end; padding: 0 30px; font-family: ${fontChoice.ui}; }
-  .footer .block { text-align: center; font-size: 11px; color: #64748b; }
-  .footer .block img { max-width: 120px; max-height: 50px; object-fit: contain; display: block; margin: 0 auto 4px; }
-  .footer .line { border-top: 1px solid #94a3b8; padding-top: 4px; min-width: 150px; }
+  .footer { margin-top: 10mm; display: flex; justify-content: space-between; align-items: flex-end; padding: 0 10mm; font-family: ${fontChoice.ui}; }
+  .footer .block { text-align: center; font-size: 3.4mm; color: #64748b; }
+  .footer .block img { max-width: 36mm; max-height: 15mm; object-fit: contain; display: block; margin: 0 auto 1mm; }
+  .footer .line { border-top: 0.4mm solid #94a3b8; padding-top: 1mm; min-width: 45mm; }
   @media print {
     body { background: white; }
-    .cert { margin: 0 auto; box-shadow: none; }
+    .cert { margin: 0; box-shadow: none; }
   }
 </style></head><body>
   <div class="cert">
