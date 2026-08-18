@@ -589,6 +589,84 @@ function downloadReportHTML(filename, bodyHtml) {
 /* An official-looking payment receipt, one per confirmed payment — same
    download-then-print-dialog mechanism as downloadReportHTML above, just
    with its own receipt-shaped layout instead of a report layout. */
+/* A printable copy of a swimmer's registration/waiver — for when someone
+   needs proof the parent agreed to it (e.g. after an incident). Reuses
+   the same download-then-print approach as the other print functions. */
+function printWaiverConfirmation({ swimmerName, age, parentName, phone, acceptedAt }) {
+  const field = (label, value) => `
+    <div class="field">
+      <div class="field-label">${escapeHtml(label)}</div>
+      <div class="field-value">${value ? escapeHtml(String(value)) : "&nbsp;"}</div>
+    </div>`;
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Registration Form</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: #1e293b; padding: 40px; max-width: 620px; margin: 0 auto; }
+  .header { display: flex; align-items: center; gap: 14px; border-bottom: 3px solid #0b1e3a; padding-bottom: 16px; margin-bottom: 24px; }
+  .header img { width: 52px; height: 52px; object-fit: contain; }
+  .header h1 { font-size: 16px; margin: 0; color: #0b1e3a; }
+  .header .sub { font-size: 12px; color: #94a3b8; margin-top: 2px; }
+  .title { font-size: 22px; font-weight: 700; color: #0b1e3a; margin-bottom: 4px; }
+  .form-id { font-size: 11px; color: #94a3b8; margin-bottom: 24px; }
+  .section-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #0b1e3a; margin: 24px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #e2e8f0; }
+  .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 24px; }
+  .field-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; color: #94a3b8; margin-bottom: 3px; }
+  .field-value { font-size: 15px; font-weight: 600; color: #1e293b; border-bottom: 1.5px solid #cbd5e1; padding-bottom: 6px; min-height: 20px; }
+  .waiver-box { margin-top: 10px; padding: 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 11.5px; color: #475569; line-height: 1.7; }
+  .signoff { margin-top: 24px; display: flex; align-items: center; gap: 10px; padding: 14px 16px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px; }
+  .signoff .check { width: 22px; height: 22px; border-radius: 50%; background: #16a34a; color: white; display: flex; align-items: center; justify-content: center; font-size: 13px; flex-shrink: 0; }
+  .signoff .text { font-size: 12.5px; color: #166534; }
+  .signoff .text strong { display: block; font-size: 13px; }
+  .footer { margin-top: 28px; font-size: 10px; color: #cbd5e1; text-align: center; }
+  @media print { body { padding: 0; } }
+</style></head><body>
+  <div class="header">
+    <img src="${CONFIG.logoDataUri}" />
+    <div>
+      <h1>${escapeHtml(CONFIG.academyName)}</h1>
+      <div class="sub">New Swimmer Registration Form</div>
+    </div>
+  </div>
+
+  <div class="title">Registration Details</div>
+  <div class="form-id">Submitted electronically via the academy's registration form</div>
+
+  <div class="section-title">Swimmer Information</div>
+  <div class="fields">
+    ${field("Swimmer's Name", swimmerName)}
+    ${field("Age", age)}
+  </div>
+
+  <div class="section-title">Parent / Guardian Information</div>
+  <div class="fields">
+    ${field("Parent/Guardian Name", parentName)}
+    ${field("Phone Number", phone)}
+  </div>
+
+  <div class="section-title">Liability Waiver & Terms</div>
+  <div class="waiver-box">${escapeHtml(WAIVER_TEXT)}</div>
+
+  <div class="signoff">
+    <div class="check">✓</div>
+    <div class="text">
+      <strong>Waiver electronically accepted</strong>
+      By ${escapeHtml(parentName || "the parent/guardian")} on ${escapeHtml(new Date(acceptedAt).toLocaleString("en-GB", { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }))}
+    </div>
+  </div>
+
+  <div class="footer">${escapeHtml(CONFIG.academyName)} — Registration Form</div>
+<script>window.onload = () => setTimeout(() => window.print(), 300);</script>
+</body></html>`;
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `registration-form-${(swimmerName || "swimmer").replace(/[^a-zA-Z0-9أ-ي]/g, "-")}.html`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
 function printReceipt({ swimmerName, phone, planName, price, receiptNo, paymentMethod, date }) {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt</title>
 <style>
@@ -791,7 +869,13 @@ async function setAdminPasswordOverride(newPassword) {
    and any save right after that can fail with "Couldn't save...".
    Instead, each data type now lives as a single array under one key, so
    loading or saving a whole collection is exactly one storage call. */
-const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all" };
+const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all", incidents: "incidents-all", registrations: "registrations-all" };
+
+// The waiver text shown on the standalone "New swimmer registration" form —
+// separate from payment entirely. A parent fills this in once, an admin
+// approves it, and only then does the swimmer actually get created.
+const WAIVER_TEXT = "I confirm that I am the parent or legal guardian of the swimmer named above, and I give permission for them to participate in swimming lessons and related activities at this academy. I understand that swimming involves inherent risks, and I release the academy, its coaches, and staff from liability for any injury, unless caused by gross negligence. I confirm my child has no known medical condition that would prevent safe participation, or I have disclosed any such condition separately to the academy. I agree to be contacted regarding scheduling, payments, and my child's progress.";
+
 
 // Private staff-to-staff messages — every message lives in one shared
 // list; a "conversation" between two people is just every message where
@@ -2059,6 +2143,129 @@ function SuccessScreen({ record, onHome }) {
 /* ============================================================
    Subscribe & payment page
    ============================================================ */
+/* Standalone "new swimmer registration" — completely separate from payment.
+   A parent fills this in once (name, age, phone, waiver), it sits as
+   pending until an admin reviews and approves it, and only at that point
+   does an actual swimmer record get created. */
+function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
+  const [swimmerName, setSwimmerName] = useState("");
+  const [age, setAge] = useState("");
+  const [phone, setPhone] = useState("");
+  const [parentName, setParentName] = useState("");
+  const [waiverExpanded, setWaiverExpanded] = useState(false);
+  const [waiverAccepted, setWaiverAccepted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async () => {
+    setError("");
+    if (!swimmerName.trim()) return setError("Please enter the swimmer\'s name");
+    if (!/^01[0-2,5][0-9]{8}$/.test(phone.trim())) return setError("Please enter a valid phone number");
+    if (!waiverAccepted) return setError("Please read and accept the liability waiver to continue");
+
+    setSubmitting(true);
+    try {
+      const all = await loadCollection(STORE_KEYS.registrations);
+      const record = {
+        id: genId(),
+        swimmerName: swimmerName.trim(),
+        age: age ? Number(age) : null,
+        phone: phone.trim(),
+        parentName: parentName.trim(),
+        status: "pending",
+        waiverAccepted: true,
+        waiverAcceptedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      };
+      await saveCollection(STORE_KEYS.registrations, [record, ...all]);
+      onSubmitted();
+    } catch (e) {
+      setError("Something went wrong sending your registration, please try again");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="max-w-md mx-auto px-4 py-10">
+      <button onClick={onBack} className="flex items-center gap-1 text-slate-400 hover:text-slate-600 text-sm mb-6">
+        <ChevronLeft className="w-4 h-4" /> Back
+      </button>
+      <h2 className="text-xl font-bold text-slate-900 mb-1">New swimmer registration</h2>
+      <p className="text-sm text-slate-500 mb-6">Fill this in once to register — payment is a separate step afterward, once you\'re confirmed.</p>
+
+      <div className="space-y-4">
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Swimmer\'s name</label>
+          <input
+            value={swimmerName}
+            onChange={(e) => setSwimmerName(e.target.value)}
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900"
+          />
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Age</label>
+          <input
+            type="number"
+            min="0"
+            value={age}
+            onChange={(e) => setAge(e.target.value)}
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900"
+          />
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Parent/guardian name</label>
+          <input
+            value={parentName}
+            onChange={(e) => setParentName(e.target.value)}
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900"
+          />
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Phone number</label>
+          <input
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="01xxxxxxxxx"
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900"
+          />
+        </div>
+
+        <div className="bg-slate-50 rounded-xl p-3">
+          <button
+            type="button"
+            onClick={() => setWaiverExpanded((v) => !v)}
+            className="text-xs text-blue-900 hover:underline mb-2"
+          >
+            {waiverExpanded ? "Hide" : "Read"} liability waiver & terms
+          </button>
+          {waiverExpanded && <div className="text-xs text-slate-500 leading-relaxed mb-2 max-h-40 overflow-y-auto pr-1">{WAIVER_TEXT}</div>}
+          <label className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={waiverAccepted}
+              onChange={(e) => setWaiverAccepted(e.target.checked)}
+              className="w-4 h-4 mt-0.5 shrink-0"
+            />
+            I have read and agree to the liability waiver and terms above.
+          </label>
+        </div>
+
+        {error && <div className="text-red-500 text-sm">{error}</div>}
+
+        <button
+          onClick={submit}
+          disabled={submitting}
+          className="w-full py-3.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60 flex items-center justify-center gap-2"
+        >
+          {submitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+          {submitting ? "Sending..." : "Submit registration"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
   const [planId, setPlanId] = useState(initialPlanId || PLANS[0].id);
   const [name, setName] = useState(initialSwimmer?.name || "");
@@ -2943,6 +3150,191 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     setSettingsSignature(CONFIG.signatureDataUri || "");
     loadCustomTimeSlots().then((custom) => setCustomTimeSlots(custom?.[BRANCHES[0].id] || {}));
   }, [tab]);
+
+  const [backupRunning, setBackupRunning] = useState(false);
+
+  // ---- Incidents tab ----
+  // ---- Registrations tab (standalone waiver + intake, separate from payment) ----
+  const [pendingRegistrations, setPendingRegistrations] = useState([]);
+  const [registrationsLoading, setRegistrationsLoading] = useState(false);
+  const [registrationActing, setRegistrationActing] = useState(null); // id currently being approved/rejected
+
+  const loadRegistrations = useCallback(async () => {
+    setRegistrationsLoading(true);
+    try {
+      const items = await loadCollection(STORE_KEYS.registrations);
+      setPendingRegistrations(items.filter((r) => r.status === "pending").sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)));
+    } finally {
+      setRegistrationsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadRegistrations();
+    const t = setInterval(loadRegistrations, 20000);
+    return () => clearInterval(t);
+  }, [loadRegistrations]);
+
+  const approveRegistration = async (reg) => {
+    setRegistrationActing(reg.id);
+    try {
+      const swimmers = await fetchAllSwimmers();
+      const newSwimmer = {
+        id: genId(),
+        name: reg.swimmerName,
+        age: reg.age,
+        phone: reg.phone,
+        parentName: reg.parentName || "",
+        branch: BRANCHES[0].id,
+        sessionType: "group",
+        level: "Baby",
+        day: null,
+        time: null,
+        coachId: null,
+        paidMonths: [],
+        manualPayments: [],
+        levelHistory: [],
+        scheduleHistory: [],
+        trainingDates: [],
+        attendance: {},
+        makeupSessions: [],
+        skills: {},
+        waiverAccepted: true,
+        waiverAcceptedAt: reg.waiverAcceptedAt,
+        notes: "",
+        createdAt: new Date().toISOString(),
+      };
+      await saveCollection(STORE_KEYS.swimmers, [...swimmers, newSwimmer]);
+
+      const all = await loadCollection(STORE_KEYS.registrations);
+      const next = all.map((r) => (r.id === reg.id ? { ...r, status: "approved", approvedAt: new Date().toISOString() } : r));
+      await saveCollection(STORE_KEYS.registrations, next);
+      logActivity(accountName, role, "Approved registration", reg.swimmerName);
+      loadRegistrations();
+      loadSwimmersPage({ offset: 0 });
+    } finally {
+      setRegistrationActing(null);
+    }
+  };
+
+  const rejectRegistration = (reg) => {
+    setConfirmAction({
+      message: `Reject the registration for ${reg.swimmerName}? No swimmer record will be created.`,
+      onConfirm: async () => {
+        const all = await loadCollection(STORE_KEYS.registrations);
+        const next = all.map((r) => (r.id === reg.id ? { ...r, status: "rejected" } : r));
+        await saveCollection(STORE_KEYS.registrations, next);
+        logActivity(accountName, role, "Rejected registration", reg.swimmerName);
+        loadRegistrations();
+      },
+    });
+  };
+
+  const [incidents, setIncidents] = useState([]);
+  const [incidentsLoading, setIncidentsLoading] = useState(false);
+  const [incidentForm, setIncidentForm] = useState(null); // { swimmerName, date, severity, description, actionTaken } or null when closed
+  const [incidentSaving, setIncidentSaving] = useState(false);
+
+  const loadIncidents = useCallback(async () => {
+    setIncidentsLoading(true);
+    try {
+      const items = await loadCollection(STORE_KEYS.incidents);
+      setIncidents(items.sort((a, b) => b.date.localeCompare(a.date)));
+    } finally {
+      setIncidentsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === "incidents") loadIncidents();
+  }, [tab, loadIncidents]);
+
+  const openIncidentForm = () => {
+    setIncidentForm({ swimmerName: "", date: todayISO(), severity: "minor", description: "", actionTaken: "" });
+  };
+
+  const saveIncident = async () => {
+    if (!incidentForm.swimmerName.trim() || !incidentForm.description.trim()) return;
+    setIncidentSaving(true);
+    try {
+      const all = await loadCollection(STORE_KEYS.incidents);
+      const record = {
+        id: genId(),
+        swimmerName: incidentForm.swimmerName.trim(),
+        date: incidentForm.date,
+        severity: incidentForm.severity,
+        description: incidentForm.description.trim(),
+        actionTaken: incidentForm.actionTaken.trim(),
+        reportedBy: accountName || "Admin",
+        createdAt: new Date().toISOString(),
+      };
+      await saveCollection(STORE_KEYS.incidents, [record, ...all]);
+      logActivity(accountName, role, "Logged incident", incidentForm.swimmerName.trim());
+      setIncidentForm(null);
+      loadIncidents();
+    } finally {
+      setIncidentSaving(false);
+    }
+  };
+
+  const deleteIncident = (incident) => {
+    setConfirmAction({
+      message: `Remove this incident record for ${incident.swimmerName}?`,
+      onConfirm: async () => {
+        const all = await loadCollection(STORE_KEYS.incidents);
+        await saveCollection(STORE_KEYS.incidents, all.filter((i) => i.id !== incident.id));
+        logActivity(accountName, role, "Deleted incident record", incident.swimmerName);
+        loadIncidents();
+      },
+    });
+  };
+
+  const downloadFullBackup = async () => {
+    setBackupRunning(true);
+    try {
+      const [swimmersAll, coachesAll, accountsAll, expensesAll, achievementsAll, requestsAll, activityAll, workoutsAll, messagesAll, attendanceAll, incidentsAll] =
+        await Promise.all([
+          fetchAllSwimmers(),
+          loadCollection(STORE_KEYS.coaches),
+          loadCollection(STORE_KEYS.accounts),
+          loadCollection(STORE_KEYS.expenses),
+          loadCollection(STORE_KEYS.achievements),
+          loadCollection(STORE_KEYS.subs),
+          loadCollection(STORE_KEYS.activityLog),
+          loadCollection(STORE_KEYS.workouts),
+          loadCollection(STORE_KEYS.messages),
+          loadCollection(STORE_KEYS.staffAttendance),
+          loadCollection(STORE_KEYS.incidents),
+        ]);
+      const backup = {
+        exportedAt: new Date().toISOString(),
+        academyName: CONFIG.academyName,
+        swimmers: swimmersAll,
+        coaches: coachesAll,
+        accounts: accountsAll,
+        expenses: expensesAll,
+        achievements: achievementsAll,
+        paymentRequests: requestsAll,
+        activityLog: activityAll,
+        workouts: workoutsAll,
+        messages: messagesAll,
+        staffAttendance: attendanceAll,
+        incidents: incidentsAll,
+      };
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `full-backup-${todayISO()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      logActivity(accountName, role, "Downloaded full backup", "");
+    } finally {
+      setBackupRunning(false);
+    }
+  };
 
   const saveGeneralSettings = async () => {
     setSettingsError("");
@@ -4875,6 +5267,21 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       {/* main tabs — vertical sidebar on the left, content on the right (stacks on narrow/mobile screens) */}
       <div className="flex flex-col sm:flex-row gap-6 items-start">
       <div className="w-full sm:w-52 shrink-0 flex flex-row sm:flex-col gap-0.5 overflow-x-auto sm:overflow-visible pb-1 sm:pb-0">
+        {canEditContent && (
+          <button
+            onClick={() => setTab("registrations")}
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+              tab === "registrations" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+            }`}
+          >
+            <User className="w-4 h-4" /> Registrations
+            {pendingRegistrations.length > 0 && (
+              <span className="text-[10px] bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center shrink-0">
+                {pendingRegistrations.length}
+              </span>
+            )}
+          </button>
+        )}
         <button
           onClick={() => setTab("requests")}
           className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -4983,6 +5390,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             }`}
           >
             <ShieldCheck className="w-4 h-4" /> Settings
+          </button>
+        )}
+        {canEditContent && (
+          <button
+            onClick={() => setTab("incidents")}
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+              tab === "incidents" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+            }`}
+          >
+            <ShieldCheck className="w-4 h-4" /> Incidents
           </button>
         )}
         {(accountName || role === "admin") && (
@@ -5717,6 +6134,69 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                   </div>
 
                   <div className="mt-4 pt-4 border-t border-slate-100">
+                    <div className="text-xs font-semibold text-slate-500 mb-1.5">Invoices</div>
+                    {(() => {
+                      const swimmerInvoices = requests
+                        .filter((r) => r.status === "confirmed" && (r.swimmerId === s.id || (r.phone && r.phone === s.phone)))
+                        .sort((a, b) => new Date(b.confirmedAt || b.createdAt) - new Date(a.confirmedAt || a.createdAt));
+                      if (swimmerInvoices.length === 0) return <div className="text-xs text-slate-400">No invoices on file yet</div>;
+                      return (
+                        <div className="space-y-1.5">
+                          {swimmerInvoices.map((inv) => (
+                            <div key={inv.id} className="flex items-center justify-between text-xs bg-slate-50 rounded-lg px-3 py-2">
+                              <div>
+                                <span className="font-medium text-slate-700">{inv.price} EGP</span>
+                                <span className="text-slate-400"> · {inv.planName} · {new Date(inv.confirmedAt || inv.createdAt).toLocaleDateString("en-GB")}</span>
+                              </div>
+                              <button
+                                onClick={() =>
+                                  printReceipt({
+                                    swimmerName: s.name,
+                                    phone: s.phone,
+                                    planName: inv.planName,
+                                    price: inv.price,
+                                    receiptNo: inv.receiptNo || "",
+                                    paymentMethod: inv.method === "card" ? "Card" : inv.method === "cash" ? "Cash" : "Instapay",
+                                    date: (inv.confirmedAt || inv.createdAt).slice(0, 10),
+                                  })
+                                }
+                                className="text-blue-900 hover:underline font-medium"
+                              >
+                                Reprint
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  {s.waiverAccepted && (
+                    <div className="mt-4 pt-4 border-t border-slate-100">
+                      <div className="flex items-center justify-between">
+                        <div className="text-xs font-semibold text-slate-500">Registration & waiver</div>
+                        <button
+                          onClick={() =>
+                            printWaiverConfirmation({
+                              swimmerName: s.name,
+                              age: s.age,
+                              parentName: s.parentName,
+                              phone: s.phone,
+                              acceptedAt: s.waiverAcceptedAt,
+                            })
+                          }
+                          className="text-xs text-blue-900 hover:underline font-medium"
+                        >
+                          View / print
+                        </button>
+                      </div>
+                      <div className="text-xs text-slate-400 mt-1">
+                        Accepted {new Date(s.waiverAcceptedAt).toLocaleDateString("en-GB")}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-4 pt-4 border-t border-slate-100">
                     <div className="text-xs font-semibold text-slate-500 mb-1.5">Session notes</div>
                     {Object.keys(s.sessionNotes || {}).length === 0 ? (
                       <div className="text-xs text-slate-400">No notes logged yet</div>
@@ -6168,6 +6648,38 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
           .sort((a, b) => new Date(b.date) - new Date(a.date));
         const levelUpRate = swimmers.length ? Math.round((levelUpRows.length / swimmers.length) * 100) : 0;
 
+        // Revenue trend — the last 6 calendar months' confirmed income, for
+        // a quick visual of whether things are trending up or down. Always
+        // based on real calendar months, independent of whatever period the
+        // rest of this report is currently showing.
+        const revenueTrend = [];
+        for (let i = 5; i >= 0; i--) {
+          const d = new Date();
+          d.setDate(1);
+          d.setMonth(d.getMonth() - i);
+          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+          const monthTotal = requests
+            .filter((r) => r.status === "confirmed" && (r.confirmedAt || r.createdAt || "").slice(0, 7) === key)
+            .reduce((sum, r) => sum + (Number(r.price) || 0), 0);
+          revenueTrend.push({ key, label: d.toLocaleDateString("en-GB", { month: "short" }), total: monthTotal });
+        }
+        const revenueTrendMax = Math.max(...revenueTrend.map((m) => m.total), 1);
+
+        // Retention — of the swimmers who were active (had a set day/time)
+        // last month, what fraction are still active this month. Gives an
+        // early signal for swimmers quietly drifting away.
+        const prevMonthKeyForRetention = (() => {
+          const d = new Date();
+          d.setMonth(d.getMonth() - 1);
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        })();
+        const activeLastMonth = swimmers.filter((s) => {
+          const sched = (s.scheduleHistory || []).find((h) => (h.date || "").slice(0, 7) === prevMonthKeyForRetention);
+          return !!sched || (s.day && s.time && (s.createdAt || "").slice(0, 7) <= prevMonthKeyForRetention);
+        });
+        const stillActiveThisMonth = activeLastMonth.filter((s) => s.day && s.time);
+        const retentionRate = activeLastMonth.length ? Math.round((stillActiveThisMonth.length / activeLastMonth.length) * 100) : null;
+
         // KPI — this period's income and new signups vs a target of "+20%
         // over the previous period" (same length: last month vs this month,
         // last week vs this week, etc.) rather than a fixed number.
@@ -6592,6 +7104,32 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                     <div className="text-xs text-slate-400">Coaches</div>
                   </div>
                 </div>
+                {retentionRate !== null && (
+                  <div className="bg-white rounded-xl border border-slate-200 p-3 mb-4 flex items-center justify-between">
+                    <div>
+                      <div className="text-xs text-slate-400">Retention (swimmers active last month who are still active this month)</div>
+                    </div>
+                    <div className={`text-xl font-bold ${retentionRate >= 80 ? "text-green-600" : retentionRate >= 60 ? "text-amber-500" : "text-red-500"}`}>
+                      {retentionRate}%
+                    </div>
+                  </div>
+                )}
+                <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4">
+                  <div className="text-xs text-slate-400 mb-3">Revenue trend — last 6 months</div>
+                  <div className="flex items-end gap-3 h-28">
+                    {revenueTrend.map((m) => (
+                      <div key={m.key} className="flex-1 flex flex-col items-center gap-1">
+                        <div className="text-[10px] text-slate-500 font-medium">{m.total > 0 ? m.total.toLocaleString() : ""}</div>
+                        <div
+                          className="w-full rounded-t-md bg-blue-900"
+                          style={{ height: `${Math.max((m.total / revenueTrendMax) * 84, m.total > 0 ? 4 : 0)}px` }}
+                          title={`${m.label}: ${m.total} EGP`}
+                        />
+                        <div className="text-[10px] text-slate-400">{m.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
                 <div className="flex flex-wrap gap-2">
                   {Object.entries(levelCounts).sort((a, b) => b[1] - a[1]).map(([lvl, count]) => (
                     <span key={lvl} className="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 font-medium">
@@ -6896,6 +7434,182 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                     })}
                 </tbody>
               </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "registrations" && canEditContent && (
+        <div>
+          <div className="mb-4">
+            <h3 className="font-bold text-slate-900">New swimmer registrations</h3>
+            <p className="text-xs text-slate-400">Approving one creates the swimmer record automatically — you'll still need to set their schedule and level afterward.</p>
+          </div>
+          {registrationsLoading ? (
+            <div className="text-center text-slate-400 py-16">Loading...</div>
+          ) : pendingRegistrations.length === 0 ? (
+            <div className="text-center text-slate-400 py-16">No pending registrations</div>
+          ) : (
+            <div className="space-y-2">
+              {pendingRegistrations.map((reg) => (
+                <div key={reg.id} className="bg-white rounded-xl border border-slate-200 p-4">
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div>
+                      <div className="font-semibold text-slate-800">{reg.swimmerName}</div>
+                      <div className="text-xs text-slate-400 mt-0.5">
+                        {reg.age ? `Age ${reg.age} · ` : ""}{reg.phone}
+                        {reg.parentName && ` · Parent: ${reg.parentName}`}
+                      </div>
+                      <div className="text-xs text-slate-400 mt-1">
+                        Waiver accepted {new Date(reg.waiverAcceptedAt).toLocaleString("en-GB")}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => approveRegistration(reg)}
+                        disabled={registrationActing === reg.id}
+                        className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-semibold bg-green-600 text-white hover:bg-green-700 disabled:opacity-60"
+                      >
+                        <Check className="w-3.5 h-3.5" /> {registrationActing === reg.id ? "Approving..." : "Approve"}
+                      </button>
+                      <button
+                        onClick={() => rejectRegistration(reg)}
+                        disabled={registrationActing === reg.id}
+                        className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
+                      >
+                        <XCircle className="w-3.5 h-3.5" /> Reject
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "incidents" && canEditContent && (
+        <div>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="font-bold text-slate-900">Incident log</h3>
+              <p className="text-xs text-slate-400">Injuries, falls, or anything else worth keeping a record of.</p>
+            </div>
+            <button
+              onClick={openIncidentForm}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
+            >
+              <Plus className="w-4 h-4" /> Log an incident
+            </button>
+          </div>
+
+          {incidentForm && (
+            <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-5">
+              <div className="grid sm:grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Swimmer's name</label>
+                  <input
+                    value={incidentForm.swimmerName}
+                    onChange={(e) => setIncidentForm({ ...incidentForm, swimmerName: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Date</label>
+                  <input
+                    type="date"
+                    value={incidentForm.date}
+                    onChange={(e) => setIncidentForm({ ...incidentForm, date: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  />
+                </div>
+              </div>
+              <div className="mb-3">
+                <label className="text-xs text-slate-500 mb-1 block">Severity</label>
+                <div className="flex gap-2">
+                  {[
+                    { id: "minor", label: "Minor", color: "bg-amber-50 text-amber-700 border-amber-200" },
+                    { id: "moderate", label: "Moderate", color: "bg-orange-50 text-orange-700 border-orange-200" },
+                    { id: "serious", label: "Serious", color: "bg-red-50 text-red-700 border-red-200" },
+                  ].map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => setIncidentForm({ ...incidentForm, severity: s.id })}
+                      className={`text-sm px-3 py-2 rounded-lg border ${incidentForm.severity === s.id ? s.color : "border-slate-200 text-slate-500"}`}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="mb-3">
+                <label className="text-xs text-slate-500 mb-1 block">What happened</label>
+                <textarea
+                  value={incidentForm.description}
+                  onChange={(e) => setIncidentForm({ ...incidentForm, description: e.target.value })}
+                  rows={3}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                />
+              </div>
+              <div className="mb-4">
+                <label className="text-xs text-slate-500 mb-1 block">Action taken (optional)</label>
+                <textarea
+                  value={incidentForm.actionTaken}
+                  onChange={(e) => setIncidentForm({ ...incidentForm, actionTaken: e.target.value })}
+                  rows={2}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={saveIncident}
+                  disabled={incidentSaving || !incidentForm.swimmerName.trim() || !incidentForm.description.trim()}
+                  className="px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                >
+                  {incidentSaving ? "Saving..." : "Save"}
+                </button>
+                <button
+                  onClick={() => setIncidentForm(null)}
+                  className="px-4 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {incidentsLoading ? (
+            <div className="text-center text-slate-400 py-16">Loading...</div>
+          ) : incidents.length === 0 ? (
+            <div className="text-center text-slate-400 py-16">No incidents logged</div>
+          ) : (
+            <div className="space-y-2">
+              {incidents.map((inc) => (
+                <div key={inc.id} className="bg-white rounded-xl border border-slate-200 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="font-semibold text-slate-800">{inc.swimmerName}</span>
+                        <span
+                          className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                            inc.severity === "serious" ? "bg-red-50 text-red-700" : inc.severity === "moderate" ? "bg-orange-50 text-orange-700" : "bg-amber-50 text-amber-700"
+                          }`}
+                        >
+                          {inc.severity}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-400 mb-2">{inc.date} · reported by {inc.reportedBy}</div>
+                      <div className="text-sm text-slate-600">{inc.description}</div>
+                      {inc.actionTaken && <div className="text-sm text-slate-400 mt-1">Action: {inc.actionTaken}</div>}
+                    </div>
+                    {canEdit && (
+                      <button onClick={() => deleteIncident(inc)} className="p-2 rounded-lg hover:bg-red-50 text-red-500 shrink-0">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -7298,6 +8012,22 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                 className="px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
               >
                 {programsSaving ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <h3 className="font-bold text-slate-900 mb-1">Backup</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              Download everything — swimmers, payments, coaches, accounts, expenses, achievements, activity log, and more — as one file, for your own records.
+            </p>
+            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <button
+                onClick={downloadFullBackup}
+                disabled={backupRunning}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-700 disabled:opacity-60"
+              >
+                <FileDown className="w-4 h-4" /> {backupRunning ? "Preparing..." : "Download full backup"}
               </button>
             </div>
           </div>
@@ -10115,7 +10845,7 @@ function AchievementsSlideshow({ achievements }) {
   );
 }
 
-function HomeView({ onChoosePlan, onAdmin, onStaff, onCoach, onStaffPortal, onParentPortal }) {
+function HomeView({ onChoosePlan, onNewRegistration, onAdmin, onStaff, onCoach, onStaffPortal, onParentPortal }) {
   const hasPhotos = CONFIG.heroPhotos && CONFIG.heroPhotos.length > 0;
   const [menuOpen, setMenuOpen] = useState(false);
   const [loginPickerOpen, setLoginPickerOpen] = useState(false);
@@ -10138,6 +10868,7 @@ function HomeView({ onChoosePlan, onAdmin, onStaff, onCoach, onStaffPortal, onPa
     { label: "Staff", sub: "Log in with your username & password", icon: Lock, onClick: onStaffPortal },
   ];
   const menuItems = [
+    { label: "New swimmer registration", icon: User, onClick: onNewRegistration },
     { label: "Subscribe now", icon: Waves, onClick: () => onChoosePlan(null) },
     { label: "Log in", icon: Lock, onClick: () => setLoginPickerOpen(true) },
   ];
@@ -11267,12 +11998,36 @@ export default function App() {
       {view === "home" && (
         <HomeView
           onChoosePlan={(id) => { setChosenPlan(id); setView("subscribe"); }}
+          onNewRegistration={() => setView("newregistration")}
           onAdmin={() => setView("admin")}
           onStaff={() => setView("staff")}
           onCoach={() => setView("coach")}
           onStaffPortal={() => setView("staffportal")}
           onParentPortal={() => setView("parentportal")}
         />
+      )}
+
+      {view === "newregistration" && (
+        <NewSwimmerRegistrationView
+          onBack={() => setView("home")}
+          onSubmitted={() => setView("registrationsuccess")}
+        />
+      )}
+
+      {view === "registrationsuccess" && (
+        <div className="max-w-md mx-auto px-4 py-16 text-center">
+          <CheckCircle2 className="w-14 h-14 text-green-500 mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-slate-900 mb-2">Registration sent!</h2>
+          <p className="text-sm text-slate-500 mb-6">
+            We'll review it and confirm shortly — once approved, you'll be able to subscribe and set up a schedule.
+          </p>
+          <button
+            onClick={() => setView("home")}
+            className="px-6 py-2.5 rounded-xl bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
+          >
+            Back to home
+          </button>
+        </div>
       )}
 
       {view === "subscribe" && (
