@@ -167,6 +167,7 @@ window.storage = {
 const CONFIG = {
   academyName: "Swim Junior",
   logoDataUri: "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%22200%22%20height%3D%22200%22%3E%3Crect%20width%3D%22200%22%20height%3D%22200%22%20fill%3D%22%230b1e4a%22/%3E%3Ctext%20x%3D%22100%22%20y%3D%22115%22%20font-family%3D%22sans-serif%22%20font-size%3D%2260%22%20text-anchor%3D%22middle%22%3E%F0%9F%8F%8A%3C/text%3E%3C/svg%3E", // academy logo
+  signatureDataUri: "", // optional — printed on receipts/reports if set, from the Settings tab
   instapayHandle: "mahfathy.aaib@instapay", // your Instapay handle
   instapayLink: "https://ipn.eg/S/mahfathy.aaib/instapay/74AH24", // opens the Instapay app directly
   instapayPhone: "01000000000",          // phone number linked to Instapay
@@ -393,6 +394,96 @@ function applyCustomBranches(list) {
   BRANCHES = list && list.length > 0 ? list : DEFAULT_BRANCHES;
 }
 
+// A signature image (e.g. the owner's or manager's signature), printed at
+// the bottom of receipts and reports if set. Uses the simple key-value
+// storage (not the academies table), so no extra database setup is needed.
+const SIGNATURE_KEY = "signature-custom";
+
+async function loadCustomSignature() {
+  const res = await window.storage.get(SIGNATURE_KEY);
+  return res?.value || "";
+}
+
+async function saveCustomSignature(dataUri) {
+  await storageSet(SIGNATURE_KEY, dataUri);
+  CONFIG.signatureDataUri = dataUri;
+}
+
+// Certificate look — a primary color and a font choice, both editable in
+// Settings. The color can also be set to "auto", meaning: derive it from
+// whatever the current logo actually looks like, so re-branding the logo
+// automatically re-colors certificates too without a separate step.
+const CERT_DESIGN_KEY = "certificate-design";
+const CERT_FONTS = {
+  serif: { label: "Classic Serif", body: "Georgia, 'Times New Roman', serif", ui: "-apple-system, Arial, sans-serif" },
+  sans: { label: "Modern Sans", body: "-apple-system, 'Helvetica Neue', Arial, sans-serif", ui: "-apple-system, Arial, sans-serif" },
+  elegant: { label: "Elegant", body: "'Playfair Display', Georgia, serif", ui: "-apple-system, Arial, sans-serif" },
+};
+
+async function loadCertDesign() {
+  const res = await window.storage.get(CERT_DESIGN_KEY);
+  if (!res) return { color: "auto", font: "serif" };
+  try {
+    const parsed = JSON.parse(res.value);
+    return { color: parsed.color || "auto", font: parsed.font || "serif" };
+  } catch {
+    return { color: "auto", font: "serif" };
+  }
+}
+
+async function saveCertDesign(design) {
+  return storageSet(CERT_DESIGN_KEY, JSON.stringify(design));
+}
+
+// Samples the logo image on a canvas and returns its most common
+// non-white, non-transparent color as a hex string — this is what "auto"
+// mode uses, so the certificate always matches whatever logo is current
+// without anyone needing to manually pick a matching color.
+function extractDominantColor(dataUri) {
+  return new Promise((resolve) => {
+    const fallback = "#0b1e3a";
+    if (!dataUri) return resolve(fallback);
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        const size = 40; // downsample for speed — color counting doesn't need full resolution
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, size, size);
+        const { data } = ctx.getImageData(0, 0, size, size);
+        const counts = {};
+        for (let i = 0; i < data.length; i += 4) {
+          const [r, g, b, a] = [data[i], data[i + 1], data[i + 2], data[i + 3]];
+          if (a < 200) continue; // skip transparent pixels
+          const brightness = (r + g + b) / 3;
+          if (brightness > 235) continue; // skip near-white background
+          if (brightness < 20) continue; // skip near-black (often just text/outline)
+          // Bucket similar colors together so near-identical shades count as one
+          const key = `${Math.round(r / 16)},${Math.round(g / 16)},${Math.round(b / 16)}`;
+          if (!counts[key]) counts[key] = { r: 0, g: 0, b: 0, n: 0 };
+          counts[key].r += r;
+          counts[key].g += g;
+          counts[key].b += b;
+          counts[key].n += 1;
+        }
+        const buckets = Object.values(counts).sort((a, b) => b.n - a.n);
+        if (buckets.length === 0) return resolve(fallback);
+        const top = buckets[0];
+        const toHex = (v) => Math.round(v / top.n).toString(16).padStart(2, "0");
+        resolve(`#${toHex(top.r)}${toHex(top.g)}${toHex(top.b)}`);
+      } catch (e) {
+        resolve(fallback); // e.g. a tainted canvas from a cross-origin image
+      }
+    };
+    img.onerror = () => resolve(fallback);
+    img.src = dataUri;
+  });
+}
+
+
 /* Available start times per branch + day group. This starts out as the
    built-in default — the "Settings" tab in the admin dashboard lets the
    academy customize its own time slots, saved to storage and merged in
@@ -513,6 +604,9 @@ function printReceipt({ swimmerName, phone, planName, price, receiptNo, paymentM
   .amount { text-align: center; margin: 24px 0; }
   .amount .num { font-size: 32px; font-weight: 800; color: #0b1e3a; }
   .amount .cur { font-size: 13px; color: #64748b; }
+  .signature { text-align: center; margin-top: 32px; }
+  .signature img { max-width: 140px; max-height: 60px; object-fit: contain; }
+  .signature .line { font-size: 11px; color: #94a3b8; margin-top: 4px; }
   .footer { text-align: center; margin-top: 32px; font-size: 11px; color: #94a3b8; }
   @media print { body { padding: 0; } }
 </style></head><body>
@@ -530,6 +624,7 @@ function printReceipt({ swimmerName, phone, planName, price, receiptNo, paymentM
   ${paymentMethod ? `<div class="row"><span class="label">Payment method</span><span class="value">${escapeHtml(paymentMethod)}</span></div>` : ""}
   ${receiptNo ? `<div class="row"><span class="label">Receipt #</span><span class="value">${escapeHtml(receiptNo)}</span></div>` : ""}
   <div class="row"><span class="label">Date</span><span class="value">${escapeHtml(date)}</span></div>
+  ${CONFIG.signatureDataUri ? `<div class="signature"><img src="${CONFIG.signatureDataUri}" /><div class="line">Authorized signature</div></div>` : ""}
   <div class="footer">Thank you!</div>
 <script>window.onload = () => setTimeout(() => window.print(), 300);</script>
 </body></html>`;
@@ -587,6 +682,69 @@ function printWorkout({ coachName, date, warmUp, mainSet, coolDown }) {
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
+
+/* A printable "Certificate of Completion" — awarded automatically whenever
+   a swimmer is moved up to the next level, for the level they just
+   finished. Logo, academy name, swimmer name, level, date, and the
+   signature (if one's been uploaded in Settings). Always in English. */
+async function printCertificate({ swimmerName, level, date }) {
+  const design = await loadCertDesign();
+  const fontChoice = CERT_FONTS[design.font] || CERT_FONTS.serif;
+  const color = design.color === "auto" ? await extractDominantColor(CONFIG.logoDataUri) : design.color || "#0b1e3a";
+  const fontImport = design.font === "elegant" ? `<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&display=swap" rel="stylesheet">` : "";
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Certificate</title>
+${fontImport}
+<style>
+  body { font-family: ${fontChoice.body}; color: #1e293b; padding: 0; margin: 0; }
+  .cert { border: 10px solid ${color}; margin: 24px; padding: 56px 40px; text-align: center; min-height: 480px; box-sizing: border-box; position: relative; }
+  .cert::before { content: ""; position: absolute; inset: 14px; border: 1px solid #cbd5e1; pointer-events: none; }
+  .header img { width: 64px; height: 64px; object-fit: contain; margin-bottom: 6px; }
+  .academy { font-size: 15px; letter-spacing: 1px; text-transform: uppercase; color: #64748b; font-family: ${fontChoice.ui}; }
+  .title { font-size: 34px; font-weight: 700; color: ${color}; margin: 28px 0 6px; letter-spacing: 1px; }
+  .subtitle { font-size: 14px; color: #64748b; font-family: ${fontChoice.ui}; margin-bottom: 32px; }
+  .name { font-size: 30px; font-weight: 700; color: ${color}; margin: 18px 0; border-bottom: 2px solid #cbd5e1; display: inline-block; padding: 0 20px 8px; }
+  .desc { font-size: 16px; color: #334155; margin: 22px auto 0; max-width: 460px; line-height: 1.6; font-family: ${fontChoice.ui}; }
+  .level { font-weight: 700; color: ${color}; }
+  .footer { margin-top: 48px; display: flex; justify-content: space-between; align-items: flex-end; padding: 0 20px; font-family: ${fontChoice.ui}; }
+  .footer .block { text-align: center; font-size: 12px; color: #64748b; }
+  .footer .block img { max-width: 130px; max-height: 55px; object-fit: contain; display: block; margin: 0 auto 4px; }
+  .footer .line { border-top: 1px solid #94a3b8; padding-top: 4px; min-width: 150px; }
+  @media print { body { padding: 0; } .cert { margin: 0; } }
+</style></head><body>
+  <div class="cert">
+    <div class="header">
+      <img src="${CONFIG.logoDataUri}" />
+      <div class="academy">${escapeHtml(CONFIG.academyName)}</div>
+    </div>
+    <div class="title">Certificate of Achievement</div>
+    <div class="subtitle">This certificate is proudly presented to</div>
+    <div class="name">${escapeHtml(swimmerName)}</div>
+    <div class="desc">For successfully completing <span class="level">${escapeHtml(level)}</span> and demonstrating the skills and dedication required to advance to the next level.</div>
+    <div class="footer">
+      <div class="block">
+        <div class="line">${escapeHtml(date)}</div>
+        Date
+      </div>
+      <div class="block">
+        ${CONFIG.signatureDataUri ? `<img src="${CONFIG.signatureDataUri}" />` : ""}
+        <div class="line">${escapeHtml(CONFIG.academyName)}</div>
+        Authorized signature
+      </div>
+    </div>
+  </div>
+<script>window.onload = () => setTimeout(() => window.print(), 300);</script>
+</body></html>`;
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `certificate-${(swimmerName || "swimmer").replace(/[^a-zA-Z0-9أ-ي]/g, "-")}-${date}.html`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
 
 
 /* window.storage can occasionally hiccup with a transient error —
@@ -2761,6 +2919,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   // ---- Settings tab: academy details + time slots ----
   const [settingsName, setSettingsName] = useState("");
   const [settingsLogo, setSettingsLogo] = useState("");
+  const [settingsSignature, setSettingsSignature] = useState("");
   const [settingsInstapayHandle, setSettingsInstapayHandle] = useState("");
   const [settingsInstapayPhone, setSettingsInstapayPhone] = useState("");
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -2777,6 +2936,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     setSettingsLogo(CONFIG.logoDataUri);
     setSettingsInstapayHandle(CONFIG.instapayHandle);
     setSettingsInstapayPhone(CONFIG.instapayPhone);
+    setSettingsSignature(CONFIG.signatureDataUri || "");
     loadCustomTimeSlots().then((custom) => setCustomTimeSlots(custom?.[BRANCHES[0].id] || {}));
   }, [tab]);
 
@@ -2804,6 +2964,47 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   const handleLogoUpload = (file) => {
     if (!file) return;
     compressImage(file, 300, 0.85).then(setSettingsLogo).catch(() => setSettingsError("Could not read that image"));
+  };
+
+  const handleSignatureUpload = (file) => {
+    if (!file) return;
+    compressImage(file, 400, 0.85).then(async (uri) => {
+      setSettingsSignature(uri);
+      await saveCustomSignature(uri);
+      logActivity(accountName, role, "Updated signature", "");
+    }).catch(() => setSettingsError("Could not read that image"));
+  };
+
+  const removeSignature = async () => {
+    setSettingsSignature("");
+    await saveCustomSignature("");
+    logActivity(accountName, role, "Removed signature", "");
+  };
+
+  // ---- Settings tab: certificate design ----
+  const [certDesign, setCertDesign] = useState({ color: "auto", font: "serif" });
+  const [certAutoColor, setCertAutoColor] = useState("#0b1e3a"); // resolved preview of what "auto" currently means
+  const [certSaving, setCertSaving] = useState(false);
+
+  useEffect(() => {
+    if (tab !== "settings") return;
+    loadCertDesign().then(setCertDesign);
+    extractDominantColor(CONFIG.logoDataUri).then(setCertAutoColor);
+  }, [tab, settingsLogo]);
+
+  const updateCertDesign = async (next) => {
+    setCertDesign(next);
+    setCertSaving(true);
+    try {
+      await saveCertDesign(next);
+      logActivity(accountName, role, "Updated certificate design", "");
+    } finally {
+      setCertSaving(false);
+    }
+  };
+
+  const previewCertificate = () => {
+    printCertificate({ swimmerName: "Ahmed Mohamed", level: "Level 3", date: todayISO() });
   };
 
   const saveTimeSlotsFor = async (nextForBranch) => {
@@ -6751,6 +6952,108 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             </div>
           </div>
 
+          <div>
+            <h3 className="font-bold text-slate-900 mb-1">Signature</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              Optional — printed at the bottom of payment receipts if set. A small image of a handwritten signature or stamp works well.
+            </p>
+            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <div className="flex items-center gap-4">
+                {settingsSignature ? (
+                  <img src={settingsSignature} alt="" className="w-32 h-16 rounded-lg object-contain border border-slate-100 bg-slate-50" />
+                ) : (
+                  <div className="w-32 h-16 rounded-lg border border-dashed border-slate-200 flex items-center justify-center text-xs text-slate-400">
+                    No signature set
+                  </div>
+                )}
+                <div className="flex flex-col gap-2">
+                  <div>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      id="settings-signature-input"
+                      className="hidden"
+                      onChange={(e) => handleSignatureUpload(e.target.files?.[0])}
+                    />
+                    <label
+                      htmlFor="settings-signature-input"
+                      className="inline-block cursor-pointer text-sm px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
+                    >
+                      {settingsSignature ? "Change signature" : "Upload signature"}
+                    </label>
+                  </div>
+                  {settingsSignature && (
+                    <button onClick={removeSignature} className="text-xs text-red-500 hover:underline text-left">
+                      Remove signature
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <h3 className="font-bold text-slate-900 mb-1">Certificate design</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              Controls the look of the "Certificate of Achievement" printed when a swimmer levels up.
+            </p>
+            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <div className="mb-4">
+                <label className="text-xs text-slate-500 mb-1 block">Color</label>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => updateCertDesign({ ...certDesign, color: "auto" })}
+                    className={`flex items-center gap-2 text-sm px-3 py-2 rounded-lg border ${
+                      certDesign.color === "auto" ? "border-blue-900 bg-blue-50" : "border-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    <span className="w-4 h-4 rounded-full border border-slate-200" style={{ background: certAutoColor }} />
+                    Match my logo automatically
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={certDesign.color === "auto" ? certAutoColor : certDesign.color}
+                      onChange={(e) => updateCertDesign({ ...certDesign, color: e.target.value })}
+                      className="w-9 h-9 rounded-lg border border-slate-200 cursor-pointer"
+                      title="Pick a custom color"
+                    />
+                    <span className="text-xs text-slate-400">or pick your own</span>
+                  </div>
+                </div>
+                <div className="text-xs text-slate-400 mt-1.5">
+                  {certDesign.color === "auto"
+                    ? "Currently reading this color from your uploaded logo — change the logo above and this updates automatically."
+                    : "Using a custom color — click \"Match my logo automatically\" to go back to auto."}
+                </div>
+              </div>
+              <div className="mb-4">
+                <label className="text-xs text-slate-500 mb-1 block">Font</label>
+                <div className="flex gap-2 flex-wrap">
+                  {Object.entries(CERT_FONTS).map(([key, f]) => (
+                    <button
+                      key={key}
+                      onClick={() => updateCertDesign({ ...certDesign, font: key })}
+                      className={`text-sm px-3 py-2 rounded-lg border ${
+                        certDesign.font === key ? "border-blue-900 bg-blue-50 text-blue-950 font-medium" : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                      }`}
+                      style={{ fontFamily: f.body }}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {certSaving && <div className="text-xs text-slate-400 mb-2">Saving...</div>}
+              <button
+                onClick={previewCertificate}
+                className="px-4 py-2 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200"
+              >
+                Preview certificate
+              </button>
+            </div>
+          </div>
+
           <div key={timeSlotsRefreshKey}>
             <h3 className="font-bold text-slate-900 mb-1">Day & time slots</h3>
             <p className="text-sm text-slate-500 mb-4">The start times swimmers and coaches can be booked at, per day group.</p>
@@ -8637,9 +8940,11 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
 
   const levelUp = async (swimmer) => {
     try {
+      const completedLevel = swimmer.level; // the level they're finishing, before it changes
       const updated = await updateSwimmerById(swimmer.id, levelUpSwimmer);
       if (updated === swimmer) return; // already at the top level
       setSwimmers((prev) => prev.map((s) => (s.id === swimmer.id ? updated : s)));
+      printCertificate({ swimmerName: swimmer.name, level: completedLevel, date: todayISO() });
     } catch (e) {
       loadSwimmers();
     }
@@ -9524,6 +9829,7 @@ function TechnicalView({ accountName, onExit }) {
   };
 
   const levelUp = async (swimmer) => {
+    const completedLevel = swimmer.level; // the level they're finishing, before it changes
     const updated = levelUpSwimmer(swimmer);
     if (updated === swimmer) return; // already at the top level
     const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
@@ -9531,6 +9837,7 @@ function TechnicalView({ accountName, onExit }) {
     try {
       const res = await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
       if (!res) throw new Error("save failed");
+      printCertificate({ swimmerName: swimmer.name, level: completedLevel, date: todayISO() });
     } catch (e) {
       loadSwimmers();
     }
@@ -10896,6 +11203,9 @@ export default function App() {
         loadHomepageContent().then(applyHomepageContent),
         loadCustomPrograms().then(applyCustomPrograms),
         loadCustomBranches().then(applyCustomBranches),
+        loadCustomSignature().then((sig) => {
+          if (sig) CONFIG.signatureDataUri = sig;
+        }),
       ]).then(() => {
         setAcademyStatus("ready");
       });
