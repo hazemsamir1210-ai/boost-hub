@@ -421,9 +421,9 @@ const CERT_FONTS = {
 };
 
 async function loadCertDesign() {
-  const res = await window.storage.get(CERT_DESIGN_KEY);
-  if (!res) return { color: "auto", font: "serif" };
   try {
+    const res = await window.storage.get(CERT_DESIGN_KEY);
+    if (!res) return { color: "auto", font: "serif" };
     const parsed = JSON.parse(res.value);
     return { color: parsed.color || "auto", font: parsed.font || "serif" };
   } catch {
@@ -444,7 +444,6 @@ function extractDominantColor(dataUri) {
     const fallback = "#0b1e3a";
     if (!dataUri) return resolve(fallback);
     const img = new Image();
-    img.crossOrigin = "anonymous";
     img.onload = () => {
       try {
         const size = 40; // downsample for speed — color counting doesn't need full resolution
@@ -695,21 +694,25 @@ async function printCertificate({ swimmerName, level, date }) {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Certificate</title>
 ${fontImport}
 <style>
-  body { font-family: ${fontChoice.body}; color: #1e293b; padding: 0; margin: 0; }
-  .cert { border: 10px solid ${color}; margin: 24px; padding: 56px 40px; text-align: center; min-height: 480px; box-sizing: border-box; position: relative; }
+  @page { size: landscape; margin: 0; }
+  body { font-family: ${fontChoice.body}; color: #1e293b; padding: 0; margin: 0; background: #e2e8f0; }
+  .cert { border: 10px solid ${color}; margin: 24px auto; padding: 40px 64px; text-align: center; box-sizing: border-box; position: relative; width: 900px; height: 560px; display: flex; flex-direction: column; justify-content: center; background: white; }
   .cert::before { content: ""; position: absolute; inset: 14px; border: 1px solid #cbd5e1; pointer-events: none; }
-  .header img { width: 64px; height: 64px; object-fit: contain; margin-bottom: 6px; }
-  .academy { font-size: 15px; letter-spacing: 1px; text-transform: uppercase; color: #64748b; font-family: ${fontChoice.ui}; }
-  .title { font-size: 34px; font-weight: 700; color: ${color}; margin: 28px 0 6px; letter-spacing: 1px; }
-  .subtitle { font-size: 14px; color: #64748b; font-family: ${fontChoice.ui}; margin-bottom: 32px; }
-  .name { font-size: 30px; font-weight: 700; color: ${color}; margin: 18px 0; border-bottom: 2px solid #cbd5e1; display: inline-block; padding: 0 20px 8px; }
-  .desc { font-size: 16px; color: #334155; margin: 22px auto 0; max-width: 460px; line-height: 1.6; font-family: ${fontChoice.ui}; }
+  .header img { width: 56px; height: 56px; object-fit: contain; margin-bottom: 4px; }
+  .academy { font-size: 14px; letter-spacing: 1px; text-transform: uppercase; color: #64748b; font-family: ${fontChoice.ui}; }
+  .title { font-size: 32px; font-weight: 700; color: ${color}; margin: 20px 0 4px; letter-spacing: 1px; }
+  .subtitle { font-size: 13px; color: #64748b; font-family: ${fontChoice.ui}; margin-bottom: 18px; }
+  .name { font-size: 28px; font-weight: 700; color: ${color}; margin: 10px 0; border-bottom: 2px solid #cbd5e1; display: inline-block; padding: 0 20px 6px; }
+  .desc { font-size: 15px; color: #334155; margin: 16px auto 0; max-width: 560px; line-height: 1.6; font-family: ${fontChoice.ui}; }
   .level { font-weight: 700; color: ${color}; }
-  .footer { margin-top: 48px; display: flex; justify-content: space-between; align-items: flex-end; padding: 0 20px; font-family: ${fontChoice.ui}; }
-  .footer .block { text-align: center; font-size: 12px; color: #64748b; }
-  .footer .block img { max-width: 130px; max-height: 55px; object-fit: contain; display: block; margin: 0 auto 4px; }
+  .footer { margin-top: 32px; display: flex; justify-content: space-between; align-items: flex-end; padding: 0 30px; font-family: ${fontChoice.ui}; }
+  .footer .block { text-align: center; font-size: 11px; color: #64748b; }
+  .footer .block img { max-width: 120px; max-height: 50px; object-fit: contain; display: block; margin: 0 auto 4px; }
   .footer .line { border-top: 1px solid #94a3b8; padding-top: 4px; min-width: 150px; }
-  @media print { body { padding: 0; } .cert { margin: 0; } }
+  @media print {
+    body { background: white; }
+    .cert { margin: 0 auto; box-shadow: none; }
+  }
 </style></head><body>
   <div class="cert">
     <div class="header">
@@ -3003,8 +3006,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     }
   };
 
-  const previewCertificate = () => {
-    printCertificate({ swimmerName: "Ahmed Mohamed", level: "Level 3", date: todayISO() });
+  const [certPreviewError, setCertPreviewError] = useState("");
+
+  const previewCertificate = async () => {
+    setCertPreviewError("");
+    try {
+      await printCertificate({ swimmerName: "Ahmed Mohamed", level: "Level 3", date: todayISO() });
+    } catch (e) {
+      setCertPreviewError("Couldn't generate the preview — try again in a moment.");
+    }
   };
 
   const saveTimeSlotsFor = async (nextForBranch) => {
@@ -7045,6 +7055,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                 </div>
               </div>
               {certSaving && <div className="text-xs text-slate-400 mb-2">Saving...</div>}
+              {certPreviewError && <div className="text-xs text-red-500 mb-2">{certPreviewError}</div>}
               <button
                 onClick={previewCertificate}
                 className="px-4 py-2 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200"
