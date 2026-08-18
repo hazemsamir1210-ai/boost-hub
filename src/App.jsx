@@ -8,7 +8,8 @@ import {
   ImageIcon, X, LogOut, Clock, Check, XCircle, Send, ChevronLeft,
   ShieldCheck, Copy, Bell, Users, Plus, Pencil, Trash2, Search,
   CalendarDays, Baby, Award, CalendarCheck, FileDown, Wallet, Star,
-  FileUp, Menu, Camera, QrCode
+  FileUp, Menu, Camera, QrCode, LayoutGrid, TrendingUp, AlertCircle,
+  UserPlus, GraduationCap, MessageSquare
 } from "lucide-react";
 
 // The single fixed code printed and hung at the pool entrance — every
@@ -409,6 +410,67 @@ async function saveCustomSignature(dataUri) {
   CONFIG.signatureDataUri = dataUri;
 }
 
+// A logo per level (e.g. a "Level 3" badge), shown in the center of the
+// certificate instead of the academy logo, when one's been set for that
+// level. Falls back to the academy logo for any level without its own.
+const LEVEL_LOGOS_KEY = "level-logos-custom";
+
+async function loadLevelLogos() {
+  const res = await window.storage.get(LEVEL_LOGOS_KEY);
+  if (!res) return {};
+  try {
+    return JSON.parse(res.value);
+  } catch {
+    return {};
+  }
+}
+
+async function saveLevelLogos(logos) {
+  return storageSet(LEVEL_LOGOS_KEY, JSON.stringify(logos));
+}
+
+// An extra logo (e.g. the venue/branch you're working at, if different
+// from the academy's own logo) — optional, with an adjustable position on
+// the built-in certificate design. Position is percent-of-page, same
+// convention as the custom-template positions below, so it holds up at
+// any print size.
+const VENUE_LOGO_KEY = "certificate-venue-logo";
+
+async function loadVenueLogo() {
+  const res = await window.storage.get(VENUE_LOGO_KEY);
+  if (!res) return null;
+  try {
+    return JSON.parse(res.value);
+  } catch {
+    return null;
+  }
+}
+
+async function saveVenueLogo(venueLogo) {
+  return storageSet(VENUE_LOGO_KEY, JSON.stringify(venueLogo));
+}
+
+// A fully custom certificate background — if set, printCertificate uses
+// this image edge-to-edge instead of its own built-in layout, and just
+// overlays the swimmer's name/level/date/signature on top at
+// admin-adjustable positions (percent of the page, so it holds up at
+// any print size).
+const CERT_TEMPLATE_KEY = "certificate-template";
+
+async function loadCertTemplate() {
+  const res = await window.storage.get(CERT_TEMPLATE_KEY);
+  if (!res) return null;
+  try {
+    return JSON.parse(res.value);
+  } catch {
+    return null;
+  }
+}
+
+async function saveCertTemplate(template) {
+  return storageSet(CERT_TEMPLATE_KEY, JSON.stringify(template));
+}
+
 // Certificate look — a primary color and a font choice, both editable in
 // Settings. The color can also be set to "auto", meaning: derive it from
 // whatever the current logo actually looks like, so re-branding the logo
@@ -517,23 +579,33 @@ function getTimeOptions(branch, day, level) {
 
 function compressImage(file, maxWidth = 900, quality = 0.72) {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
+    // Reading via an object URL (a lightweight reference to the file) is
+    // far more memory-friendly than base64-encoding the whole file first —
+    // a full-size phone camera photo (often 8-12MB) could otherwise fail
+    // to load at all on lower-memory devices before it ever reaches the
+    // canvas below.
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try {
         const scale = Math.min(1, maxWidth / img.width);
         const canvas = document.createElement("canvas");
-        canvas.width = img.width * scale;
-        canvas.height = img.height * scale;
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         resolve(canvas.toDataURL("image/jpeg", quality));
-      };
-      img.onerror = reject;
-      img.src = e.target.result;
+      } catch (e) {
+        reject(e);
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
     };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("Could not load that image — try a different photo or a screenshot of it"));
+    };
+    img.src = objectUrl;
   });
 }
 
@@ -571,6 +643,7 @@ function downloadReportHTML(filename, bodyHtml) {
   th { color: #64748b; font-size: 11px; background: #f8fafc; }
   .green { color: #16a34a; font-weight: 600; }
   .red { color: #ef4444; font-weight: 600; }
+  .notes-cell { min-width: 90px; }
   @media print { body { padding: 0; } }
 </style></head><body>${bodyHtml}
 <script>window.onload = () => setTimeout(() => window.print(), 300);</script>
@@ -765,10 +838,52 @@ function printWorkout({ coachName, date, warmUp, mainSet, coolDown }) {
    finished. Logo, academy name, swimmer name, level, date, and the
    signature (if one's been uploaded in Settings). Always in English. */
 async function printCertificate({ swimmerName, level, date }) {
+  const template = await loadCertTemplate();
+
+  // Fully custom mode — a background image the admin uploaded, with just
+  // the dynamic text overlaid at whatever positions were set for it.
+  if (template && template.imageDataUri) {
+    const pos = (p, extra = "") => `position:absolute; left:${p.x}%; top:${p.y}%; transform:translate(-50%,-50%); text-align:center; ${extra}`;
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Certificate</title>
+<style>
+  @page { size: A4 landscape; margin: 0; }
+  html, body { width: 297mm; height: 210mm; }
+  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; padding: 0; margin: 0; }
+  .cert { width: 297mm; height: 210mm; position: relative; background-image: url('${template.imageDataUri}'); background-size: cover; background-position: center; }
+  .name { font-size: 11mm; font-weight: 700; color: ${template.textColor || "#0b1e3a"}; }
+  .level { font-size: 7mm; font-weight: 700; color: ${template.textColor || "#0b1e3a"}; }
+  .date { font-size: 5mm; color: ${template.textColor || "#0b1e3a"}; }
+  .sig img { max-width: 40mm; max-height: 16mm; object-fit: contain; }
+  @media print { .cert { box-shadow: none; } }
+</style></head><body>
+  <div class="cert">
+    <div class="name" style="${pos(template.positions?.name || { x: 50, y: 45 })}">${escapeHtml(swimmerName)}</div>
+    <div class="level" style="${pos(template.positions?.level || { x: 50, y: 58 })}">${escapeHtml(level)}</div>
+    <div class="date" style="${pos(template.positions?.date || { x: 25, y: 85 })}">${escapeHtml(date)}</div>
+    ${CONFIG.signatureDataUri ? `<div class="sig" style="${pos(template.positions?.signature || { x: 75, y: 85 })}"><img src="${CONFIG.signatureDataUri}" /></div>` : ""}
+  </div>
+<script>window.onload = () => setTimeout(() => window.print(), 300);</script>
+</body></html>`;
+    const blob = new Blob([html], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `certificate-${(swimmerName || "swimmer").replace(/[^a-zA-Z0-9أ-ي]/g, "-")}-${date}.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    return;
+  }
+
+  // Built-in design mode
   const design = await loadCertDesign();
   const fontChoice = CERT_FONTS[design.font] || CERT_FONTS.serif;
   const color = design.color === "auto" ? await extractDominantColor(CONFIG.logoDataUri) : design.color || "#0b1e3a";
   const fontImport = design.font === "elegant" ? `<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&display=swap" rel="stylesheet">` : "";
+  const levelLogos = await loadLevelLogos();
+  const levelLogo = levelLogos[level];
+  const venueLogo = await loadVenueLogo();
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Certificate</title>
 ${fontImport}
 <style>
@@ -782,6 +897,8 @@ ${fontImport}
   .title { font-size: 10mm; font-weight: 700; color: ${color}; margin: 6mm 0 2mm; letter-spacing: 1px; }
   .subtitle { font-size: 4mm; color: #64748b; font-family: ${fontChoice.ui}; margin-bottom: 5mm; }
   .name { font-size: 9mm; font-weight: 700; color: ${color}; margin: 3mm 0; border-bottom: 0.6mm solid #cbd5e1; display: inline-block; padding: 0 8mm 2mm; }
+  .level-logo { width: 22mm; height: 22mm; object-fit: contain; margin: 3mm auto; display: block; }
+  .venue-logo { position: absolute; width: ${venueLogo?.width || 20}mm; height: ${venueLogo?.width || 20}mm; object-fit: contain; left: ${venueLogo?.x ?? 85}%; top: ${venueLogo?.y ?? 15}%; transform: translate(-50%, -50%); }
   .desc { font-size: 4.6mm; color: #334155; margin: 5mm auto 0; max-width: 180mm; line-height: 1.6; font-family: ${fontChoice.ui}; }
   .level { font-weight: 700; color: ${color}; }
   .footer { margin-top: 10mm; display: flex; justify-content: space-between; align-items: flex-end; padding: 0 10mm; font-family: ${fontChoice.ui}; }
@@ -794,6 +911,7 @@ ${fontImport}
   }
 </style></head><body>
   <div class="cert">
+    ${venueLogo?.imageDataUri ? `<img class="venue-logo" src="${venueLogo.imageDataUri}" />` : ""}
     <div class="header">
       <img src="${CONFIG.logoDataUri}" />
       <div class="academy">${escapeHtml(CONFIG.academyName)}</div>
@@ -801,6 +919,7 @@ ${fontImport}
     <div class="title">Certificate of Achievement</div>
     <div class="subtitle">This certificate is proudly presented to</div>
     <div class="name">${escapeHtml(swimmerName)}</div>
+    ${levelLogo ? `<img class="level-logo" src="${levelLogo}" />` : ""}
     <div class="desc">For successfully completing <span class="level">${escapeHtml(level)}</span> and demonstrating the skills and dedication required to advance to the next level.</div>
     <div class="footer">
       <div class="block">
@@ -869,7 +988,26 @@ async function setAdminPasswordOverride(newPassword) {
    and any save right after that can fail with "Couldn't save...".
    Instead, each data type now lives as a single array under one key, so
    loading or saving a whole collection is exactly one storage call. */
-const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all", incidents: "incidents-all", registrations: "registrations-all" };
+const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all", incidents: "incidents-all", registrations: "registrations-all", feedback: "parent-feedback-all" };
+
+// The single latest announcement shown as a banner to every parent when
+// they open the Parent Portal — simple broadcast, not per-person messages.
+const BROADCAST_KEY = "parent-broadcast";
+
+async function loadBroadcast() {
+  const res = await window.storage.get(BROADCAST_KEY);
+  if (!res) return null;
+  try {
+    return JSON.parse(res.value);
+  } catch {
+    return null;
+  }
+}
+
+async function saveBroadcast(broadcast) {
+  return storageSet(BROADCAST_KEY, JSON.stringify(broadcast));
+}
+
 
 // The waiver text shown on the standalone "New swimmer registration" form —
 // separate from payment entirely. A parent fills this in once, an admin
@@ -1503,10 +1641,14 @@ function nextLevelOf(level) {
 function levelUpSwimmer(swimmer) {
   const to = nextLevelOf(swimmer.level);
   if (!to) return swimmer; // already at the highest level
+  const completedLevel = swimmer.level; // the level they just finished
   return {
     ...swimmer,
     level: to,
     levelHistory: [...(swimmer.levelHistory || []), { level: to, date: new Date().toISOString() }],
+    // Kept so the parent portal (and anyone else) can look back at and
+    // re-print any certificate earned, not just the one just generated.
+    certificates: [...(swimmer.certificates || []), { level: completedLevel, date: todayISO() }],
   };
 }
 
@@ -2953,7 +3095,7 @@ function SwimmerSearchInput({ onSearch }) {
   );
 }
 
-function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
+function AdminView({ onExit, role = "admin", preAuthed = false, accountName, branchRestriction = null }) {
   const [authed, setAuthed] = useState(preAuthed);
   const [checkingSession, setCheckingSession] = useState(!preAuthed);
   const [pass, setPass] = useState("");
@@ -3030,7 +3172,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     }
   };
 
-  const [tab, setTab] = useState("requests");
+  const [tab, setTab] = useState("dashboard");
   const [currentAdminPass, setCurrentAdminPass] = useState("");
   const [newAdminPass, setNewAdminPass] = useState("");
   const [confirmAdminPass, setConfirmAdminPass] = useState("");
@@ -3125,6 +3267,59 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     // updateLevelSkills above sets customLevelSkills[level] to the default
     // list explicitly, which is equivalent to "reset" for every place that
     // reads LEVEL_SKILLS — simpler than tracking "customized vs not".
+  };
+
+  // ---- Skills tab: per-level certificate logo ----
+  const [levelLogos, setLevelLogos] = useState({});
+
+  useEffect(() => {
+    if (tab === "skills") loadLevelLogos().then(setLevelLogos);
+  }, [tab]);
+
+  const uploadLevelLogo = (level, file) => {
+    if (!file) return;
+    compressImage(file, 300, 0.85)
+      .then(async (uri) => {
+        const next = { ...levelLogos, [level]: uri };
+        setLevelLogos(next);
+        await saveLevelLogos(next);
+        logActivity(accountName, role, "Updated level certificate logo", level);
+      })
+      .catch(() => {});
+  };
+
+  const removeLevelLogo = async (level) => {
+    const next = { ...levelLogos };
+    delete next[level];
+    setLevelLogos(next);
+    await saveLevelLogos(next);
+  };
+
+  // Prints one certificate per swimmer who has earned this level — handy
+  // at the end of a term instead of doing it one swimmer at a time. Each
+  // print opens as its own download; a short delay between them keeps
+  // browsers from treating a rapid burst as spam and blocking the rest.
+  const [bulkCertLevel, setBulkCertLevel] = useState(null);
+
+  const printCertificatesForLevel = async (level) => {
+    setBulkCertLevel(level);
+    try {
+      const all = await fetchAllSwimmers();
+      const matches = all.filter((s) => (s.certificates || []).some((c) => c.level === level));
+      if (matches.length === 0) {
+        setConfirmAction({ message: `No swimmer has an earned certificate for ${level} yet.`, onConfirm: async () => {} });
+        return;
+      }
+      if (!window.confirm(`Print ${matches.length} certificate${matches.length === 1 ? "" : "s"} for ${level}?`)) return;
+      for (const s of matches) {
+        const cert = [...s.certificates].reverse().find((c) => c.level === level);
+        await printCertificate({ swimmerName: s.name, level: cert.level, date: cert.date });
+        await new Promise((r) => setTimeout(r, 600));
+      }
+      logActivity(accountName, role, "Bulk printed certificates", `${level} — ${matches.length} swimmers`);
+    } finally {
+      setBulkCertLevel(null);
+    }
   };
 
   // ---- Settings tab: academy details + time slots ----
@@ -3231,6 +3426,23 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   };
 
   const [incidents, setIncidents] = useState([]);
+  const [feedback, setFeedback] = useState([]);
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+
+  const loadFeedback = useCallback(async () => {
+    setFeedbackLoading(true);
+    try {
+      const items = await loadCollection(STORE_KEYS.feedback);
+      setFeedback(items.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)));
+    } finally {
+      setFeedbackLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === "feedback") loadFeedback();
+  }, [tab, loadFeedback]);
+
   const [incidentsLoading, setIncidentsLoading] = useState(false);
   const [incidentForm, setIncidentForm] = useState(null); // { swimmerName, date, severity, description, actionTaken } or null when closed
   const [incidentSaving, setIncidentSaving] = useState(false);
@@ -3359,16 +3571,20 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
 
   const handleLogoUpload = (file) => {
     if (!file) return;
-    compressImage(file, 300, 0.85).then(setSettingsLogo).catch(() => setSettingsError("Could not read that image"));
+    compressImage(file, 300, 0.85)
+      .then(setSettingsLogo)
+      .catch((e) => setSettingsError(e?.message || "Could not read that image — try a different photo"));
   };
 
   const handleSignatureUpload = (file) => {
     if (!file) return;
-    compressImage(file, 400, 0.85).then(async (uri) => {
-      setSettingsSignature(uri);
-      await saveCustomSignature(uri);
-      logActivity(accountName, role, "Updated signature", "");
-    }).catch(() => setSettingsError("Could not read that image"));
+    compressImage(file, 400, 0.85)
+      .then(async (uri) => {
+        setSettingsSignature(uri);
+        await saveCustomSignature(uri);
+        logActivity(accountName, role, "Updated signature", "");
+      })
+      .catch((e) => setSettingsError(e?.message || "Could not read that image — try a different photo"));
   };
 
   const removeSignature = async () => {
@@ -3408,6 +3624,123 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     } catch (e) {
       setCertPreviewError("Couldn't generate the preview — try again in a moment.");
     }
+  };
+
+  // ---- Settings tab: extra venue/location logo on the built-in design ----
+  const [venueLogo, setVenueLogo] = useState(null); // { imageDataUri, x, y, width } or null
+  const [venueLogoSaving, setVenueLogoSaving] = useState(false);
+
+  useEffect(() => {
+    if (tab === "settings") loadVenueLogo().then(setVenueLogo);
+  }, [tab]);
+
+  const saveVenue = async (next) => {
+    setVenueLogo(next);
+    setVenueLogoSaving(true);
+    try {
+      await saveVenueLogo(next);
+      logActivity(accountName, role, "Updated certificate venue logo", "");
+    } finally {
+      setVenueLogoSaving(false);
+    }
+  };
+
+  const uploadVenueLogo = (file) => {
+    if (!file) return;
+    compressImage(file, 300, 0.9).then((uri) => {
+      saveVenue({ imageDataUri: uri, x: venueLogo?.x ?? 85, y: venueLogo?.y ?? 15, width: venueLogo?.width ?? 20 });
+    });
+  };
+
+  const removeVenueLogo = () => saveVenue(null);
+
+  // ---- Settings tab: broadcast announcement to all parents ----
+  const [broadcastText, setBroadcastText] = useState("");
+  const [broadcastSaving, setBroadcastSaving] = useState(false);
+  const [broadcastSaved, setBroadcastSaved] = useState(false);
+  const [currentBroadcast, setCurrentBroadcast] = useState(null);
+
+  useEffect(() => {
+    if (tab === "settings") loadBroadcast().then(setCurrentBroadcast);
+  }, [tab]);
+
+  const sendBroadcast = async () => {
+    if (!broadcastText.trim()) return;
+    setBroadcastSaving(true);
+    try {
+      const next = { text: broadcastText.trim(), sentAt: new Date().toISOString(), sentBy: accountName || "Admin" };
+      await saveBroadcast(next);
+      setCurrentBroadcast(next);
+      setBroadcastText("");
+      logActivity(accountName, role, "Sent parent announcement", "");
+      setBroadcastSaved(true);
+      setTimeout(() => setBroadcastSaved(false), 3000);
+    } finally {
+      setBroadcastSaving(false);
+    }
+  };
+
+  const clearBroadcast = async () => {
+    await saveBroadcast(null);
+    setCurrentBroadcast(null);
+  };
+
+  // ---- Settings tab: fully custom certificate template ----
+  const [certTemplate, setCertTemplate] = useState(null); // { imageDataUri, textColor, positions } or null
+  const [certTemplateSaving, setCertTemplateSaving] = useState(false);
+
+  useEffect(() => {
+    if (tab !== "settings") return;
+    loadCertTemplate().then(setCertTemplate);
+  }, [tab]);
+
+  const saveTemplate = async (next) => {
+    setCertTemplate(next);
+    setCertTemplateSaving(true);
+    try {
+      await saveCertTemplate(next);
+      logActivity(accountName, role, "Updated certificate template", "");
+    } finally {
+      setCertTemplateSaving(false);
+    }
+  };
+
+  const uploadCertTemplate = (file) => {
+    if (!file) return;
+    compressImage(file, 1400, 0.9).then((uri) => {
+      saveTemplate({
+        imageDataUri: uri,
+        textColor: certTemplate?.textColor || "#0b1e3a",
+        positions: certTemplate?.positions || {
+          name: { x: 50, y: 45 },
+          level: { x: 50, y: 58 },
+          date: { x: 25, y: 85 },
+          signature: { x: 75, y: 85 },
+        },
+      });
+    });
+  };
+
+  const removeCertTemplate = async () => {
+    setCertTemplate(null);
+    setCertTemplateSaving(true);
+    try {
+      await saveCertTemplate(null);
+    } finally {
+      setCertTemplateSaving(false);
+    }
+  };
+
+  const updateTemplatePosition = (field, axis, value) => {
+    if (!certTemplate) return;
+    const next = {
+      ...certTemplate,
+      positions: {
+        ...certTemplate.positions,
+        [field]: { ...certTemplate.positions[field], [axis]: Number(value) },
+      },
+    };
+    saveTemplate(next);
   };
 
   const saveTimeSlotsFor = async (nextForBranch) => {
@@ -3946,27 +4279,31 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                   return `<td style="text-align:center">${mark}</td>`;
                 })
                 .join("");
-              return `<tr><td>${escapeHtml(s.name)}</td><td>${escapeHtml(time || "")}</td><td>${escapeHtml(s.level)}</td><td>${escapeHtml(sessionTypeInfo(sessionType).label)}</td>${attCells}</tr>`;
+              // "Notes" comes first in the HTML source on purpose — in an
+              // RTL table that's what ends up as the rightmost column.
+              return `<tr><td class="notes-cell">&nbsp;</td><td>${escapeHtml(s.name)}</td><td>${escapeHtml(time || "")}</td><td>${escapeHtml(s.level)}</td><td>${escapeHtml(sessionTypeInfo(sessionType).label)}</td>${attCells}</tr>`;
             })
             .join("");
           return `
             <h3>${escapeHtml(coachName)} (${byCoach[coachId].length})</h3>
             <table>
-              <tr><th>Name</th><th>Time</th><th>Level</th><th>Plan</th>${dateHeaderCells}</tr>
+              <tr><th>ملاحظات</th><th>Name</th><th>Time</th><th>Level</th><th>Plan</th>${dateHeaderCells}</tr>
               ${rows}
             </table>`;
         })
         .join("");
 
       const bodyHtml = `
-        <div class="header">
+        <div class="header" dir="ltr">
           <img src="${CONFIG.logoDataUri}" />
           <div>
             <h1>${escapeHtml(CONFIG.academyName)}</h1>
             <div class="sub">Session roster & attendance — ${escapeHtml(dayLabel)}${scheduleTimeFilter !== "all" ? ` · ${escapeHtml(scheduleTimeFilter)}` : ""} · ${escapeHtml(monthLabel(scheduleMonth))}</div>
           </div>
         </div>
-        ${coachSections || "<p>No swimmers scheduled for this selection.</p>"}
+        <div dir="rtl">
+          ${coachSections || "<p>No swimmers scheduled for this selection.</p>"}
+        </div>
       `;
       downloadReportHTML(`roster-${scheduleDayFilter}-${scheduleMonth}${scheduleTimeFilter !== "all" ? "-" + scheduleTimeFilter.replace(/[: ]/g, "") : ""}`, bodyHtml);
     } catch (e) {
@@ -4140,29 +4477,31 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         resetCheckedForMonthRef.current = key;
       }
       const sorted = finalItems.sort((a, b) => a.name.localeCompare(b.name));
-      const json = JSON.stringify(sorted);
+      const scoped = branchRestriction ? sorted.filter((s) => s.branch === branchRestriction) : sorted;
+      const json = JSON.stringify(scoped);
       if (json !== lastSwimmersJSONRef.current) {
         lastSwimmersJSONRef.current = json;
-        setSwimmers(sorted);
+        setSwimmers(scoped);
       }
     } catch (e) {
       console.warn("load swimmers failed", e);
     } finally {
       setSwimmersLoading(false);
     }
-  }, []);
+  }, [branchRestriction]);
 
   const loadCoaches = useCallback(async () => {
     setCoachesLoading(true);
     try {
       const items = await loadCollection(STORE_KEYS.coaches);
-      setCoaches(items.sort((a, b) => a.name.localeCompare(b.name)));
+      const scoped = branchRestriction ? items.filter((c) => c.branch === branchRestriction) : items;
+      setCoaches(scoped.sort((a, b) => a.name.localeCompare(b.name)));
     } catch (e) {
       console.warn("load coaches failed", e);
     } finally {
       setCoachesLoading(false);
     }
-  }, []);
+  }, [branchRestriction]);
 
   const loadExpenses = useCallback(async () => {
     setExpensesLoading(true);
@@ -4249,13 +4588,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
     // and every action on it (payments, freezing, editing...) reads/writes
     // the full roster fresh each time via fetchAllSwimmers/updateSwimmerById
     // instead of keeping it sitting in state.
-    if (tab === "reports" || tab === "coaches" || tab === "schedule") loadSwimmers();
+    if (tab === "reports" || tab === "coaches" || tab === "schedule" || tab === "dashboard") loadSwimmers();
     const t = setInterval(() => {
       loadRequests();
       loadCoaches();
       if (tab === "reports") loadExpenses();
       if (tab === "accounts") loadAccounts();
-      if (tab === "reports" || tab === "coaches" || tab === "schedule") loadSwimmers();
+      if (tab === "reports" || tab === "coaches" || tab === "schedule" || tab === "dashboard") loadSwimmers();
     }, 15000);
     return () => clearInterval(t);
   }, [authed, tab, loadRequests, loadSwimmers, loadCoaches, loadExpenses, loadAccounts, loadAchievements, loadMyAccessLevel, loadMyPayrollAccess]);
@@ -4284,10 +4623,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
   }, [authed, requests, photos]);
 
   const setRequestStatus = async (record, status, receiptNo, targetMonth) => {
+    const paidMonth = status === "confirmed" ? targetMonth || defaultPaymentMonth(bookingOpenDateInput) : record.paidMonth;
     const updated = {
       ...record,
       status,
-      ...(status === "confirmed" ? { confirmedAt: new Date().toISOString(), receiptNo: receiptNo || record.receiptNo || "" } : {}),
+      ...(status === "confirmed" ? { confirmedAt: new Date().toISOString(), receiptNo: receiptNo || record.receiptNo || "", paidMonth } : {}),
     };
     const nextRequests = requests.map((r) => (r.id === record.id ? updated : r));
     setRequests(nextRequests);
@@ -4328,6 +4668,38 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         console.warn("Could not auto-mark swimmer paid", e);
       }
     }
+  };
+
+  // Removes a confirmed payment made by mistake — deletes it from the
+  // requests list (so it disappears from Reports and revenue right away)
+  // and, if it's known which month it paid for, un-marks that month on
+  // the swimmer too, so their "paid" status reverts along with it.
+  const deleteInvoice = (invoice) => {
+    setConfirmAction({
+      message: `Delete this ${invoice.price} EGP invoice for ${invoice.name}? This can't be undone, and will un-mark them as paid for that month if applicable.`,
+      onConfirm: async () => {
+        try {
+          const nextRequests = requests.filter((r) => r.id !== invoice.id);
+          const res = await saveCollection(STORE_KEYS.subs, nextRequests);
+          if (!res) throw new Error("delete failed");
+          setRequests(nextRequests);
+
+          const monthToUnmark = invoice.paidMonth || (invoice.confirmedAt || invoice.createdAt || "").slice(0, 7);
+          if (monthToUnmark) {
+            const all = await fetchAllSwimmers();
+            const matches = invoice.swimmerId ? all.filter((s) => s.id === invoice.swimmerId) : all.filter((s) => s.phone === invoice.phone);
+            const next = all.map((s) =>
+              matches.some((m) => m.id === s.id) ? { ...s, paidMonths: (s.paidMonths || []).filter((m) => m !== monthToUnmark) } : s
+            );
+            await saveCollection(STORE_KEYS.swimmers, next);
+            loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
+          }
+          logActivity(accountName, role, "Deleted invoice", `${invoice.name} — ${invoice.price} EGP`);
+        } catch (e) {
+          loadRequests();
+        }
+      },
+    });
   };
 
   const saveSwimmer = async (record) => {
@@ -4734,12 +5106,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       id: genId(),
       name: swimmer.name,
       phone: swimmer.phone,
+      swimmerId: swimmer.id,
       planId: null,
       planName: cashNote.trim() || `${methodLabel} payment`,
       price: amount,
       status: "confirmed",
       method: cashMethod,
       receiptNo: cashReceiptNo.trim(),
+      paidMonth: paymentMonthFilter,
       createdAt: now,
       confirmedAt: now,
     };
@@ -5005,7 +5379,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         // By default, only show swimmers who are actually enrolled — have a
         // day/time slot, not just added to the system with nothing set yet.
         if (!showUnscheduled) query = query.neq("data->>day", "").neq("data->>time", "");
-        if (branchFilter !== "all") query = query.eq("branch", branchFilter);
+        // A branch-restricted account always gets this filter, regardless
+        // of whatever the branch dropdown shows — it's a hard boundary,
+        // not just a starting filter they could change.
+        if (branchRestriction) query = query.eq("branch", branchRestriction);
+        else if (branchFilter !== "all") query = query.eq("branch", branchFilter);
         if (levelFilter !== "all") query = query.eq("level", levelFilter);
         if (dayFilter !== "all") query = query.filter("data->>day", "eq", dayFilter);
         if (timeFilter !== "all") query = query.filter("data->>time", "eq", timeFilter);
@@ -5030,7 +5408,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         setSwimmersPageLoading(false);
       }
     },
-    [branchFilter, levelFilter, dayFilter, timeFilter, sessionTypeFilter, paymentStatusFilter, paymentMonthFilter, search, showUnscheduled]
+    [branchFilter, levelFilter, dayFilter, timeFilter, sessionTypeFilter, paymentStatusFilter, paymentMonthFilter, search, showUnscheduled, branchRestriction]
   );
 
   useEffect(() => {
@@ -5267,6 +5645,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       {/* main tabs — vertical sidebar on the left, content on the right (stacks on narrow/mobile screens) */}
       <div className="flex flex-col sm:flex-row gap-6 items-start">
       <div className="w-full sm:w-52 shrink-0 flex flex-row sm:flex-col gap-0.5 overflow-x-auto sm:overflow-visible pb-1 sm:pb-0">
+        <button
+          onClick={() => setTab("dashboard")}
+          className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+            tab === "dashboard" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+          }`}
+        >
+          <LayoutGrid className="w-4 h-4" /> Dashboard
+        </button>
         {canEditContent && (
           <button
             onClick={() => setTab("registrations")}
@@ -5402,6 +5788,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
             <ShieldCheck className="w-4 h-4" /> Incidents
           </button>
         )}
+        {canEditContent && (
+          <button
+            onClick={() => setTab("feedback")}
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+              tab === "feedback" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+            }`}
+          >
+            <Star className="w-4 h-4" /> Feedback
+          </button>
+        )}
         {(accountName || role === "admin") && (
           <button
             onClick={() => setTab("chat")}
@@ -5415,6 +5811,194 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
       </div>
 
       <div className="flex-1 min-w-0">
+
+      {tab === "dashboard" && (() => {
+        const now = new Date();
+        const thisMonthKey = monthKey();
+        const weekAgo = new Date();
+        weekAgo.setDate(weekAgo.getDate() - 7);
+
+        const activeNow = swimmers.filter((s) => s.day && s.time);
+        const unpaidCount = activeNow.filter((s) => !isPaidThisMonth(s)).length;
+        const newThisWeek = swimmers.filter((s) => s.createdAt && new Date(s.createdAt) >= weekAgo).length;
+
+        const revenueThisMonth = requests
+          .filter((r) => r.status === "confirmed" && (r.confirmedAt || r.createdAt || "").slice(0, 7) === thisMonthKey)
+          .reduce((sum, r) => sum + (Number(r.price) || 0), 0);
+        const prevMonthKey = (() => {
+          const d = new Date();
+          d.setMonth(d.getMonth() - 1);
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        })();
+        const revenuePrevMonth = requests
+          .filter((r) => r.status === "confirmed" && (r.confirmedAt || r.createdAt || "").slice(0, 7) === prevMonthKey)
+          .reduce((sum, r) => sum + (Number(r.price) || 0), 0);
+        const revenueDelta = revenuePrevMonth > 0 ? Math.round(((revenueThisMonth - revenuePrevMonth) / revenuePrevMonth) * 100) : null;
+
+        const pendingPaymentRequests = requests.filter((r) => r.status === "pending").length;
+
+        const miniTrend = [];
+        for (let i = 5; i >= 0; i--) {
+          const d = new Date();
+          d.setDate(1);
+          d.setMonth(d.getMonth() - i);
+          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+          const total = requests
+            .filter((r) => r.status === "confirmed" && (r.confirmedAt || r.createdAt || "").slice(0, 7) === key)
+            .reduce((sum, r) => sum + (Number(r.price) || 0), 0);
+          miniTrend.push({ label: d.toLocaleDateString("en-GB", { month: "short" }), total });
+        }
+        const miniTrendMax = Math.max(...miniTrend.map((m) => m.total), 1);
+
+        const recentlyLeveledUp = swimmers
+          .filter((s) => (s.certificates || []).length > 0)
+          .map((s) => ({ swimmer: s, cert: s.certificates[s.certificates.length - 1] }))
+          .sort((a, b) => new Date(b.cert.date) - new Date(a.cert.date))
+          .slice(0, 5);
+
+        const greeting = now.getHours() < 12 ? "Good morning" : now.getHours() < 18 ? "Good afternoon" : "Good evening";
+
+        return (
+          <div>
+            <div className="mb-6">
+              <h2 className="text-2xl font-bold text-slate-900">{greeting}{accountName ? `, ${accountName.split(" ")[0]}` : ""}</h2>
+              <p className="text-sm text-slate-400">
+                {now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })} · {CONFIG.academyName}
+              </p>
+            </div>
+
+            {(pendingRegistrations.length > 0 || pendingPaymentRequests > 0) && (
+              <div className="flex flex-wrap gap-3 mb-6">
+                {pendingRegistrations.length > 0 && (
+                  <button
+                    onClick={() => setTab("registrations")}
+                    className="flex items-center gap-2.5 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-left hover:bg-amber-100 transition"
+                  >
+                    <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+                    <div>
+                      <div className="text-sm font-semibold text-amber-900">
+                        {pendingRegistrations.length} new registration{pendingRegistrations.length === 1 ? "" : "s"} waiting
+                      </div>
+                      <div className="text-xs text-amber-600">Needs your approval</div>
+                    </div>
+                  </button>
+                )}
+                {pendingPaymentRequests > 0 && (
+                  <button
+                    onClick={() => setTab("requests")}
+                    className="flex items-center gap-2.5 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-left hover:bg-blue-100 transition"
+                  >
+                    <Bell className="w-5 h-5 text-blue-700 shrink-0" />
+                    <div>
+                      <div className="text-sm font-semibold text-blue-900">
+                        {pendingPaymentRequests} payment{pendingPaymentRequests === 1 ? "" : "s"} to confirm
+                      </div>
+                      <div className="text-xs text-blue-600">Waiting for review</div>
+                    </div>
+                  </button>
+                )}
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+              <div className="bg-white rounded-2xl border border-slate-200 p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs text-slate-400 font-medium">Active swimmers</span>
+                  <Users className="w-4 h-4 text-slate-300" />
+                </div>
+                <div className="text-2xl font-bold text-slate-900">{activeNow.length}</div>
+              </div>
+              <div className="bg-white rounded-2xl border border-slate-200 p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs text-slate-400 font-medium">Unpaid this month</span>
+                  <AlertCircle className="w-4 h-4 text-slate-300" />
+                </div>
+                <div className={`text-2xl font-bold ${unpaidCount > 0 ? "text-red-500" : "text-slate-900"}`}>{unpaidCount}</div>
+              </div>
+              <div className="bg-white rounded-2xl border border-slate-200 p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs text-slate-400 font-medium">Revenue this month</span>
+                  <TrendingUp className="w-4 h-4 text-slate-300" />
+                </div>
+                <div className="text-2xl font-bold text-slate-900">
+                  {revenueThisMonth.toLocaleString()}
+                  <span className="text-xs font-normal text-slate-400"> EGP</span>
+                </div>
+                {revenueDelta !== null && (
+                  <div className={`text-xs mt-0.5 ${revenueDelta >= 0 ? "text-green-600" : "text-red-500"}`}>
+                    {revenueDelta >= 0 ? "↑" : "↓"} {Math.abs(revenueDelta)}% vs last month
+                  </div>
+                )}
+              </div>
+              <div className="bg-white rounded-2xl border border-slate-200 p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs text-slate-400 font-medium">New this week</span>
+                  <UserPlus className="w-4 h-4 text-slate-300" />
+                </div>
+                <div className="text-2xl font-bold text-slate-900">{newThisWeek}</div>
+              </div>
+            </div>
+
+            <div className="grid lg:grid-cols-2 gap-4 mb-6">
+              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+                <div className="text-sm font-semibold text-slate-800 mb-4">Revenue — last 6 months</div>
+                <div className="flex items-end gap-3 h-24">
+                  {miniTrend.map((m, i) => (
+                    <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                      <div className="text-[10px] text-slate-400 font-medium">{m.total > 0 ? m.total.toLocaleString() : ""}</div>
+                      <div
+                        className="w-full rounded-t-md bg-blue-900"
+                        style={{ height: `${Math.max((m.total / miniTrendMax) * 70, m.total > 0 ? 4 : 0)}px` }}
+                      />
+                      <div className="text-[10px] text-slate-400">{m.label}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="text-sm font-semibold text-slate-800">Recent achievements</div>
+                  <GraduationCap className="w-4 h-4 text-slate-300" />
+                </div>
+                {recentlyLeveledUp.length === 0 ? (
+                  <div className="text-xs text-slate-400 py-6 text-center">No level-ups recorded yet</div>
+                ) : (
+                  <div className="space-y-2.5">
+                    {recentlyLeveledUp.map(({ swimmer: s, cert }, i) => (
+                      <div key={i} className="flex items-center justify-between text-sm">
+                        <div>
+                          <span className="font-medium text-slate-700">{s.name}</span>
+                          <span className="text-slate-400"> completed {cert.level}</span>
+                        </div>
+                        <span className="text-xs text-slate-400 shrink-0">{new Date(cert.date).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {[
+                { label: "Add swimmer", icon: UserPlus, onClick: () => { setTab("swimmers"); setTimeout(() => setShowForm(true), 0); } },
+                { label: "View coaches", icon: Users, onClick: () => setTab("coaches") },
+                { label: "Full reports", icon: TrendingUp, onClick: () => setTab("reports") },
+                { label: "Staff chat", icon: MessageSquare, onClick: () => setTab("chat") },
+              ].map((action) => (
+                <button
+                  key={action.label}
+                  onClick={action.onClick}
+                  className="flex flex-col items-center gap-2 bg-white rounded-2xl border border-slate-200 p-4 hover:border-blue-200 hover:bg-blue-50/40 transition"
+                >
+                  <action.icon className="w-5 h-5 text-blue-900" />
+                  <span className="text-xs font-medium text-slate-600">{action.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       {tab === "requests" && (
         <div>
@@ -6148,28 +6732,57 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                                 <span className="font-medium text-slate-700">{inv.price} EGP</span>
                                 <span className="text-slate-400"> · {inv.planName} · {new Date(inv.confirmedAt || inv.createdAt).toLocaleDateString("en-GB")}</span>
                               </div>
-                              <button
-                                onClick={() =>
-                                  printReceipt({
-                                    swimmerName: s.name,
-                                    phone: s.phone,
-                                    planName: inv.planName,
-                                    price: inv.price,
-                                    receiptNo: inv.receiptNo || "",
-                                    paymentMethod: inv.method === "card" ? "Card" : inv.method === "cash" ? "Cash" : "Instapay",
-                                    date: (inv.confirmedAt || inv.createdAt).slice(0, 10),
-                                  })
-                                }
-                                className="text-blue-900 hover:underline font-medium"
-                              >
-                                Reprint
-                              </button>
+                              <div className="flex items-center gap-3">
+                                <button
+                                  onClick={() =>
+                                    printReceipt({
+                                      swimmerName: s.name,
+                                      phone: s.phone,
+                                      planName: inv.planName,
+                                      price: inv.price,
+                                      receiptNo: inv.receiptNo || "",
+                                      paymentMethod: inv.method === "card" ? "Card" : inv.method === "cash" ? "Cash" : "Instapay",
+                                      date: (inv.confirmedAt || inv.createdAt).slice(0, 10),
+                                    })
+                                  }
+                                  className="text-blue-900 hover:underline font-medium"
+                                >
+                                  Reprint
+                                </button>
+                                {canEdit && (
+                                  <button onClick={() => deleteInvoice(inv)} className="text-red-500 hover:underline font-medium">
+                                    Delete
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           ))}
                         </div>
                       );
                     })()}
                   </div>
+
+                  {(s.certificates || []).length > 0 && (
+                    <div className="mt-4 pt-4 border-t border-slate-100">
+                      <div className="text-xs font-semibold text-slate-500 mb-1.5">Certificates</div>
+                      <div className="space-y-1.5">
+                        {[...s.certificates].reverse().map((cert, i) => (
+                          <div key={i} className="flex items-center justify-between text-xs bg-slate-50 rounded-lg px-3 py-2">
+                            <div>
+                              <span className="font-medium text-slate-700">{cert.level}</span>
+                              <span className="text-slate-400"> · {new Date(cert.date).toLocaleDateString("en-GB")}</span>
+                            </div>
+                            <button
+                              onClick={() => printCertificate({ swimmerName: s.name, level: cert.level, date: cert.date })}
+                              className="text-blue-900 hover:underline font-medium"
+                            >
+                              Print
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {s.waiverAccepted && (
                     <div className="mt-4 pt-4 border-t border-slate-100">
@@ -7209,14 +7822,44 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                 <div key={level} className="bg-white rounded-2xl border border-slate-200 p-4">
                   <div className="flex items-center justify-between mb-2">
                     <h4 className="font-semibold text-slate-800">{level}</h4>
-                    {isCustomized && (
-                      <button
-                        onClick={() => resetLevelSkills(level)}
-                        className="text-xs text-slate-400 hover:text-slate-600 underline"
+                    <div className="flex items-center gap-2">
+                      {levelLogos[level] && (
+                        <>
+                          <img src={levelLogos[level]} alt="" className="w-6 h-6 rounded object-contain border border-slate-100" />
+                          <button onClick={() => removeLevelLogo(level)} className="text-xs text-red-400 hover:text-red-600">
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      )}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        id={`level-logo-${level}`}
+                        className="hidden"
+                        onChange={(e) => uploadLevelLogo(level, e.target.files?.[0])}
+                      />
+                      <label
+                        htmlFor={`level-logo-${level}`}
+                        className="cursor-pointer text-xs px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
                       >
-                        Reset to default
+                        {levelLogos[level] ? "Change logo" : "Add certificate logo"}
+                      </label>
+                      {isCustomized && (
+                        <button
+                          onClick={() => resetLevelSkills(level)}
+                          className="text-xs text-slate-400 hover:text-slate-600 underline"
+                        >
+                          Reset to default
+                        </button>
+                      )}
+                      <button
+                        onClick={() => printCertificatesForLevel(level)}
+                        disabled={bulkCertLevel === level}
+                        className="text-xs px-2.5 py-1 rounded-lg bg-blue-50 text-blue-800 font-medium hover:bg-blue-100 disabled:opacity-60"
+                      >
+                        {bulkCertLevel === level ? "Printing..." : "Print all certificates"}
                       </button>
-                    )}
+                    </div>
                   </div>
                   <div className="flex flex-wrap gap-1.5 mb-2">
                     {skills.length === 0 && <span className="text-xs text-slate-400">No skills set for this level</span>}
@@ -7488,6 +8131,58 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
         </div>
       )}
 
+      {tab === "feedback" && canEditContent && (
+        <div>
+          <div className="mb-4">
+            <h3 className="font-bold text-slate-900">Parent feedback</h3>
+            <p className="text-xs text-slate-400">Star ratings and comments parents leave from their portal, once per swimmer per month.</p>
+          </div>
+          {feedbackLoading ? (
+            <div className="text-center text-slate-400 py-16">Loading...</div>
+          ) : feedback.length === 0 ? (
+            <div className="text-center text-slate-400 py-16">No feedback submitted yet</div>
+          ) : (
+            <>
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-4 flex items-center gap-6">
+                <div>
+                  <div className="text-3xl font-bold text-slate-900">
+                    {(feedback.reduce((sum, f) => sum + f.rating, 0) / feedback.length).toFixed(1)}
+                  </div>
+                  <div className="text-xs text-slate-400">average, {feedback.length} rating{feedback.length === 1 ? "" : "s"}</div>
+                </div>
+                <div className="flex-1 space-y-1">
+                  {[5, 4, 3, 2, 1].map((n) => {
+                    const count = feedback.filter((f) => f.rating === n).length;
+                    const pct = feedback.length ? (count / feedback.length) * 100 : 0;
+                    return (
+                      <div key={n} className="flex items-center gap-2 text-xs text-slate-400">
+                        <span className="w-3">{n}</span>
+                        <div className="flex-1 bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                          <div className="bg-amber-400 h-full rounded-full" style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="w-5 text-right">{count}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="space-y-2">
+                {feedback.map((f) => (
+                  <div key={f.id} className="bg-white rounded-xl border border-slate-200 p-4">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-semibold text-slate-800 text-sm">{f.swimmerName}</span>
+                      <span className="text-amber-400 text-sm">{"★".repeat(f.rating)}{"☆".repeat(5 - f.rating)}</span>
+                    </div>
+                    <div className="text-xs text-slate-400 mb-2">{monthLabel(f.month)}</div>
+                    {f.comment && <div className="text-sm text-slate-600">{f.comment}</div>}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {tab === "incidents" && canEditContent && (
         <div>
           <div className="flex items-center justify-between mb-4">
@@ -7712,6 +8407,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                       Remove signature
                     </button>
                   )}
+                  {settingsError && <div className="text-xs text-red-500">{settingsError}</div>}
                 </div>
               </div>
             </div>
@@ -7769,6 +8465,87 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                   ))}
                 </div>
               </div>
+
+              <div className="mb-4 pt-4 border-t border-slate-100">
+                <label className="text-xs text-slate-500 mb-1 block">
+                  Venue/location logo (optional — for when you're working somewhere other than your own branch)
+                </label>
+                {venueLogo?.imageDataUri ? (
+                  <div>
+                    <div className="flex items-center gap-3 mb-3">
+                      <img src={venueLogo.imageDataUri} alt="" className="w-14 h-14 rounded-lg object-contain border border-slate-100 bg-slate-50" />
+                      <div className="flex flex-col gap-1">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          id="venue-logo-input"
+                          className="hidden"
+                          onChange={(e) => uploadVenueLogo(e.target.files?.[0])}
+                        />
+                        <label htmlFor="venue-logo-input" className="cursor-pointer text-xs text-blue-900 hover:underline">
+                          Change
+                        </label>
+                        <button onClick={removeVenueLogo} className="text-xs text-red-500 hover:underline text-left">
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <span className="text-[10px] text-slate-400">Left %</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          value={venueLogo.x}
+                          onChange={(e) => saveVenue({ ...venueLogo, x: Number(e.target.value) })}
+                          className="w-full border border-slate-200 rounded-lg py-1.5 px-2 text-sm outline-none focus:border-blue-900"
+                        />
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-slate-400">Top %</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          value={venueLogo.y}
+                          onChange={(e) => saveVenue({ ...venueLogo, y: Number(e.target.value) })}
+                          className="w-full border border-slate-200 rounded-lg py-1.5 px-2 text-sm outline-none focus:border-blue-900"
+                        />
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-slate-400">Size (mm)</span>
+                        <input
+                          type="number"
+                          min="5"
+                          max="60"
+                          value={venueLogo.width}
+                          onChange={(e) => saveVenue({ ...venueLogo, width: Number(e.target.value) })}
+                          className="w-full border border-slate-200 rounded-lg py-1.5 px-2 text-sm outline-none focus:border-blue-900"
+                        />
+                      </div>
+                    </div>
+                    {venueLogoSaving && <div className="text-xs text-slate-400 mt-2">Saving...</div>}
+                  </div>
+                ) : (
+                  <div>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      id="venue-logo-input"
+                      className="hidden"
+                      onChange={(e) => uploadVenueLogo(e.target.files?.[0])}
+                    />
+                    <label
+                      htmlFor="venue-logo-input"
+                      className="inline-block cursor-pointer text-sm px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
+                    >
+                      Add venue logo
+                    </label>
+                  </div>
+                )}
+              </div>
+
               {certSaving && <div className="text-xs text-slate-400 mb-2">Saving...</div>}
               {certPreviewError && <div className="text-xs text-red-500 mb-2">{certPreviewError}</div>}
               <button
@@ -7777,6 +8554,94 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
               >
                 Preview certificate
               </button>
+            </div>
+          </div>
+
+          <div>
+            <h3 className="font-bold text-slate-900 mb-1">Upload your own certificate design</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              Upload a certificate image you like, and the system prints it instead — the swimmer's name, level, date, and signature get placed on top of it. Overrides everything above.
+            </p>
+            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              {certTemplate?.imageDataUri ? (
+                <>
+                  <img src={certTemplate.imageDataUri} alt="" className="w-full max-w-md rounded-lg border border-slate-200 mb-4" />
+                  <div className="grid sm:grid-cols-2 gap-4 mb-4">
+                    {[
+                      { key: "name", label: "Swimmer name position" },
+                      { key: "level", label: "Level position" },
+                      { key: "date", label: "Date position" },
+                      { key: "signature", label: "Signature position" },
+                    ].map((f) => (
+                      <div key={f.key}>
+                        <label className="text-xs text-slate-500 mb-1 block">{f.label}</label>
+                        <div className="flex gap-2">
+                          <div className="flex-1">
+                            <span className="text-[10px] text-slate-400">Left %</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="100"
+                              value={certTemplate.positions?.[f.key]?.x ?? 50}
+                              onChange={(e) => updateTemplatePosition(f.key, "x", e.target.value)}
+                              className="w-full border border-slate-200 rounded-lg py-1.5 px-2 text-sm outline-none focus:border-blue-900"
+                            />
+                          </div>
+                          <div className="flex-1">
+                            <span className="text-[10px] text-slate-400">Top %</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="100"
+                              value={certTemplate.positions?.[f.key]?.y ?? 50}
+                              onChange={(e) => updateTemplatePosition(f.key, "y", e.target.value)}
+                              className="w-full border border-slate-200 rounded-lg py-1.5 px-2 text-sm outline-none focus:border-blue-900"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-3 mb-4">
+                    <label className="text-xs text-slate-500">Text color</label>
+                    <input
+                      type="color"
+                      value={certTemplate.textColor || "#0b1e3a"}
+                      onChange={(e) => saveTemplate({ ...certTemplate, textColor: e.target.value })}
+                      className="w-9 h-9 rounded-lg border border-slate-200 cursor-pointer"
+                    />
+                  </div>
+                  {certTemplateSaving && <div className="text-xs text-slate-400 mb-2">Saving...</div>}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={previewCertificate}
+                      className="px-4 py-2 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200"
+                    >
+                      Preview certificate
+                    </button>
+                    <button onClick={removeCertTemplate} className="px-4 py-2 rounded-lg text-red-500 text-sm font-medium hover:bg-red-50">
+                      Remove & use built-in design
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    id="cert-template-input"
+                    className="hidden"
+                    onChange={(e) => uploadCertTemplate(e.target.files?.[0])}
+                  />
+                  <label
+                    htmlFor="cert-template-input"
+                    className="inline-block cursor-pointer text-sm px-4 py-2.5 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
+                  >
+                    Upload certificate design
+                  </label>
+                  <div className="text-xs text-slate-400 mt-2">Landscape image works best (e.g. 1400×990px or similar A4-landscape proportions).</div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -8012,6 +8877,41 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName }) {
                 className="px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
               >
                 {programsSaving ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <h3 className="font-bold text-slate-900 mb-1">Announcement for parents</h3>
+            <p className="text-sm text-slate-500 mb-4">Shows as a banner to every parent next time they open the Parent Portal.</p>
+            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              {currentBroadcast && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 mb-4 flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm text-amber-900">{currentBroadcast.text}</div>
+                    <div className="text-xs text-amber-500 mt-1">
+                      Sent {new Date(currentBroadcast.sentAt).toLocaleString("en-GB")} by {currentBroadcast.sentBy}
+                    </div>
+                  </div>
+                  <button onClick={clearBroadcast} className="text-xs text-amber-500 hover:text-amber-700 shrink-0">
+                    Clear
+                  </button>
+                </div>
+              )}
+              <textarea
+                value={broadcastText}
+                onChange={(e) => setBroadcastText(e.target.value)}
+                rows={3}
+                placeholder="e.g. The academy will be closed this Friday for maintenance."
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 mb-3"
+              />
+              {broadcastSaved && <div className="text-green-700 text-sm mb-3 bg-green-50 rounded-lg px-3 py-2">Sent to all parents.</div>}
+              <button
+                onClick={sendBroadcast}
+                disabled={broadcastSaving || !broadcastText.trim()}
+                className="px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+              >
+                {broadcastSaving ? "Sending..." : "Send announcement"}
               </button>
             </div>
           </div>
@@ -9007,6 +9907,7 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
   const [password, setPassword] = useState(initial?.password || "");
   const [role, setRole] = useState(initial?.role || "technical");
   const [levelRestriction, setLevelRestriction] = useState(initial?.levelRestriction || "");
+  const [branchRestriction, setBranchRestriction] = useState(initial?.branchRestriction || "");
   const [linkedCoachId, setLinkedCoachId] = useState(initial?.linkedCoachId || "");
   const [expectedStartTime, setExpectedStartTime] = useState(initial?.expectedStartTime || "");
   const [monthlySalary, setMonthlySalary] = useState(initial?.monthlySalary || "");
@@ -9032,6 +9933,7 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
         password: password.trim(),
         role,
         levelRestriction: role === "technical" ? levelRestriction || null : null,
+        branchRestriction: role === "admin" ? null : branchRestriction || null,
         linkedCoachId: role === "coach" ? linkedCoachId : null,
         expectedStartTime: expectedStartTime || null,
         monthlySalary: monthlySalary ? Number(monthlySalary) : null,
@@ -9094,6 +9996,24 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
                 <option key={l} value={l}>{l}</option>
               ))}
             </select>
+          </div>
+        )}
+        {role !== "admin" && (
+          <div className="sm:col-span-2">
+            <label className="text-xs text-slate-500 mb-1 block">Only show this branch's data (optional)</label>
+            <select
+              value={branchRestriction}
+              onChange={(e) => setBranchRestriction(e.target.value)}
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+            >
+              <option value="">All branches</option>
+              {BRANCHES.map((b) => (
+                <option key={b.id} value={b.id}>{b.name}</option>
+              ))}
+            </select>
+            <div className="text-xs text-slate-400 mt-1">
+              With this set, the account only sees swimmers, coaches, and reports for that one branch — everything else stays hidden from them.
+            </div>
           </div>
         )}
         {role === "coach" && (
@@ -9457,7 +10377,7 @@ function QRScanner({ onScan, onClose }) {
   );
 }
 
-function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = null }) {
+function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = null, branchRestriction = null }) {
   const [authed, setAuthed] = useState(preAuthed);
   const [pass, setPass] = useState("");
   const [passError, setPassError] = useState("");
@@ -9465,7 +10385,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   const [swimmers, setSwimmers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [coaches, setCoaches] = useState([]);
-  const [branch, setBranch] = useState(BRANCHES[0].id);
+  const [branch, setBranch] = useState(branchRestriction || BRANCHES[0].id);
   const [dayGroup, setDayGroup] = useState(dayGroupForToday() || DAY_GROUPS[0].id);
   const [babyMode, setBabyMode] = useState(levelRestriction === "Baby");
   const [time, setTime] = useState(
@@ -9682,11 +10602,9 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
 
   const levelUp = async (swimmer) => {
     try {
-      const completedLevel = swimmer.level; // the level they're finishing, before it changes
       const updated = await updateSwimmerById(swimmer.id, levelUpSwimmer);
       if (updated === swimmer) return; // already at the top level
       setSwimmers((prev) => prev.map((s) => (s.id === swimmer.id ? updated : s)));
-      printCertificate({ swimmerName: swimmer.name, level: completedLevel, date: todayISO() });
     } catch (e) {
       loadSwimmers();
     }
@@ -9956,6 +10874,18 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
                     title={`Move up to ${nextLevelOf(s.level)}`}
                   >
                     ⬆ {nextLevelOf(s.level)}
+                  </button>
+                )}
+                {(s.certificates || []).length > 0 && (
+                  <button
+                    onClick={() => {
+                      const latest = s.certificates[s.certificates.length - 1];
+                      printCertificate({ swimmerName: s.name, level: latest.level, date: latest.date });
+                    }}
+                    className="px-3 py-1.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-800 hover:bg-blue-100 whitespace-nowrap"
+                    title="Print their latest certificate"
+                  >
+                    🎓 Certificate
                   </button>
                 )}
                 <button
@@ -10571,7 +11501,6 @@ function TechnicalView({ accountName, onExit }) {
   };
 
   const levelUp = async (swimmer) => {
-    const completedLevel = swimmer.level; // the level they're finishing, before it changes
     const updated = levelUpSwimmer(swimmer);
     if (updated === swimmer) return; // already at the top level
     const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
@@ -10579,7 +11508,6 @@ function TechnicalView({ accountName, onExit }) {
     try {
       const res = await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
       if (!res) throw new Error("save failed");
-      printCertificate({ swimmerName: swimmer.name, level: completedLevel, date: todayISO() });
     } catch (e) {
       loadSwimmers();
     }
@@ -10721,7 +11649,7 @@ function StaffPortal({ onExit }) {
       setSessionAndPersist({ role: "coach", name: acct.name, coach });
       return;
     }
-    setSessionAndPersist({ role: acct.role, name: acct.name, levelRestriction: acct.levelRestriction || null });
+    setSessionAndPersist({ role: acct.role, name: acct.name, levelRestriction: acct.levelRestriction || null, branchRestriction: acct.branchRestriction || null });
   };
 
   if (!session) {
@@ -10762,14 +11690,14 @@ function StaffPortal({ onExit }) {
   }
 
   if (session.role === "technical") {
-    return <StaffView accountName={session.name} levelRestriction={session.levelRestriction} preAuthed onExit={handleExit} />;
+    return <StaffView accountName={session.name} levelRestriction={session.levelRestriction} branchRestriction={session.branchRestriction} preAuthed onExit={handleExit} />;
   }
 
   if (session.role === "coach") {
     return <CoachView preAuthedCoach={session.coach} onExit={handleExit} />;
   }
 
-  return <AdminView role={session.role} preAuthed accountName={session.name} onExit={handleExit} />;
+  return <AdminView role={session.role} preAuthed accountName={session.name} branchRestriction={session.branchRestriction} onExit={handleExit} />;
 }
 
 /* ============================================================
@@ -11081,6 +12009,11 @@ function ParentPortalView({ onRenew, onExit }) {
   const [loading, setLoading] = useState(false);
   const [siblings, setSiblings] = useState(null); // array of swimmer data once logged in
   const [selectedId, setSelectedId] = useState(null);
+  const [broadcast, setBroadcast] = useState(null);
+
+  useEffect(() => {
+    loadBroadcast().then(setBroadcast);
+  }, []);
 
   const login = async () => {
     setError("");
@@ -11168,6 +12101,12 @@ function ParentPortalView({ onRenew, onExit }) {
           <button onClick={() => { setSiblings(null); setSelectedId(null); }} className="text-sm text-slate-400 hover:text-slate-600">Log out</button>
         </div>
 
+        {broadcast && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-4 text-sm text-amber-900">
+            {broadcast.text}
+          </div>
+        )}
+
         {siblings.length > 1 && (
           <div className="flex gap-2 mb-4 overflow-x-auto pb-1">
             {siblings.map((sw) => (
@@ -11210,6 +12149,28 @@ function ParentPortalView({ onRenew, onExit }) {
           </div>
         </div>
 
+        {(s.certificates || []).length > 0 && (
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-4">
+            <h3 className="font-bold text-slate-900 mb-3">Certificates earned</h3>
+            <div className="space-y-2">
+              {[...s.certificates].reverse().map((cert, i) => (
+                <div key={i} className="flex items-center justify-between text-sm bg-slate-50 rounded-lg px-3 py-2.5">
+                  <div>
+                    <span className="font-medium text-slate-700">{cert.level}</span>
+                    <span className="text-slate-400"> · {new Date(cert.date).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}</span>
+                  </div>
+                  <button
+                    onClick={() => printCertificate({ swimmerName: s.name, level: cert.level, date: cert.date })}
+                    className="text-blue-900 hover:underline font-medium text-xs shrink-0"
+                  >
+                    Download
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-4">
           <h3 className="font-bold text-slate-900 mb-3">Payment history</h3>
           {paidMonths.length === 0 ? (
@@ -11223,6 +12184,8 @@ function ParentPortalView({ onRenew, onExit }) {
           )}
         </div>
 
+        <FeedbackCard swimmer={s} />
+
         <button
           onClick={() => onRenew(s)}
           className="w-full py-3.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition"
@@ -11230,6 +12193,90 @@ function ParentPortalView({ onRenew, onExit }) {
           Renew subscription for {s.name}
         </button>
       </div>
+    </div>
+  );
+}
+
+/* A small "how are we doing?" card in the parent portal — star rating +
+   optional comment, once per swimmer per calendar month. */
+function FeedbackCard({ swimmer }) {
+  const [existing, setExisting] = useState(undefined); // undefined = loading, null = none yet, object = already submitted this month
+  const [rating, setRating] = useState(0);
+  const [comment, setComment] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const thisMonth = monthKey();
+
+  useEffect(() => {
+    let cancelled = false;
+    loadCollection(STORE_KEYS.feedback).then((all) => {
+      if (cancelled) return;
+      const mine = all.find((f) => f.swimmerId === swimmer.id && f.month === thisMonth);
+      setExisting(mine || null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [swimmer.id, thisMonth]);
+
+  const submit = async () => {
+    if (!rating) return;
+    setSaving(true);
+    try {
+      const all = await loadCollection(STORE_KEYS.feedback);
+      const record = {
+        id: genId(),
+        swimmerId: swimmer.id,
+        swimmerName: swimmer.name,
+        month: thisMonth,
+        rating,
+        comment: comment.trim(),
+        createdAt: new Date().toISOString(),
+      };
+      await saveCollection(STORE_KEYS.feedback, [record, ...all]);
+      setExisting(record);
+      setSaved(true);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (existing === undefined) return null;
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-4">
+      <h3 className="font-bold text-slate-900 mb-1">How are we doing?</h3>
+      {existing || saved ? (
+        <div className="text-sm text-slate-500">
+          Thanks for your feedback this month
+          {(existing?.rating || rating) ? ` — you rated us ${"★".repeat(existing?.rating || rating)}${"☆".repeat(5 - (existing?.rating || rating))}.` : "."}
+        </div>
+      ) : (
+        <>
+          <p className="text-xs text-slate-400 mb-3">Rate {swimmer.name}'s experience this month</p>
+          <div className="flex gap-1 mb-3">
+            {[1, 2, 3, 4, 5].map((n) => (
+              <button key={n} onClick={() => setRating(n)} className="text-2xl leading-none">
+                <span className={n <= rating ? "text-amber-400" : "text-slate-200"}>★</span>
+              </button>
+            ))}
+          </div>
+          <textarea
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            rows={2}
+            placeholder="Any comments (optional)"
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 mb-3 text-sm"
+          />
+          <button
+            onClick={submit}
+            disabled={!rating || saving}
+            className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-50"
+          >
+            {saving ? "Sending..." : "Submit feedback"}
+          </button>
+        </>
+      )}
     </div>
   );
 }
