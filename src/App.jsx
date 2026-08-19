@@ -12755,6 +12755,177 @@ function AcademyScopedGatewayLogin({ role, onBack }) {
 /* Super-admin panel: reachable at yoursite.com/_admin (a reserved path
    that never resolves to a real academy). Lets the super admin (you)
    register new academies and link a login to each one. */
+/* Self-service academy signup — like iClassPro's "Sign Up" flow: a new
+   academy registers itself (name, link, admin password) and gets an
+   automatic free trial, no manual setup needed on your end. You still
+   track/extend paid subscriptions from the super admin panel afterward. */
+function SignupView() {
+  const TRIAL_DAYS = 14;
+  const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [created, setCreated] = useState(null); // { name, slug } once signed up
+
+  const slugify = (text) =>
+    text.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+  const submit = async () => {
+    setError("");
+    if (!name.trim()) return setError("Enter your academy's name");
+    const cleanSlug = slugify(slug || name);
+    if (!cleanSlug) return setError("Enter a valid link name (letters, numbers, dashes)");
+    if (!adminPassword || adminPassword.length < 4) return setError("Choose a password of at least 4 characters");
+    if (adminPassword !== confirmPassword) return setError("Passwords don't match");
+    setSubmitting(true);
+    try {
+      const trialUntil = new Date();
+      trialUntil.setDate(trialUntil.getDate() + TRIAL_DAYS);
+      const { data, error: insertError } = await supabase
+        .from("academies")
+        .insert({
+          name: name.trim(),
+          slug: cleanSlug,
+          contact_email: contactEmail.trim() || null,
+          contact_phone: contactPhone.trim() || null,
+          subscription_paid_until: trialUntil.toISOString().slice(0, 10),
+        })
+        .select()
+        .single();
+      if (insertError) throw new Error(insertError.message.includes("duplicate") ? "That link name is already taken — try another" : insertError.message);
+
+      // Set their admin login password directly — this page runs before
+      // window.__academy is resolved to anything (this URL isn't a real
+      // academy's own page), so this writes straight to their new row
+      // instead of going through the usual window.storage helpers.
+      const { error: pwError } = await supabase
+        .from("app_storage")
+        .upsert({ key: "admin-password-override", value: adminPassword, academy_id: data.id, updated_at: new Date().toISOString() });
+      if (pwError) throw new Error("Academy created, but couldn't set the password — please contact support");
+
+      setCreated({ name: name.trim(), slug: cleanSlug });
+    } catch (e) {
+      setError(e?.message || "Could not sign up, please try again");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (created) {
+    const link = `${window.location.origin}/${created.slug}`;
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4 bg-slate-50">
+        <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100 text-center">
+          <CheckCircle2 className="w-14 h-14 text-green-500 mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-slate-900 mb-2">Welcome, {created.name}!</h2>
+          <p className="text-sm text-slate-500 mb-4">
+            Your {TRIAL_DAYS}-day free trial has started. Here's your academy's own link:
+          </p>
+          <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 mb-4 text-sm font-mono text-blue-900 break-all">
+            {link}
+          </div>
+          <p className="text-xs text-slate-400 mb-6">
+            Log in there with username <strong>admin</strong> and the password you just chose.
+          </p>
+          <a
+            href={link}
+            className="inline-block px-6 py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900"
+          >
+            Go to my academy
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4 py-10 bg-slate-50">
+      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
+        <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-blue-950 flex items-center justify-center">
+          <Waves className="w-7 h-7 text-white" />
+        </div>
+        <h2 className="text-xl font-bold text-slate-900 mb-1 text-center">Register your academy</h2>
+        <p className="text-sm text-slate-400 mb-6 text-center">Start your {TRIAL_DAYS}-day free trial — no card required.</p>
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Academy name</label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+              placeholder="e.g. Blue Waves Swim Academy"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Choose your link</label>
+            <div className="flex items-center border border-slate-200 rounded-xl overflow-hidden focus-within:border-blue-900">
+              <span className="text-xs text-slate-400 pl-3 whitespace-nowrap">{window.location.host}/</span>
+              <input
+                value={slug}
+                onChange={(e) => setSlug(e.target.value)}
+                className="flex-1 py-2.5 px-2 outline-none min-w-0"
+                placeholder={slugify(name) || "blue-waves"}
+              />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Your phone (optional)</label>
+            <input
+              value={contactPhone}
+              onChange={(e) => setContactPhone(e.target.value)}
+              className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Your email (optional)</label>
+            <input
+              value={contactEmail}
+              onChange={(e) => setContactEmail(e.target.value)}
+              className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Choose an admin password</label>
+            <input
+              type="password"
+              value={adminPassword}
+              onChange={(e) => setAdminPassword(e.target.value)}
+              className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Confirm password</label>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submit();
+              }}
+              className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+            />
+          </div>
+
+          {error && <div className="text-red-500 text-sm">{error}</div>}
+
+          <button
+            onClick={submit}
+            disabled={submitting}
+            className="w-full py-3.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60"
+          >
+            {submitting ? "Setting up..." : "Start free trial"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SuperAdminView() {
   const [session, setSession] = useState(null); // {email} once signed in as super admin
   const [email, setEmail] = useState("");
@@ -13210,9 +13381,10 @@ export default function App() {
   // A reserved path that never maps to a real academy — the super admin's
   // own panel for registering new academies.
   const isSuperAdminRoute = academySlugFromPath() === "_admin";
+  const isSignupRoute = academySlugFromPath() === "signup";
 
   useEffect(() => {
-    if (isSuperAdminRoute) return;
+    if (isSuperAdminRoute || isSignupRoute) return;
     resolveAcademy().then((academy) => {
       if (!academy) {
         setAcademyStatus("not-found");
@@ -13237,7 +13409,15 @@ export default function App() {
         setAcademyStatus("ready");
       });
     });
-  }, [isSuperAdminRoute]);
+  }, [isSuperAdminRoute, isSignupRoute]);
+
+  if (isSignupRoute) {
+    return (
+      <ErrorBoundary>
+        <SignupView />
+      </ErrorBoundary>
+    );
+  }
 
   if (isSuperAdminRoute) {
     return (
