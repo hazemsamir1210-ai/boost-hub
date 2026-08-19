@@ -988,7 +988,7 @@ async function setAdminPasswordOverride(newPassword) {
    and any save right after that can fail with "Couldn't save...".
    Instead, each data type now lives as a single array under one key, so
    loading or saving a whole collection is exactly one storage call. */
-const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all", incidents: "incidents-all", registrations: "registrations-all", feedback: "parent-feedback-all" };
+const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all", incidents: "incidents-all", registrations: "registrations-all", feedback: "parent-feedback-all", waitlist: "waitlist-all" };
 
 // The single latest announcement shown as a banner to every parent when
 // they open the Parent Portal — simple broadcast, not per-person messages.
@@ -2695,7 +2695,7 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
 /* ============================================================
    Swimmer registration form (used for both add & edit)
    ============================================================ */
-function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = false }) {
+function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = false, onJoinWaitlist }) {
   const isNew = !initial;
   const [name, setName] = useState(initial?.name || "");
   const [age, setAge] = useState(initial?.age || "");
@@ -2703,6 +2703,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
   const [altPhone, setAltPhone] = useState(initial?.altPhone || "");
   const [branch, setBranch] = useState(initial?.branch || BRANCHES[0].id);
   const [level, setLevel] = useState(initial?.level || LEVELS[1]);
+  const [waitlistJoined, setWaitlistJoined] = useState(false);
   // Day & time are NOT auto-picked for a new swimmer — they stay unscheduled
   // ("Not scheduled yet") until a payment is activated for them. Editing an
   // existing swimmer keeps whatever schedule they already have.
@@ -2967,6 +2968,21 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
                 : "Free at this time"}
             </div>
           )}
+          {slotFull && (
+            <button
+              type="button"
+              onClick={async () => {
+                if (onJoinWaitlist) {
+                  await onJoinWaitlist({ swimmerName: name, phone, coachId, day, time, sessionType, level });
+                  setWaitlistJoined(true);
+                }
+              }}
+              className="text-xs text-blue-900 hover:underline mt-1"
+            >
+              This slot is full — add to waitlist instead
+            </button>
+          )}
+          {waitlistJoined && <div className="text-xs text-green-600 mt-1">Added to the waitlist for this slot.</div>}
         </div>
         )}
       </div>
@@ -4279,15 +4295,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   return `<td style="text-align:center">${mark}</td>`;
                 })
                 .join("");
-              // "Notes" comes first in the HTML source on purpose — in an
-              // RTL table that's what ends up as the rightmost column.
-              return `<tr><td class="notes-cell">&nbsp;</td><td>${escapeHtml(s.name)}</td><td>${escapeHtml(time || "")}</td><td>${escapeHtml(s.level)}</td><td>${escapeHtml(sessionTypeInfo(sessionType).label)}</td>${attCells}</tr>`;
+              // "Note" comes last in the HTML source on purpose — in an
+              // RTL table, that's what ends up read last (leftmost),
+              // right after the attendance columns.
+              return `<tr><td>${escapeHtml(s.name)}</td><td>${escapeHtml(time || "")}</td><td>${escapeHtml(s.level)}</td><td>${escapeHtml(sessionTypeInfo(sessionType).label)}</td>${attCells}<td class="notes-cell">&nbsp;</td></tr>`;
             })
             .join("");
           return `
             <h3>${escapeHtml(coachName)} (${byCoach[coachId].length})</h3>
             <table>
-              <tr><th>ملاحظات</th><th>Name</th><th>Time</th><th>Level</th><th>Plan</th>${dateHeaderCells}</tr>
+              <tr><th>Name</th><th>Time</th><th>Level</th><th>Plan</th>${dateHeaderCells}<th>Note</th></tr>
               ${rows}
             </table>`;
         })
@@ -4349,6 +4366,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           ...(s.makeupSessions || []),
           { id: genId(), date: makeupDate, time: makeupTime, coachId: makeupCoachId || null, note: makeupNote.trim() },
         ],
+        // Using a makeup session spends one credit, if they have any —
+        // doesn't block booking at zero, just keeps the balance accurate
+        // for whoever's tracking who's owed what.
+        makeupCredits: Math.max(0, (s.makeupCredits || 0) - 1),
       }));
       setMakeupModal(null);
       loadSwimmersPage({ offset: 0 });
@@ -4356,6 +4377,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       setMakeupError("Could not save, please try again");
     } finally {
       setMakeupSaving(false);
+    }
+  };
+
+  const adjustMakeupCredits = async (swimmerId, delta) => {
+    try {
+      await updateSwimmerById(swimmerId, (s) => ({ ...s, makeupCredits: Math.max(0, (s.makeupCredits || 0) + delta) }));
+      loadSwimmersPage({ offset: 0 });
+    } catch (e) {
+      loadSwimmersPage({ offset: 0 });
     }
   };
 
@@ -4369,6 +4399,50 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     } catch (e) {
       console.warn("Could not remove makeup session", e);
     }
+  };
+
+  // Called from SwimmerForm when a coach/day/time slot is already full —
+  // records who's waiting so admin can reach out the moment a spot frees
+  // up, instead of just turning people away.
+  const [waitlist, setWaitlist] = useState([]);
+  const [waitlistLoading, setWaitlistLoading] = useState(false);
+
+  const loadWaitlist = useCallback(async () => {
+    setWaitlistLoading(true);
+    try {
+      const items = await loadCollection(STORE_KEYS.waitlist);
+      setWaitlist(items.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)));
+    } finally {
+      setWaitlistLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === "waitlist") loadWaitlist();
+  }, [tab, loadWaitlist]);
+
+  const joinWaitlist = async ({ swimmerName, phone, coachId, day, time, sessionType, level }) => {
+    const all = await loadCollection(STORE_KEYS.waitlist);
+    const record = {
+      id: genId(),
+      swimmerName,
+      phone,
+      coachId: coachId || null,
+      day,
+      time,
+      sessionType,
+      level,
+      createdAt: new Date().toISOString(),
+    };
+    await saveCollection(STORE_KEYS.waitlist, [...all, record]);
+    logActivity(accountName, role, "Joined waitlist", `${swimmerName} — ${day} ${time}`);
+    if (tab === "waitlist") loadWaitlist();
+  };
+
+  const removeFromWaitlist = async (id) => {
+    const all = await loadCollection(STORE_KEYS.waitlist);
+    await saveCollection(STORE_KEYS.waitlist, all.filter((w) => w.id !== id));
+    loadWaitlist();
   };
 
   const [cashAmount, setCashAmount] = useState("");
@@ -5798,6 +5872,21 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <Star className="w-4 h-4" /> Feedback
           </button>
         )}
+        {canEditContent && (
+          <button
+            onClick={() => setTab("waitlist")}
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+              tab === "waitlist" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+            }`}
+          >
+            <Clock className="w-4 h-4" /> Waitlist
+            {waitlist.length > 0 && (
+              <span className="text-[10px] bg-slate-400 text-white rounded-full w-4 h-4 flex items-center justify-center shrink-0">
+                {waitlist.length}
+              </span>
+            )}
+          </button>
+        )}
         {(accountName || role === "admin") && (
           <button
             onClick={() => setTab("chat")}
@@ -6348,6 +6437,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               requireSchedule={!!pendingActivationId && pendingActivationId === editingSwimmer?.id}
               onSave={saveSwimmer}
               onCancel={() => { setShowForm(false); setEditingSwimmer(null); setPendingActivationId(null); }}
+              onJoinWaitlist={joinWaitlist}
             />
           )}
 
@@ -6714,6 +6804,33 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                           })}
                         </div>
                       )}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 pt-4 border-t border-slate-100">
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs font-semibold text-slate-500">Makeup credits</div>
+                      {canEditContent && (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => adjustMakeupCredits(s.id, -1)}
+                            disabled={!s.makeupCredits}
+                            className="w-6 h-6 rounded-full bg-slate-100 text-slate-500 text-sm font-bold hover:bg-slate-200 disabled:opacity-40"
+                          >
+                            −
+                          </button>
+                          <span className="w-6 text-center text-sm font-semibold text-slate-800">{s.makeupCredits || 0}</span>
+                          <button
+                            onClick={() => adjustMakeupCredits(s.id, 1)}
+                            className="w-6 h-6 rounded-full bg-slate-100 text-slate-500 text-sm font-bold hover:bg-slate-200"
+                          >
+                            +
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-xs text-slate-400 mt-0.5">
+                      Owed makeup sessions — booking one from the calendar icon above automatically uses one.
                     </div>
                   </div>
 
@@ -8123,6 +8240,55 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         <XCircle className="w-3.5 h-3.5" /> Reject
                       </button>
                     </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "waitlist" && canEditContent && (
+        <div>
+          <div className="mb-4">
+            <h3 className="font-bold text-slate-900">Waitlist</h3>
+            <p className="text-xs text-slate-400">Families waiting for a slot that was full when they tried to book. Reach out when a spot opens up.</p>
+          </div>
+          {waitlistLoading ? (
+            <div className="text-center text-slate-400 py-16">Loading...</div>
+          ) : waitlist.length === 0 ? (
+            <div className="text-center text-slate-400 py-16">No one on the waitlist right now</div>
+          ) : (
+            <div className="space-y-2">
+              {waitlist.map((w) => (
+                <div key={w.id} className="bg-white rounded-xl border border-slate-200 p-4 flex items-center justify-between gap-3 flex-wrap">
+                  <div>
+                    <div className="font-semibold text-slate-800 text-sm">{w.swimmerName}</div>
+                    <div className="text-xs text-slate-400 mt-0.5">
+                      {DAY_GROUPS.find((d) => d.id === w.day)?.label || w.day} · {w.time} · {w.level}
+                      {w.coachId && ` · ${coaches.find((c) => c.id === w.coachId)?.name || "—"}`}
+                    </div>
+                    <div className="text-xs text-slate-300 mt-0.5">
+                      Waiting since {new Date(w.createdAt).toLocaleDateString("en-GB")}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {w.phone && (
+                      <a
+                        href={waLink(w.phone, `Hi! A spot just opened up for ${w.swimmerName} on ${DAY_GROUPS.find((d) => d.id === w.day)?.label || w.day} at ${w.time}. Would you like to take it?`)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs px-3 py-1.5 rounded-full font-medium bg-green-50 text-green-700 hover:bg-green-100"
+                      >
+                        WhatsApp
+                      </a>
+                    )}
+                    <button
+                      onClick={() => removeFromWaitlist(w.id)}
+                      className="text-xs px-3 py-1.5 rounded-full font-medium text-red-500 hover:bg-red-50"
+                    >
+                      Remove
+                    </button>
                   </div>
                 </div>
               ))}
@@ -10601,9 +10767,11 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   };
 
   const levelUp = async (swimmer) => {
+    const next = nextLevelOf(swimmer.level);
+    if (!next) return; // already at the top level
+    if (!window.confirm(`Move ${swimmer.name} up to ${next}? This saves right away.`)) return;
     try {
       const updated = await updateSwimmerById(swimmer.id, levelUpSwimmer);
-      if (updated === swimmer) return; // already at the top level
       setSwimmers((prev) => prev.map((s) => (s.id === swimmer.id ? updated : s)));
     } catch (e) {
       loadSwimmers();
@@ -11501,8 +11669,10 @@ function TechnicalView({ accountName, onExit }) {
   };
 
   const levelUp = async (swimmer) => {
+    const next = nextLevelOf(swimmer.level);
+    if (!next) return; // already at the top level
+    if (!window.confirm(`Move ${swimmer.name} up to ${next}? This saves right away.`)) return;
     const updated = levelUpSwimmer(swimmer);
-    if (updated === swimmer) return; // already at the top level
     const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
     setSwimmers(nextSwimmers);
     try {
@@ -12126,10 +12296,15 @@ function ParentPortalView({ onRenew, onExit }) {
         <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-4">
           <h2 className="text-xl font-bold text-slate-900">{s.name}</h2>
           <p className="text-sm text-slate-500">{s.age} yrs · {s.level}</p>
-          <div className="mt-3">
+          <div className="mt-3 flex items-center gap-2 flex-wrap">
             <span className={`text-xs px-3 py-1.5 rounded-full font-semibold ${paidThisMonth ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
               {paidThisMonth ? `Paid · ${monthLabel(monthKey())}` : `Not paid · ${monthLabel(monthKey())}`}
             </span>
+            {(s.makeupCredits || 0) > 0 && (
+              <span className="text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-50 text-blue-800">
+                {s.makeupCredits} makeup session{s.makeupCredits === 1 ? "" : "s"} owed
+              </span>
+            )}
           </div>
         </div>
 
