@@ -1368,7 +1368,7 @@ function clearedIfUnpaid(swimmer) {
   if (isPaidThisMonth(swimmer)) return swimmer;
   if (isFrozen(swimmer)) return swimmer;
   if (!swimmer.day && !swimmer.time) return swimmer;
-  return { ...swimmer, day: "", time: "", coachId: null };
+  return { ...swimmer, day: "", time: "", coachId: null, scheduleMonth: "" };
 }
 
 /* ---------- WhatsApp click-to-chat ----------
@@ -2711,6 +2711,12 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
   const [time, setTime] = useState(initial?.time || "");
   const [sessionType, setSessionType] = useState(initial?.sessionType || "group");
   const [coachId, setCoachId] = useState(initial?.coachId || "");
+  // Which calendar month this day/time/coach is actually for — lets the
+  // admin pre-book NEXT month's slot while THIS month is still running,
+  // without that slot getting confused with (or blocked by) this month's
+  // roster. Existing records saved before this field existed are treated
+  // as belonging to "this month", since that used to be the only option.
+  const [scheduleMonth, setScheduleMonth] = useState(initial?.scheduleMonth || monthKey());
   const [notes, setNotes] = useState(initial?.notes || "");
   const [parentPin, setParentPin] = useState(initial?.parentPin || genParentPin());
   const [error, setError] = useState("");
@@ -2724,6 +2730,34 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
   const [sessionType2, setSessionType2] = useState(initial?.sessionType2 || "group");
   const [coachId2, setCoachId2] = useState(initial?.coachId2 || "");
   const timeOptions2 = getTimeOptions(branch, day2, level);
+
+  // Switching the month this schedule is for is really "start a fresh
+  // booking" — carrying over whatever day/time/coach this swimmer had
+  // saved for a DIFFERENT month would silently reserve them a slot they
+  // never actually picked for the new month. Switching back to the
+  // month they're already saved under restores their real schedule.
+  const handleScheduleMonthChange = (newMonth) => {
+    setScheduleMonth(newMonth);
+    const savedMonth = initial?.scheduleMonth || monthKey();
+    if (newMonth === savedMonth) {
+      setDay(initial?.day || "");
+      setTime(initial?.time || "");
+      setCoachId(initial?.coachId || "");
+      setDay2(initial?.day2 || "");
+      setTime2(initial?.time2 || "");
+      setCoachId2(initial?.coachId2 || "");
+      setHasSecondSlot(!!(initial?.day2 && initial?.time2));
+    } else {
+      setDay("");
+      setTime("");
+      setCoachId("");
+      setDay2("");
+      setTime2("");
+      setCoachId2("");
+      setHasSecondSlot(false);
+    }
+  };
+
   const handleDay2Change = (newDay) => {
     setDay2(newDay);
     const newOptions = getTimeOptions(branch, newDay, level);
@@ -2786,12 +2820,22 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           setSlotUsage([]);
           return;
         }
-        setSlotUsage((data || []).map((r) => r.data).filter((s) => s.id !== initial?.id));
+        // Only count swimmers actually registered for the SAME month
+        // we're scheduling into — day/time alone is shared across every
+        // month a swimmer has ever used it, so without this a September
+        // pick would look "full" just because August's roster is still
+        // sitting on that same day/time. A record saved before this field
+        // existed is treated as "this month" (the only month there was).
+        setSlotUsage(
+          (data || [])
+            .map((r) => r.data)
+            .filter((s) => s.id !== initial?.id && (s.scheduleMonth || monthKey()) === scheduleMonth)
+        );
       });
     return () => {
       cancelled = true;
     };
-  }, [coachId, day, time, initial?.id]);
+  }, [coachId, day, time, initial?.id, scheduleMonth]);
   const slotType = slotUsage[0]?.sessionType;
   const capacity = sessionCapacity(sessionType, level);
   const slotMismatch = coachId && slotUsage.length > 0 && slotType !== sessionType;
@@ -2831,6 +2875,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
       level,
       day,
       time,
+      scheduleMonth,
       sessionType,
       coachId: coachId || null,
       day2: hasSecondSlot ? day2 : "",
@@ -2897,6 +2942,22 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
             ))}
           </select>
         </div>
+        {!isNew && (
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Schedule for month</label>
+          <select
+            value={scheduleMonth}
+            onChange={(e) => handleScheduleMonthChange(e.target.value)}
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+          >
+            <option value={monthKey()}>{monthLabel(monthKey())} (current)</option>
+            <option value={nextMonthKey()}>{monthLabel(nextMonthKey())} (next)</option>
+          </select>
+          {scheduleMonth !== (initial?.scheduleMonth || monthKey()) && (
+            <div className="text-xs text-blue-900 mt-1">New schedule for {monthLabel(scheduleMonth)} — pick a day/time/coach below</div>
+          )}
+        </div>
+        )}
         {!isNew && (
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Day</label>
@@ -4787,11 +4848,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       levelHistory = [...(existing.levelHistory || []), { level: record.level, date: new Date().toISOString() }];
     }
     // If this save is completing an "activate this month's payment" flow
-    // (the swimmer had no day/time yet), mark the current month paid now
-    // that a schedule has actually been set.
+    // (the swimmer had no day/time yet), mark THAT schedule's month paid
+    // now that a schedule has actually been set — not always "this month",
+    // since the admin may have just booked ahead into next month instead.
     let paidMonths = record.paidMonths || [];
     if (pendingActivationId && pendingActivationId === record.id) {
-      const key = monthKey();
+      const key = record.scheduleMonth || monthKey();
       if (!paidMonths.includes(key)) paidMonths = [...paidMonths, key];
     }
 
