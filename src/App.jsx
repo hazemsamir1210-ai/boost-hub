@@ -1052,7 +1052,7 @@ async function setAdminPasswordOverride(newPassword) {
    and any save right after that can fail with "Couldn't save...".
    Instead, each data type now lives as a single array under one key, so
    loading or saving a whole collection is exactly one storage call. */
-const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all", incidents: "incidents-all", registrations: "registrations-all", feedback: "parent-feedback-all", waitlist: "waitlist-all", courses: "coach-courses-all", coursePayments: "course-payments-all" };
+const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all", incidents: "incidents-all", registrations: "registrations-all", feedback: "parent-feedback-all", waitlist: "waitlist-all", courses: "coach-courses-all", coursePayments: "course-payments-all", courseStudents: "course-students-all" };
 
 // The single latest announcement shown as a banner to every parent when
 // they open the Parent Portal — simple broadcast, not per-person messages.
@@ -3596,6 +3596,23 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   const openEditCourseForm = (course) => {
     setCourseForm({ ...course });
+  };
+
+  const [courseFileError, setCourseFileError] = useState("");
+
+  const uploadCourseFile = (file) => {
+    if (!file) return;
+    setCourseFileError("");
+    const MAX_BYTES = 8 * 1024 * 1024; // 8MB — generous for a slide deck, safe for storage as a data URI
+    if (file.size > MAX_BYTES) {
+      return setCourseFileError("That file is too big — please keep it under 8MB (try compressing images inside it first).");
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setCourseForm({ ...courseForm, contentUrl: e.target.result, contentFileName: file.name });
+    };
+    reader.onerror = () => setCourseFileError("Could not read that file — please try again.");
+    reader.readAsDataURL(file);
   };
 
   const saveCourse = async () => {
@@ -8550,7 +8567,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 {pendingCoursePayments.map((p) => (
                   <div key={p.id} className="bg-white rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap">
                     <div>
-                      <div className="text-sm font-medium text-slate-800">{p.coachName}</div>
+                      <div className="text-sm font-medium text-slate-800">
+                        {p.buyerType === "student" ? p.studentName : p.coachName}
+                        <span className="text-xs text-slate-400 font-normal">
+                          {" "}({p.buyerType === "student" ? `${p.studentEmail} · public course buyer` : "coach"})
+                        </span>
+                      </div>
                       <div className="text-xs text-slate-400">{p.courseTitle} · {p.price} EGP</div>
                       {p.screenshotDataUri && (
                         <a href={p.screenshotDataUri} target="_blank" rel="noreferrer" className="text-xs text-blue-900 hover:underline">
@@ -8613,11 +8635,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </div>
               <div className="mb-3">
                 <label className="text-xs text-slate-500 mb-1 block">Content type</label>
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                   {[
                     { id: "video", label: "Video link" },
                     { id: "text", label: "Written lesson" },
                     { id: "link", label: "External resource" },
+                    { id: "file", label: "Upload a file" },
                   ].map((t) => (
                     <button
                       key={t.id}
@@ -8642,6 +8665,33 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     placeholder="https://..."
                     className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
                   />
+                </div>
+              )}
+              {courseForm.contentType === "file" && (
+                <div className="mb-3">
+                  <label className="text-xs text-slate-500 mb-1 block">
+                    File (PowerPoint, PDF, Word — up to 8MB)
+                  </label>
+                  {courseFileError && <div className="text-xs text-red-500 mb-2">{courseFileError}</div>}
+                  {courseForm.contentFileName ? (
+                    <div className="flex items-center gap-3 bg-slate-50 rounded-lg px-3 py-2.5">
+                      <FileUp className="w-4 h-4 text-slate-400 shrink-0" />
+                      <span className="text-sm text-slate-700 truncate flex-1">{courseForm.contentFileName}</span>
+                      <button
+                        onClick={() => setCourseForm({ ...courseForm, contentUrl: "", contentFileName: "" })}
+                        className="text-xs text-red-500 hover:underline shrink-0"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ) : (
+                    <input
+                      type="file"
+                      accept=".ppt,.pptx,.pdf,.doc,.docx,.key"
+                      onChange={(e) => uploadCourseFile(e.target.files?.[0])}
+                      className="text-sm"
+                    />
+                  )}
                 </div>
               )}
               {courseForm.contentType === "text" && (
@@ -11598,6 +11648,7 @@ function CoachTrainingSection({ coachId, coachName }) {
       const all = await loadCollection(STORE_KEYS.coursePayments);
       const record = {
         id: genId(),
+        buyerType: "coach",
         coachId,
         coachName,
         courseId: course.id,
@@ -11712,6 +11763,16 @@ function CoachTrainingSection({ coachId, coachName }) {
                       {c.contentType === "link" && (
                         <a href={c.contentUrl} target="_blank" rel="noreferrer" className="text-sm text-blue-900 hover:underline block mb-3">
                           Open resource ↗
+                        </a>
+                      )}
+                      {c.contentType === "file" && (
+                        <a
+                          href={c.contentUrl}
+                          download={c.contentFileName || "lesson-file"}
+                          className="flex items-center gap-2 text-sm text-blue-900 hover:underline mb-3 bg-slate-50 rounded-lg px-3 py-2.5"
+                        >
+                          <FileDown className="w-4 h-4 shrink-0" />
+                          {c.contentFileName || "Download file"}
                         </a>
                       )}
                       {c.contentType === "text" && (
@@ -12554,7 +12615,389 @@ function AchievementsSlideshow({ achievements }) {
   );
 }
 
-function HomeView({ onChoosePlan, onNewRegistration, onAdmin, onStaff, onCoach, onStaffPortal, onParentPortal }) {
+/* Public "Courses" portal — anyone can browse without an account, but
+   buying and watching requires a real email+password account (separate
+   from staff/coach/parent logins). Payment works the same Instapay +
+   admin-review pattern as everywhere else in the app. Viewing is
+   deliberately not download-friendly: video stays in an embed, PDFs open
+   in an inline viewer instead of a downloadable link, and the content
+   area blocks right-click — real protection isn't fully possible on the
+   web, but this removes the easy, obvious ways to grab a copy. */
+function CoursesPortalView({ onBack }) {
+  const [student, setStudent] = useState(() => {
+    try {
+      const saved = localStorage.getItem("swim_course_student");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [courses, setCourses] = useState([]);
+  const [myPayments, setMyPayments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [authMode, setAuthMode] = useState("login");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [pendingCourse, setPendingCourse] = useState(null); // course the visitor clicked "buy" on before logging in
+  const [payingCourseId, setPayingCourseId] = useState(null);
+  const [paymentScreenshot, setPaymentScreenshot] = useState(null);
+  const [paymentSubmitting, setPaymentSubmitting] = useState(false);
+  const [activeCourseId, setActiveCourseId] = useState(null);
+
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [items, payments] = await Promise.all([loadCollection(STORE_KEYS.courses), loadCollection(STORE_KEYS.coursePayments)]);
+      setCourses(items.sort((a, b) => (a.order || 0) - (b.order || 0)));
+      if (student) setMyPayments(payments.filter((p) => p.buyerType === "student" && p.studentId === student.id));
+    } finally {
+      setLoading(false);
+    }
+  }, [student]);
+
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
+
+  const persistStudent = (s) => {
+    setStudent(s);
+    try {
+      if (s) localStorage.setItem("swim_course_student", JSON.stringify(s));
+      else localStorage.removeItem("swim_course_student");
+    } catch {
+      // best-effort — the session just won't survive a reload
+    }
+  };
+
+  const logout = () => {
+    persistStudent(null);
+    setActiveCourseId(null);
+  };
+
+  const submitAuth = async () => {
+    setAuthError("");
+    if (!/^\S+@\S+\.\S+$/.test(email.trim())) return setAuthError("Enter a valid email");
+    if (!password) return setAuthError("Enter a password");
+    setAuthSubmitting(true);
+    try {
+      const all = await loadCollection(STORE_KEYS.courseStudents);
+      if (authMode === "signup") {
+        if (!name.trim()) return setAuthError("Enter your name");
+        if (all.some((s) => s.email.toLowerCase() === email.trim().toLowerCase()))
+          return setAuthError("An account with that email already exists — log in instead");
+        const record = { id: genId(), name: name.trim(), email: email.trim().toLowerCase(), password, createdAt: new Date().toISOString() };
+        await saveCollection(STORE_KEYS.courseStudents, [...all, record]);
+        persistStudent(record);
+      } else {
+        const found = all.find((s) => s.email.toLowerCase() === email.trim().toLowerCase() && s.password === password);
+        if (!found) return setAuthError("Wrong email or password");
+        persistStudent(found);
+      }
+      setAuthOpen(false);
+      setPassword("");
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
+
+  const startPurchase = (course) => {
+    if (!student) {
+      setPendingCourse(course);
+      setAuthOpen(true);
+      return;
+    }
+    setPayingCourseId(course.id);
+  };
+
+  const submitPayment = async (course) => {
+    if (!paymentScreenshot) return;
+    setPaymentSubmitting(true);
+    try {
+      const all = await loadCollection(STORE_KEYS.coursePayments);
+      const record = {
+        id: genId(),
+        buyerType: "student",
+        studentId: student.id,
+        studentName: student.name,
+        studentEmail: student.email,
+        courseId: course.id,
+        courseTitle: course.title,
+        price: course.price,
+        screenshotDataUri: paymentScreenshot,
+        status: "pending",
+        createdAt: new Date().toISOString(),
+      };
+      await saveCollection(STORE_KEYS.coursePayments, [...all, record]);
+      setMyPayments([...myPayments, record]);
+      setPayingCourseId(null);
+      setPaymentScreenshot(null);
+    } finally {
+      setPaymentSubmitting(false);
+    }
+  };
+
+  const embedUrl = (url) => {
+    const yt = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/);
+    if (yt) return `https://www.youtube.com/embed/${yt[1]}`;
+    const vimeo = url.match(/vimeo\.com\/(\d+)/);
+    if (vimeo) return `https://player.vimeo.com/video/${vimeo[1]}`;
+    return null;
+  };
+
+  // Re-check after every payments reload, once logged in
+  useEffect(() => {
+    if (!student) return;
+    loadCollection(STORE_KEYS.coursePayments).then((payments) => {
+      setMyPayments(payments.filter((p) => p.buyerType === "student" && p.studentId === student.id));
+    });
+  }, [student]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <RefreshCw className="w-6 h-6 animate-spin text-slate-300" />
+      </div>
+    );
+  }
+
+  const activeCourse = courses.find((c) => c.id === activeCourseId);
+  if (activeCourse) {
+    const paidFor = myPayments.find((p) => p.courseId === activeCourse.id && p.status === "confirmed");
+    const pendingPay = myPayments.find((p) => p.courseId === activeCourse.id && p.status === "pending");
+    const isFree = Number(activeCourse.price) === 0;
+    const embed = activeCourse.contentType === "video" ? embedUrl(activeCourse.contentUrl || "") : null;
+    return (
+      <div className="min-h-screen bg-slate-50 px-4 py-8">
+        <div className="max-w-3xl mx-auto">
+          <button onClick={() => setActiveCourseId(null)} className="flex items-center gap-1 text-slate-400 hover:text-slate-600 text-sm mb-4">
+            <ChevronLeft className="w-4 h-4" /> Back to courses
+          </button>
+          <h2 className="text-xl font-bold text-slate-900 mb-1">{activeCourse.title}</h2>
+          {activeCourse.description && <p className="text-sm text-slate-500 mb-6">{activeCourse.description}</p>}
+
+          {!student ? (
+            <div className="bg-white rounded-2xl border border-slate-200 p-6 text-center">
+              <p className="text-sm text-slate-500 mb-4">Log in or create an account to {isFree ? "start" : "buy"} this course.</p>
+              <button
+                onClick={() => {
+                  setPendingCourse(activeCourse);
+                  setAuthOpen(true);
+                }}
+                className="px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
+              >
+                Log in / Sign up
+              </button>
+            </div>
+          ) : paidFor || isFree ? (
+            <div className="bg-white rounded-2xl border border-slate-200 p-5" onContextMenu={(e) => e.preventDefault()}>
+              {activeCourse.contentType === "video" &&
+                (embed ? (
+                  <div className="aspect-video">
+                    <iframe src={embed} className="w-full h-full rounded-lg" allowFullScreen title={activeCourse.title} />
+                  </div>
+                ) : (
+                  <div className="text-sm text-slate-500">Video not available right now — please contact the academy.</div>
+                ))}
+              {activeCourse.contentType === "text" && (
+                <div className="text-sm text-slate-600 whitespace-pre-wrap select-none">{activeCourse.contentText}</div>
+              )}
+              {activeCourse.contentType === "link" && (
+                <a href={activeCourse.contentUrl} target="_blank" rel="noreferrer" className="text-sm text-blue-900 hover:underline">
+                  Open resource ↗
+                </a>
+              )}
+              {activeCourse.contentType === "file" && (
+                <>
+                  {(activeCourse.contentFileName || "").toLowerCase().endsWith(".pdf") ? (
+                    <iframe src={activeCourse.contentUrl} className="w-full h-[70vh] rounded-lg border border-slate-100" title={activeCourse.title} />
+                  ) : (
+                    <div className="text-sm text-slate-500">
+                      This lesson's file ({activeCourse.contentFileName}) can only be opened directly —{" "}
+                      <a href={activeCourse.contentUrl} target="_blank" rel="noreferrer" className="text-blue-900 hover:underline">
+                        open it
+                      </a>
+                      .
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          ) : pendingPay ? (
+            <div className="bg-white rounded-2xl border border-slate-200 p-6 text-center">
+              <p className="text-sm text-amber-600 bg-amber-50 rounded-lg px-4 py-3">
+                Your payment screenshot is being reviewed — this course will unlock once it's confirmed.
+              </p>
+            </div>
+          ) : payingCourseId === activeCourse.id ? (
+            <div className="bg-white rounded-2xl border border-slate-200 p-6">
+              <p className="text-sm text-slate-600 mb-3">
+                Pay <strong>{activeCourse.price} EGP</strong> via Instapay to <strong>{CONFIG.instapayHandle}</strong> ({CONFIG.instapayPhone}), then upload the screenshot below.
+              </p>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) compressImage(file, 700, 0.8).then(setPaymentScreenshot);
+                }}
+                className="text-sm mb-3"
+              />
+              {paymentScreenshot && <img src={paymentScreenshot} alt="" className="w-32 rounded-lg border border-slate-200 mb-3" />}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => submitPayment(activeCourse)}
+                  disabled={!paymentScreenshot || paymentSubmitting}
+                  className="px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                >
+                  {paymentSubmitting ? "Sending..." : "Submit payment"}
+                </button>
+                <button onClick={() => setPayingCourseId(null)} className="px-4 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-white rounded-2xl border border-slate-200 p-6 text-center">
+              <p className="text-sm text-slate-500 mb-4">This course costs {activeCourse.price} EGP.</p>
+              <button
+                onClick={() => setPayingCourseId(activeCourse.id)}
+                className="px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
+              >
+                Pay {activeCourse.price} EGP to unlock
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 px-4 py-8">
+      <div className="max-w-3xl mx-auto">
+        <div className="flex items-center justify-between mb-6">
+          <button onClick={onBack} className="flex items-center gap-1 text-slate-400 hover:text-slate-600 text-sm">
+            <ChevronLeft className="w-4 h-4" /> Back
+          </button>
+          {student ? (
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-slate-500">Hi, {student.name.split(" ")[0]}</span>
+              <button onClick={logout} className="text-xs text-slate-400 hover:text-slate-600">
+                Log out
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => {
+                setPendingCourse(null);
+                setAuthOpen(true);
+              }}
+              className="text-sm text-blue-900 hover:underline"
+            >
+              Log in
+            </button>
+          )}
+        </div>
+
+        <h2 className="text-xl font-bold text-slate-900 mb-1">Courses</h2>
+        <p className="text-sm text-slate-500 mb-6">{CONFIG.academyName}'s training courses.</p>
+
+        {courses.length === 0 ? (
+          <div className="text-center text-slate-400 py-16">No courses available yet</div>
+        ) : (
+          <div className="space-y-3">
+            {courses.map((c) => {
+              const paidFor = myPayments.find((p) => p.courseId === c.id && p.status === "confirmed");
+              const pending = myPayments.find((p) => p.courseId === c.id && p.status === "pending");
+              return (
+                <div key={c.id} className="bg-white rounded-2xl border border-slate-200 p-5">
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div>
+                      <div className="font-semibold text-slate-800">{c.title}</div>
+                      {c.description && <div className="text-sm text-slate-500 mt-0.5">{c.description}</div>}
+                      <div className="text-sm text-slate-400 mt-1">
+                        {Number(c.price) > 0 ? `${c.price} EGP` : "Free"}
+                        {pending && <span className="text-amber-600 ml-2">· payment under review</span>}
+                      </div>
+                    </div>
+                    <div className="shrink-0">
+                      <button
+                        onClick={() => setActiveCourseId(c.id)}
+                        className="px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
+                      >
+                        {paidFor || Number(c.price) === 0 ? "Open" : "Open"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {authOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 px-4" onClick={() => setAuthOpen(false)}>
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-slate-900 mb-1">{authMode === "signup" ? "Create an account" : "Log in"}</h3>
+            <p className="text-xs text-slate-400 mb-4">
+              {pendingCourse ? `To buy "${pendingCourse.title}", please ${authMode === "signup" ? "sign up" : "log in"} first.` : "Access your courses."}
+            </p>
+            <div className="space-y-3">
+              {authMode === "signup" && (
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Your name"
+                  className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+                />
+              )}
+              <input
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="Email"
+                className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+              />
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Password"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") submitAuth();
+                }}
+                className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+              />
+              {authError && <div className="text-red-500 text-sm">{authError}</div>}
+              <button
+                onClick={submitAuth}
+                disabled={authSubmitting}
+                className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 disabled:opacity-60"
+              >
+                {authSubmitting ? "..." : authMode === "signup" ? "Sign up" : "Log in"}
+              </button>
+              <button
+                onClick={() => {
+                  setAuthMode(authMode === "signup" ? "login" : "signup");
+                  setAuthError("");
+                }}
+                className="w-full text-xs text-slate-400 hover:text-slate-600"
+              >
+                {authMode === "signup" ? "Already have an account? Log in" : "New here? Create an account"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff, onCoach, onStaffPortal, onParentPortal }) {
   const hasPhotos = CONFIG.heroPhotos && CONFIG.heroPhotos.length > 0;
   const [menuOpen, setMenuOpen] = useState(false);
   const [loginPickerOpen, setLoginPickerOpen] = useState(false);
@@ -12579,6 +13022,7 @@ function HomeView({ onChoosePlan, onNewRegistration, onAdmin, onStaff, onCoach, 
   const menuItems = [
     { label: "New swimmer registration", icon: User, onClick: onNewRegistration },
     { label: "Subscribe now", icon: Waves, onClick: () => onChoosePlan(null) },
+    { label: "Courses", icon: GraduationCap, onClick: onCourses },
     { label: "Log in", icon: Lock, onClick: () => setLoginPickerOpen(true) },
   ];
   return (
@@ -14003,6 +14447,7 @@ export default function App() {
         <HomeView
           onChoosePlan={(id) => { setChosenPlan(id); setView("subscribe"); }}
           onNewRegistration={() => setView("newregistration")}
+          onCourses={() => setView("courses")}
           onAdmin={() => setView("admin")}
           onStaff={() => setView("staff")}
           onCoach={() => setView("coach")}
@@ -14010,6 +14455,8 @@ export default function App() {
           onParentPortal={() => setView("parentportal")}
         />
       )}
+
+      {view === "courses" && <CoursesPortalView onBack={() => setView("home")} />}
 
       {view === "newregistration" && (
         <NewSwimmerRegistrationView
