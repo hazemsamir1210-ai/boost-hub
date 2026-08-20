@@ -3591,7 +3591,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   }, [tab, loadCourses]);
 
   const openNewCourseForm = () => {
-    setCourseForm({ title: "", description: "", contentType: "video", contentUrl: "", contentText: "", price: 0 });
+    setCourseForm({ title: "", description: "", contentType: "video", contentUrl: "", contentText: "", price: 0, assignedCoachIds: [], quiz: [] });
   };
 
   const openEditCourseForm = (course) => {
@@ -8705,6 +8705,146 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   />
                 </div>
               )}
+              <div className="mb-3">
+                <label className="text-xs text-slate-500 mb-1 block">
+                  Visible to which coaches?
+                </label>
+                <div className="flex items-center gap-2 mb-2">
+                  <button
+                    onClick={() => setCourseForm({ ...courseForm, assignedCoachIds: [] })}
+                    className={`text-xs px-3 py-1.5 rounded-full border ${
+                      (courseForm.assignedCoachIds || []).length === 0 ? "border-blue-900 bg-blue-50 text-blue-950 font-medium" : "border-slate-200 text-slate-500"
+                    }`}
+                  >
+                    All coaches
+                  </button>
+                  <span className="text-xs text-slate-300">or pick specific ones below</span>
+                </div>
+                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto border border-slate-100 rounded-lg p-2">
+                  {coaches.length === 0 ? (
+                    <span className="text-xs text-slate-400">No coaches added yet</span>
+                  ) : (
+                    coaches.map((co) => {
+                      const selected = (courseForm.assignedCoachIds || []).includes(co.id);
+                      return (
+                        <button
+                          key={co.id}
+                          onClick={() => {
+                            const current = courseForm.assignedCoachIds || [];
+                            const next = selected ? current.filter((id) => id !== co.id) : [...current, co.id];
+                            setCourseForm({ ...courseForm, assignedCoachIds: next });
+                          }}
+                          className={`text-xs px-3 py-1.5 rounded-full border ${
+                            selected ? "border-blue-900 bg-blue-50 text-blue-950 font-medium" : "border-slate-200 text-slate-500"
+                          }`}
+                        >
+                          {co.name}
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              <div className="mb-3 pt-3 border-t border-slate-100">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs text-slate-500 block">
+                    Quiz — coach must pass this to get their certificate (optional; leave empty for no quiz)
+                  </label>
+                  <button
+                    onClick={() =>
+                      setCourseForm({
+                        ...courseForm,
+                        quiz: [...(courseForm.quiz || []), { question: "", options: ["", ""], correctIndex: 0 }],
+                      })
+                    }
+                    className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
+                  >
+                    + Add question
+                  </button>
+                </div>
+                <div className="space-y-3">
+                  {(courseForm.quiz || []).map((q, qi) => (
+                    <div key={qi} className="bg-slate-50 rounded-lg p-3">
+                      <div className="flex items-start gap-2 mb-2">
+                        <input
+                          value={q.question}
+                          onChange={(e) => {
+                            const quiz = [...courseForm.quiz];
+                            quiz[qi] = { ...quiz[qi], question: e.target.value };
+                            setCourseForm({ ...courseForm, quiz });
+                          }}
+                          placeholder={`Question ${qi + 1}`}
+                          className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                        />
+                        <button
+                          onClick={() => setCourseForm({ ...courseForm, quiz: courseForm.quiz.filter((_, i) => i !== qi) })}
+                          className="p-2 text-red-400 hover:text-red-600"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <div className="space-y-1.5 pl-1">
+                        {q.options.map((opt, oi) => (
+                          <div key={oi} className="flex items-center gap-2">
+                            <input
+                              type="radio"
+                              checked={q.correctIndex === oi}
+                              onChange={() => {
+                                const quiz = [...courseForm.quiz];
+                                quiz[qi] = { ...quiz[qi], correctIndex: oi };
+                                setCourseForm({ ...courseForm, quiz });
+                              }}
+                            />
+                            <input
+                              value={opt}
+                              onChange={(e) => {
+                                const quiz = [...courseForm.quiz];
+                                const options = [...quiz[qi].options];
+                                options[oi] = e.target.value;
+                                quiz[qi] = { ...quiz[qi], options };
+                                setCourseForm({ ...courseForm, quiz });
+                              }}
+                              placeholder={`Option ${oi + 1}`}
+                              className="flex-1 border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-blue-900"
+                            />
+                            {q.options.length > 2 && (
+                              <button
+                                onClick={() => {
+                                  const quiz = [...courseForm.quiz];
+                                  const options = quiz[qi].options.filter((_, i) => i !== oi);
+                                  quiz[qi] = {
+                                    ...quiz[qi],
+                                    options,
+                                    correctIndex: quiz[qi].correctIndex >= options.length ? 0 : quiz[qi].correctIndex,
+                                  };
+                                  setCourseForm({ ...courseForm, quiz });
+                                }}
+                                className="text-slate-300 hover:text-red-500"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                        {q.options.length < 5 && (
+                          <button
+                            onClick={() => {
+                              const quiz = [...courseForm.quiz];
+                              quiz[qi] = { ...quiz[qi], options: [...quiz[qi].options, ""] };
+                              setCourseForm({ ...courseForm, quiz });
+                            }}
+                            className="text-xs text-blue-900 hover:underline"
+                          >
+                            + Add option
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
               <div className="flex gap-2 mt-4">
                 <button
                   onClick={saveCourse}
@@ -8736,6 +8876,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     {c.description && <div className="text-xs text-slate-400 mt-0.5">{c.description}</div>}
                     <div className="text-xs text-slate-300 mt-1 capitalize">
                       {c.contentType} lesson{Number(c.price) > 0 ? ` · ${c.price} EGP` : " · Free"}
+                      {" · "}
+                      {(c.assignedCoachIds || []).length === 0 ? "All coaches" : `${c.assignedCoachIds.length} coach(es) only`}
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
@@ -11608,6 +11750,9 @@ function CoachTrainingSection({ coachId, coachName }) {
   const [payingCourseId, setPayingCourseId] = useState(null);
   const [paymentScreenshot, setPaymentScreenshot] = useState(null);
   const [paymentSubmitting, setPaymentSubmitting] = useState(false);
+  const [quizCourseId, setQuizCourseId] = useState(null); // which course's quiz is currently being taken
+  const [quizAnswers, setQuizAnswers] = useState({}); // { questionIndex: optionIndex }
+  const [quizResult, setQuizResult] = useState(null); // { score, total, passed } after submitting
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -11617,7 +11762,8 @@ function CoachTrainingSection({ coachId, coachName }) {
         loadCollection(STORE_KEYS.coaches),
         loadCollection(STORE_KEYS.coursePayments),
       ]);
-      setCourses(items.sort((a, b) => (a.order || 0) - (b.order || 0)));
+      const visible = items.filter((c) => !(c.assignedCoachIds || []).length || c.assignedCoachIds.includes(coachId));
+      setCourses(visible.sort((a, b) => (a.order || 0) - (b.order || 0)));
       const me = allCoaches.find((c) => c.id === coachId);
       setCompleted(me?.completedCourses || []);
       const mine = payments.filter((p) => p.coachId === coachId);
@@ -11639,6 +11785,23 @@ function CoachTrainingSection({ coachId, coachName }) {
     const allCoaches = await loadCollection(STORE_KEYS.coaches);
     const updated = allCoaches.map((c) => (c.id === coachId ? { ...c, completedCourses: next } : c));
     await saveCollection(STORE_KEYS.coaches, updated);
+  };
+
+  const startQuiz = (course) => {
+    setQuizCourseId(course.id);
+    setQuizAnswers({});
+    setQuizResult(null);
+  };
+
+  const submitQuiz = async (course) => {
+    const quiz = course.quiz || [];
+    let correct = 0;
+    quiz.forEach((q, i) => {
+      if (quizAnswers[i] === q.correctIndex) correct += 1;
+    });
+    const passed = quiz.length > 0 && correct === quiz.length; // must get every question right
+    setQuizResult({ score: correct, total: quiz.length, passed });
+    if (passed) await toggleComplete(course.id);
   };
 
   const submitCoursePayment = async (course) => {
@@ -11675,7 +11838,7 @@ function CoachTrainingSection({ coachId, coachName }) {
     return null;
   };
 
-  if (loading || courses.length === 0) return null;
+  if (loading) return null;
 
   return (
     <div className="mb-6 bg-white rounded-2xl border border-slate-200 p-4">
@@ -11685,6 +11848,9 @@ function CoachTrainingSection({ coachId, coachName }) {
         </h3>
         <span className="text-xs text-slate-400">{completed.length} / {courses.length} done</span>
       </div>
+      {courses.length === 0 ? (
+        <div className="text-xs text-slate-400 text-center py-4">No courses added yet</div>
+      ) : (
       <div className="space-y-2">
         {courses.map((c) => {
           const isDone = completed.includes(c.id);
@@ -11778,24 +11944,98 @@ function CoachTrainingSection({ coachId, coachName }) {
                       {c.contentType === "text" && (
                         <div className="text-sm text-slate-600 whitespace-pre-wrap mb-3">{c.contentText}</div>
                       )}
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => toggleComplete(c.id)}
-                          className={`text-xs px-3 py-1.5 rounded-full font-medium ${
-                            isDone ? "bg-slate-100 text-slate-500" : "bg-green-50 text-green-700 hover:bg-green-100"
-                          }`}
-                        >
-                          {isDone ? "Mark as not done" : "Mark as done"}
-                        </button>
-                        {isDone && (
+                      {(c.quiz || []).length > 0 ? (
+                        quizCourseId === c.id ? (
+                          <div className="bg-slate-50 rounded-lg p-4">
+                            {quizResult ? (
+                              <div>
+                                <div className={`text-sm font-semibold mb-2 ${quizResult.passed ? "text-green-700" : "text-red-600"}`}>
+                                  {quizResult.passed
+                                    ? `Passed! ${quizResult.score}/${quizResult.total} correct.`
+                                    : `Not quite — ${quizResult.score}/${quizResult.total} correct. You need all of them right to pass.`}
+                                </div>
+                                {!quizResult.passed && (
+                                  <button
+                                    onClick={() => startQuiz(c)}
+                                    className="text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-950 text-white hover:bg-blue-900"
+                                  >
+                                    Try again
+                                  </button>
+                                )}
+                              </div>
+                            ) : (
+                              <>
+                                <div className="text-sm font-semibold text-slate-800 mb-3">Quiz — pass to earn your certificate</div>
+                                <div className="space-y-4">
+                                  {c.quiz.map((q, qi) => (
+                                    <div key={qi}>
+                                      <div className="text-sm text-slate-700 mb-1.5">{qi + 1}. {q.question}</div>
+                                      <div className="space-y-1">
+                                        {q.options.map((opt, oi) => (
+                                          <label key={oi} className="flex items-center gap-2 text-sm text-slate-600">
+                                            <input
+                                              type="radio"
+                                              name={`quiz-${c.id}-${qi}`}
+                                              checked={quizAnswers[qi] === oi}
+                                              onChange={() => setQuizAnswers({ ...quizAnswers, [qi]: oi })}
+                                            />
+                                            {opt}
+                                          </label>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                                <button
+                                  onClick={() => submitQuiz(c)}
+                                  disabled={Object.keys(quizAnswers).length < c.quiz.length}
+                                  className="mt-4 text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-950 text-white hover:bg-blue-900 disabled:opacity-50"
+                                >
+                                  Submit answers
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => startQuiz(c)}
+                              className={`text-xs px-3 py-1.5 rounded-full font-medium ${
+                                isDone ? "bg-slate-100 text-slate-500" : "bg-green-50 text-green-700 hover:bg-green-100"
+                              }`}
+                            >
+                              {isDone ? "Retake quiz" : "Take quiz to finish"}
+                            </button>
+                            {isDone && (
+                              <button
+                                onClick={() => printCourseCertificate({ coachName, courseTitle: c.title, date: todayISO() })}
+                                className="text-xs px-3 py-1.5 rounded-full font-medium bg-blue-50 text-blue-800 hover:bg-blue-100"
+                              >
+                                🎓 Print certificate
+                              </button>
+                            )}
+                          </div>
+                        )
+                      ) : (
+                        <div className="flex items-center gap-2">
                           <button
-                            onClick={() => printCourseCertificate({ coachName, courseTitle: c.title, date: todayISO() })}
-                            className="text-xs px-3 py-1.5 rounded-full font-medium bg-blue-50 text-blue-800 hover:bg-blue-100"
+                            onClick={() => toggleComplete(c.id)}
+                            className={`text-xs px-3 py-1.5 rounded-full font-medium ${
+                              isDone ? "bg-slate-100 text-slate-500" : "bg-green-50 text-green-700 hover:bg-green-100"
+                            }`}
                           >
-                            🎓 Print certificate
+                            {isDone ? "Mark as not done" : "Mark as done"}
                           </button>
-                        )}
-                      </div>
+                          {isDone && (
+                            <button
+                              onClick={() => printCourseCertificate({ coachName, courseTitle: c.title, date: todayISO() })}
+                              className="text-xs px-3 py-1.5 rounded-full font-medium bg-blue-50 text-blue-800 hover:bg-blue-100"
+                            >
+                              🎓 Print certificate
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </>
                   )}
                 </div>
@@ -11804,6 +12044,7 @@ function CoachTrainingSection({ coachId, coachName }) {
           );
         })}
       </div>
+      )}
     </div>
   );
 }
@@ -12699,6 +12940,10 @@ function CoursesPortalView({ onBack }) {
       }
       setAuthOpen(false);
       setPassword("");
+      if (pendingCourse) {
+        setActiveCourseId(pendingCourse.id);
+        setPendingCourse(null);
+      }
     } finally {
       setAuthSubmitting(false);
     }
