@@ -946,7 +946,71 @@ ${fontImport}
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-
+/* A certificate for a coach finishing a training course — same visual
+   language as the swimmer certificates (logo, border, signature) but its
+   own simpler layout, since a coach's completion isn't tied to a level. */
+async function printCourseCertificate({ coachName, courseTitle, date }) {
+  const design = await loadCertDesign();
+  const fontChoice = CERT_FONTS[design.font] || CERT_FONTS.serif;
+  const color = design.color === "auto" ? await extractDominantColor(CONFIG.logoDataUri) : design.color || "#0b1e3a";
+  const fontImport = design.font === "elegant" ? `<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&display=swap" rel="stylesheet">` : "";
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Certificate</title>
+${fontImport}
+<style>
+  @page { size: A4 landscape; margin: 0; }
+  html, body { width: 297mm; height: 210mm; }
+  body { font-family: ${fontChoice.body}; color: #1e293b; padding: 0; margin: 0; background: #e2e8f0; }
+  .cert { border: 6mm solid ${color}; margin: 0 auto; padding: 12mm 20mm; text-align: center; box-sizing: border-box; position: relative; width: 297mm; height: 210mm; display: flex; flex-direction: column; justify-content: center; background: white; }
+  .cert::before { content: ""; position: absolute; inset: 5mm; border: 0.5mm solid #cbd5e1; pointer-events: none; }
+  .header img { width: 20mm; height: 20mm; object-fit: contain; margin-bottom: 2mm; }
+  .academy { font-size: 4.2mm; letter-spacing: 1px; text-transform: uppercase; color: #64748b; font-family: ${fontChoice.ui}; }
+  .title { font-size: 10mm; font-weight: 700; color: ${color}; margin: 6mm 0 2mm; letter-spacing: 1px; }
+  .subtitle { font-size: 4mm; color: #64748b; font-family: ${fontChoice.ui}; margin-bottom: 5mm; }
+  .name { font-size: 9mm; font-weight: 700; color: ${color}; margin: 3mm 0; border-bottom: 0.6mm solid #cbd5e1; display: inline-block; padding: 0 8mm 2mm; }
+  .desc { font-size: 4.6mm; color: #334155; margin: 5mm auto 0; max-width: 180mm; line-height: 1.6; font-family: ${fontChoice.ui}; }
+  .course { font-weight: 700; color: ${color}; }
+  .footer { margin-top: 10mm; display: flex; justify-content: space-between; align-items: flex-end; padding: 0 10mm; font-family: ${fontChoice.ui}; }
+  .footer .block { text-align: center; font-size: 3.4mm; color: #64748b; }
+  .footer .block img { max-width: 36mm; max-height: 15mm; object-fit: contain; display: block; margin: 0 auto 1mm; }
+  .footer .line { border-top: 0.4mm solid #94a3b8; padding-top: 1mm; min-width: 45mm; }
+  @media print {
+    body { background: white; }
+    .cert { margin: 0; box-shadow: none; }
+  }
+</style></head><body>
+  <div class="cert">
+    <div class="header">
+      <img src="${CONFIG.logoDataUri}" />
+      <div class="academy">${escapeHtml(CONFIG.academyName)}</div>
+    </div>
+    <div class="title">Certificate of Completion</div>
+    <div class="subtitle">This certificate is proudly presented to</div>
+    <div class="name">${escapeHtml(coachName)}</div>
+    <div class="desc">For successfully completing the training course <span class="course">${escapeHtml(courseTitle)}</span>.</div>
+    <div class="footer">
+      <div class="block">
+        <div class="line">${escapeHtml(date)}</div>
+        Date
+      </div>
+      <div class="block">
+        ${CONFIG.signatureDataUri ? `<img src="${CONFIG.signatureDataUri}" />` : ""}
+        <div class="line">${escapeHtml(CONFIG.academyName)}</div>
+        Authorized signature
+      </div>
+    </div>
+  </div>
+<script>window.onload = () => setTimeout(() => window.print(), 300);</script>
+</body></html>`;
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `course-certificate-${(coachName || "coach").replace(/[^a-zA-Z0-9أ-ي]/g, "-")}.html`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
 
 /* window.storage can occasionally hiccup with a transient error —
    retry once before giving up, and surface one clear message either way */
@@ -988,7 +1052,7 @@ async function setAdminPasswordOverride(newPassword) {
    and any save right after that can fail with "Couldn't save...".
    Instead, each data type now lives as a single array under one key, so
    loading or saving a whole collection is exactly one storage call. */
-const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all", incidents: "incidents-all", registrations: "registrations-all", feedback: "parent-feedback-all", waitlist: "waitlist-all" };
+const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all", incidents: "incidents-all", registrations: "registrations-all", feedback: "parent-feedback-all", waitlist: "waitlist-all", courses: "coach-courses-all", coursePayments: "course-payments-all" };
 
 // The single latest announcement shown as a banner to every parent when
 // they open the Parent Portal — simple broadcast, not per-person messages.
@@ -3506,6 +3570,99 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [feedback, setFeedback] = useState([]);
   const [feedbackLoading, setFeedbackLoading] = useState(false);
 
+  // ---- Courses tab (training content for coaches) ----
+  const [courses, setCourses] = useState([]);
+  const [coursesLoading, setCoursesLoading] = useState(false);
+  const [courseForm, setCourseForm] = useState(null); // { id?, title, description, contentType, contentUrl, contentText } or null
+  const [courseSaving, setCourseSaving] = useState(false);
+
+  const loadCourses = useCallback(async () => {
+    setCoursesLoading(true);
+    try {
+      const items = await loadCollection(STORE_KEYS.courses);
+      setCourses(items.sort((a, b) => (a.order || 0) - (b.order || 0)));
+    } finally {
+      setCoursesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === "courses") loadCourses();
+  }, [tab, loadCourses]);
+
+  const openNewCourseForm = () => {
+    setCourseForm({ title: "", description: "", contentType: "video", contentUrl: "", contentText: "", price: 0 });
+  };
+
+  const openEditCourseForm = (course) => {
+    setCourseForm({ ...course });
+  };
+
+  const saveCourse = async () => {
+    if (!courseForm.title.trim()) return;
+    setCourseSaving(true);
+    try {
+      const all = await loadCollection(STORE_KEYS.courses);
+      if (courseForm.id) {
+        const next = all.map((c) => (c.id === courseForm.id ? { ...courseForm } : c));
+        await saveCollection(STORE_KEYS.courses, next);
+        logActivity(accountName, role, "Updated course", courseForm.title.trim());
+      } else {
+        const record = { ...courseForm, id: genId(), order: all.length, createdAt: new Date().toISOString() };
+        await saveCollection(STORE_KEYS.courses, [...all, record]);
+        logActivity(accountName, role, "Added course", courseForm.title.trim());
+      }
+      setCourseForm(null);
+      loadCourses();
+    } finally {
+      setCourseSaving(false);
+    }
+  };
+
+  const deleteCourse = (course) => {
+    setConfirmAction({
+      message: `Delete the course "${course.title}"? Coaches will no longer be able to see it.`,
+      onConfirm: async () => {
+        const all = await loadCollection(STORE_KEYS.courses);
+        await saveCollection(STORE_KEYS.courses, all.filter((c) => c.id !== course.id));
+        logActivity(accountName, role, "Deleted course", course.title);
+        loadCourses();
+      },
+    });
+  };
+
+  // ---- Course payments (pending, for paid courses) ----
+  const [pendingCoursePayments, setPendingCoursePayments] = useState([]);
+  const [coursePaymentsLoading, setCoursePaymentsLoading] = useState(false);
+
+  const loadPendingCoursePayments = useCallback(async () => {
+    setCoursePaymentsLoading(true);
+    try {
+      const items = await loadCollection(STORE_KEYS.coursePayments);
+      setPendingCoursePayments(items.filter((p) => p.status === "pending").sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)));
+    } finally {
+      setCoursePaymentsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === "courses") loadPendingCoursePayments();
+  }, [tab, loadPendingCoursePayments]);
+
+  const confirmCoursePayment = async (payment) => {
+    const all = await loadCollection(STORE_KEYS.coursePayments);
+    const next = all.map((p) => (p.id === payment.id ? { ...p, status: "confirmed", confirmedAt: new Date().toISOString() } : p));
+    await saveCollection(STORE_KEYS.coursePayments, next);
+    logActivity(accountName, role, "Confirmed course payment", `${payment.coachName} — ${payment.courseTitle}`);
+    loadPendingCoursePayments();
+  };
+
+  const rejectCoursePayment = async (payment) => {
+    const all = await loadCollection(STORE_KEYS.coursePayments);
+    await saveCollection(STORE_KEYS.coursePayments, all.filter((p) => p.id !== payment.id));
+    loadPendingCoursePayments();
+  };
+
   const loadFeedback = useCallback(async () => {
     setFeedbackLoading(true);
     try {
@@ -5936,6 +6093,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         )}
         {canEditContent && (
           <button
+            onClick={() => setTab("courses")}
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+              tab === "courses" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+            }`}
+          >
+            <GraduationCap className="w-4 h-4" /> Courses
+          </button>
+        )}
+        {canEditContent && (
+          <button
             onClick={() => setTab("waitlist")}
             className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
               tab === "waitlist" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
@@ -8350,6 +8517,183 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       className="text-xs px-3 py-1.5 rounded-full font-medium text-red-500 hover:bg-red-50"
                     >
                       Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "courses" && canEditContent && (
+        <div>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="font-bold text-slate-900">Coach training courses</h3>
+              <p className="text-xs text-slate-400">Videos, lessons, or resources coaches can go through from their own dashboard.</p>
+            </div>
+            <button
+              onClick={openNewCourseForm}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
+            >
+              <Plus className="w-4 h-4" /> Add course
+            </button>
+          </div>
+
+          {!coursePaymentsLoading && pendingCoursePayments.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-5">
+              <div className="text-sm font-semibold text-amber-900 mb-3">
+                {pendingCoursePayments.length} course payment{pendingCoursePayments.length === 1 ? "" : "s"} to review
+              </div>
+              <div className="space-y-2">
+                {pendingCoursePayments.map((p) => (
+                  <div key={p.id} className="bg-white rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap">
+                    <div>
+                      <div className="text-sm font-medium text-slate-800">{p.coachName}</div>
+                      <div className="text-xs text-slate-400">{p.courseTitle} · {p.price} EGP</div>
+                      {p.screenshotDataUri && (
+                        <a href={p.screenshotDataUri} target="_blank" rel="noreferrer" className="text-xs text-blue-900 hover:underline">
+                          View payment screenshot
+                        </a>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => confirmCoursePayment(p)}
+                        className="text-xs px-3 py-1.5 rounded-full font-semibold bg-green-600 text-white hover:bg-green-700"
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        onClick={() => rejectCoursePayment(p)}
+                        className="text-xs px-3 py-1.5 rounded-full font-medium text-red-500 hover:bg-red-50"
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {courseForm && (
+            <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-5">
+              <div className="mb-3">
+                <label className="text-xs text-slate-500 mb-1 block">Title</label>
+                <input
+                  value={courseForm.title}
+                  onChange={(e) => setCourseForm({ ...courseForm, title: e.target.value })}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                />
+              </div>
+              <div className="mb-3">
+                <label className="text-xs text-slate-500 mb-1 block">Short description</label>
+                <input
+                  value={courseForm.description}
+                  onChange={(e) => setCourseForm({ ...courseForm, description: e.target.value })}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                />
+              </div>
+              <div className="mb-3">
+                <label className="text-xs text-slate-500 mb-1 block">Price (EGP — 0 for free)</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={courseForm.price ?? 0}
+                  onChange={(e) => setCourseForm({ ...courseForm, price: Number(e.target.value) })}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                />
+                <div className="text-xs text-slate-400 mt-1">
+                  {Number(courseForm.price) > 0
+                    ? "Coaches will need to pay (via Instapay, reviewed by you) before they can open this course."
+                    : "Free — every coach can open it right away."}
+                </div>
+              </div>
+              <div className="mb-3">
+                <label className="text-xs text-slate-500 mb-1 block">Content type</label>
+                <div className="flex gap-2">
+                  {[
+                    { id: "video", label: "Video link" },
+                    { id: "text", label: "Written lesson" },
+                    { id: "link", label: "External resource" },
+                  ].map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => setCourseForm({ ...courseForm, contentType: t.id })}
+                      className={`text-sm px-3 py-2 rounded-lg border ${
+                        courseForm.contentType === t.id ? "border-blue-900 bg-blue-50 text-blue-950 font-medium" : "border-slate-200 text-slate-500"
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {(courseForm.contentType === "video" || courseForm.contentType === "link") && (
+                <div className="mb-3">
+                  <label className="text-xs text-slate-500 mb-1 block">
+                    {courseForm.contentType === "video" ? "Video URL (YouTube, Vimeo, etc.)" : "Resource link (PDF, article, etc.)"}
+                  </label>
+                  <input
+                    value={courseForm.contentUrl}
+                    onChange={(e) => setCourseForm({ ...courseForm, contentUrl: e.target.value })}
+                    placeholder="https://..."
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  />
+                </div>
+              )}
+              {courseForm.contentType === "text" && (
+                <div className="mb-3">
+                  <label className="text-xs text-slate-500 mb-1 block">Lesson content</label>
+                  <textarea
+                    value={courseForm.contentText}
+                    onChange={(e) => setCourseForm({ ...courseForm, contentText: e.target.value })}
+                    rows={6}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  />
+                </div>
+              )}
+              <div className="flex gap-2 mt-4">
+                <button
+                  onClick={saveCourse}
+                  disabled={courseSaving || !courseForm.title.trim()}
+                  className="px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                >
+                  {courseSaving ? "Saving..." : "Save"}
+                </button>
+                <button
+                  onClick={() => setCourseForm(null)}
+                  className="px-4 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {coursesLoading ? (
+            <div className="text-center text-slate-400 py-16">Loading...</div>
+          ) : courses.length === 0 ? (
+            <div className="text-center text-slate-400 py-16">No courses added yet</div>
+          ) : (
+            <div className="space-y-2">
+              {courses.map((c) => (
+                <div key={c.id} className="bg-white rounded-xl border border-slate-200 p-4 flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-semibold text-slate-800 text-sm">{c.title}</div>
+                    {c.description && <div className="text-xs text-slate-400 mt-0.5">{c.description}</div>}
+                    <div className="text-xs text-slate-300 mt-1 capitalize">
+                      {c.contentType} lesson{Number(c.price) > 0 ? ` · ${c.price} EGP` : " · Free"}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button onClick={() => openEditCourseForm(c)} className="p-2 rounded-lg hover:bg-slate-50 text-slate-400">
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => deleteCourse(c)} className="p-2 rounded-lg hover:bg-red-50 text-red-500">
+                      <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
                 </div>
@@ -11200,6 +11544,209 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
    Coach portal — each coach logs in with their own PIN and sees
    their weekly schedule, grouped by day, with the hours for each session
    ============================================================ */
+/* The "Training courses" section on a coach's own dashboard — a simple
+   library of videos/lessons/resources the admin has put together, with a
+   per-coach "mark as done" checkbox so progress carries over between
+   visits. */
+function CoachTrainingSection({ coachId, coachName }) {
+  const [courses, setCourses] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [completed, setCompleted] = useState([]);
+  const [paidCourseIds, setPaidCourseIds] = useState([]);
+  const [pendingCourseIds, setPendingCourseIds] = useState([]);
+  const [openCourseId, setOpenCourseId] = useState(null);
+  const [payingCourseId, setPayingCourseId] = useState(null);
+  const [paymentScreenshot, setPaymentScreenshot] = useState(null);
+  const [paymentSubmitting, setPaymentSubmitting] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [items, allCoaches, payments] = await Promise.all([
+        loadCollection(STORE_KEYS.courses),
+        loadCollection(STORE_KEYS.coaches),
+        loadCollection(STORE_KEYS.coursePayments),
+      ]);
+      setCourses(items.sort((a, b) => (a.order || 0) - (b.order || 0)));
+      const me = allCoaches.find((c) => c.id === coachId);
+      setCompleted(me?.completedCourses || []);
+      const mine = payments.filter((p) => p.coachId === coachId);
+      setPaidCourseIds(mine.filter((p) => p.status === "confirmed").map((p) => p.courseId));
+      setPendingCourseIds(mine.filter((p) => p.status === "pending").map((p) => p.courseId));
+    } finally {
+      setLoading(false);
+    }
+  }, [coachId]);
+
+  useEffect(() => {
+    if (coachId) load();
+  }, [coachId, load]);
+
+  const toggleComplete = async (courseId) => {
+    const isDone = completed.includes(courseId);
+    const next = isDone ? completed.filter((id) => id !== courseId) : [...completed, courseId];
+    setCompleted(next);
+    const allCoaches = await loadCollection(STORE_KEYS.coaches);
+    const updated = allCoaches.map((c) => (c.id === coachId ? { ...c, completedCourses: next } : c));
+    await saveCollection(STORE_KEYS.coaches, updated);
+  };
+
+  const submitCoursePayment = async (course) => {
+    if (!paymentScreenshot) return;
+    setPaymentSubmitting(true);
+    try {
+      const all = await loadCollection(STORE_KEYS.coursePayments);
+      const record = {
+        id: genId(),
+        coachId,
+        coachName,
+        courseId: course.id,
+        courseTitle: course.title,
+        price: course.price,
+        screenshotDataUri: paymentScreenshot,
+        status: "pending",
+        createdAt: new Date().toISOString(),
+      };
+      await saveCollection(STORE_KEYS.coursePayments, [...all, record]);
+      setPendingCourseIds([...pendingCourseIds, course.id]);
+      setPayingCourseId(null);
+      setPaymentScreenshot(null);
+    } finally {
+      setPaymentSubmitting(false);
+    }
+  };
+
+  const embedUrl = (url) => {
+    const yt = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/);
+    if (yt) return `https://www.youtube.com/embed/${yt[1]}`;
+    const vimeo = url.match(/vimeo\.com\/(\d+)/);
+    if (vimeo) return `https://player.vimeo.com/video/${vimeo[1]}`;
+    return null;
+  };
+
+  if (loading || courses.length === 0) return null;
+
+  return (
+    <div className="mb-6 bg-white rounded-2xl border border-slate-200 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-bold text-slate-900 flex items-center gap-2">
+          <GraduationCap className="w-4 h-4" /> Training courses
+        </h3>
+        <span className="text-xs text-slate-400">{completed.length} / {courses.length} done</span>
+      </div>
+      <div className="space-y-2">
+        {courses.map((c) => {
+          const isDone = completed.includes(c.id);
+          const isOpen = openCourseId === c.id;
+          const isPaid = Number(c.price) === 0 || paidCourseIds.includes(c.id);
+          const isPending = pendingCourseIds.includes(c.id);
+          const embed = c.contentType === "video" ? embedUrl(c.contentUrl || "") : null;
+          return (
+            <div key={c.id} className="border border-slate-100 rounded-xl overflow-hidden">
+              <button
+                onClick={() => setOpenCourseId(isOpen ? null : c.id)}
+                className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-slate-50 text-left"
+              >
+                <div>
+                  <div className={`text-sm font-medium ${isDone ? "text-slate-400 line-through" : "text-slate-800"}`}>{c.title}</div>
+                  {c.description && <div className="text-xs text-slate-400 mt-0.5">{c.description}</div>}
+                  {!isPaid && <div className="text-xs text-amber-600 mt-0.5 font-medium">{c.price} EGP{isPending ? " · payment under review" : ""}</div>}
+                </div>
+                {isDone && <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />}
+              </button>
+              {isOpen && (
+                <div className="px-4 pb-4">
+                  {!isPaid ? (
+                    isPending ? (
+                      <div className="text-sm text-amber-600 bg-amber-50 rounded-lg px-3 py-3">
+                        Your payment screenshot is being reviewed — this course will unlock once it's confirmed.
+                      </div>
+                    ) : payingCourseId === c.id ? (
+                      <div className="bg-slate-50 rounded-lg p-3">
+                        <div className="text-xs text-slate-500 mb-2">
+                          Pay {c.price} EGP via Instapay to <strong>{CONFIG.instapayHandle}</strong> ({CONFIG.instapayPhone}), then upload the screenshot.
+                        </div>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) compressImage(file, 700, 0.8).then(setPaymentScreenshot);
+                          }}
+                          className="text-xs mb-2"
+                        />
+                        {paymentScreenshot && <img src={paymentScreenshot} alt="" className="w-24 rounded-lg border border-slate-200 mb-2" />}
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => submitCoursePayment(c)}
+                            disabled={!paymentScreenshot || paymentSubmitting}
+                            className="text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-950 text-white hover:bg-blue-900 disabled:opacity-60"
+                          >
+                            {paymentSubmitting ? "Sending..." : "Submit payment"}
+                          </button>
+                          <button onClick={() => setPayingCourseId(null)} className="text-xs px-3 py-1.5 rounded-full text-slate-500 hover:bg-slate-100">
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setPayingCourseId(c.id)}
+                        className="text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-950 text-white hover:bg-blue-900"
+                      >
+                        Pay {c.price} EGP to unlock
+                      </button>
+                    )
+                  ) : (
+                    <>
+                      {c.contentType === "video" &&
+                        (embed ? (
+                          <div className="aspect-video mb-3">
+                            <iframe src={embed} className="w-full h-full rounded-lg" allowFullScreen title={c.title} />
+                          </div>
+                        ) : (
+                          <a href={c.contentUrl} target="_blank" rel="noreferrer" className="text-sm text-blue-900 hover:underline block mb-3">
+                            Open video ↗
+                          </a>
+                        ))}
+                      {c.contentType === "link" && (
+                        <a href={c.contentUrl} target="_blank" rel="noreferrer" className="text-sm text-blue-900 hover:underline block mb-3">
+                          Open resource ↗
+                        </a>
+                      )}
+                      {c.contentType === "text" && (
+                        <div className="text-sm text-slate-600 whitespace-pre-wrap mb-3">{c.contentText}</div>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => toggleComplete(c.id)}
+                          className={`text-xs px-3 py-1.5 rounded-full font-medium ${
+                            isDone ? "bg-slate-100 text-slate-500" : "bg-green-50 text-green-700 hover:bg-green-100"
+                          }`}
+                        >
+                          {isDone ? "Mark as not done" : "Mark as done"}
+                        </button>
+                        {isDone && (
+                          <button
+                            onClick={() => printCourseCertificate({ coachName, courseTitle: c.title, date: todayISO() })}
+                            className="text-xs px-3 py-1.5 rounded-full font-medium bg-blue-50 text-blue-800 hover:bg-blue-100"
+                          >
+                            🎓 Print certificate
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function CoachView({ onExit, preAuthedCoach = null }) {
   const [coaches, setCoaches] = useState([]);
   const [coachesLoaded, setCoachesLoaded] = useState(false);
@@ -11590,6 +12137,8 @@ function CoachView({ onExit, preAuthedCoach = null }) {
           )}
         </div>
       )}
+
+      <CoachTrainingSection coachId={authedCoach?.id} coachName={authedCoach?.name} />
 
       {mySwimmers.length === 0 && (
         <div className="text-center text-slate-400 py-16">No swimmers assigned to you yet</div>
@@ -13381,10 +13930,9 @@ export default function App() {
   // A reserved path that never maps to a real academy — the super admin's
   // own panel for registering new academies.
   const isSuperAdminRoute = academySlugFromPath() === "_admin";
-  const isSignupRoute = academySlugFromPath() === "signup";
 
   useEffect(() => {
-    if (isSuperAdminRoute || isSignupRoute) return;
+    if (isSuperAdminRoute) return;
     resolveAcademy().then((academy) => {
       if (!academy) {
         setAcademyStatus("not-found");
@@ -13409,15 +13957,7 @@ export default function App() {
         setAcademyStatus("ready");
       });
     });
-  }, [isSuperAdminRoute, isSignupRoute]);
-
-  if (isSignupRoute) {
-    return (
-      <ErrorBoundary>
-        <SignupView />
-      </ErrorBoundary>
-    );
-  }
+  }, [isSuperAdminRoute]);
 
   if (isSuperAdminRoute) {
     return (
