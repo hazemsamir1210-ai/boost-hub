@@ -3591,16 +3591,57 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   }, [tab, loadCourses]);
 
   const openNewCourseForm = () => {
-    setCourseForm({ title: "", description: "", contentType: "video", contentUrl: "", contentText: "", price: 0, assignedCoachIds: [], quiz: [] });
+    setCourseForm({
+      title: "",
+      description: "",
+      price: 0,
+      assignedCoachIds: [],
+      quiz: [],
+      thumbnailDataUri: "",
+      modules: [{ id: genId(), title: "Module 1", videoUrl: "", text: "", linkUrl: "", fileUrl: "", fileName: "" }],
+    });
+  };
+
+  // Normalizes any older shape (a module with one contentType, or a
+  // pre-modules course with content straight on it) into the current
+  // shape — several optional fields on one module, so a module can mix
+  // a video with written notes and an attached file all at once.
+  const normalizeModuleForEditing = (m) => {
+    if (!m.contentType) return { fileUrl: "", fileName: "", videoUrl: "", text: "", linkUrl: "", ...m };
+    const base = { id: m.id, title: m.title, videoUrl: "", text: "", linkUrl: "", fileUrl: "", fileName: "" };
+    if (m.contentType === "video") base.videoUrl = m.contentUrl || "";
+    if (m.contentType === "text") base.text = m.contentText || "";
+    if (m.contentType === "link") base.linkUrl = m.contentUrl || "";
+    if (m.contentType === "file") {
+      base.fileUrl = m.contentUrl || "";
+      base.fileName = m.contentFileName || "";
+    }
+    return base;
   };
 
   const openEditCourseForm = (course) => {
-    setCourseForm({ ...course });
+    // Older courses (from before modules existed) stored one piece of
+    // content directly on the course — wrap that as a single module here
+    // so editing works the same way regardless of when the course was made.
+    const rawModules =
+      course.modules && course.modules.length > 0
+        ? course.modules
+        : [
+            {
+              id: genId(),
+              title: course.title || "Module 1",
+              contentType: course.contentType || "video",
+              contentUrl: course.contentUrl || "",
+              contentText: course.contentText || "",
+              contentFileName: course.contentFileName || "",
+            },
+          ];
+    setCourseForm({ ...course, modules: rawModules.map(normalizeModuleForEditing) });
   };
 
   const [courseFileError, setCourseFileError] = useState("");
 
-  const uploadCourseFile = (file) => {
+  const uploadCourseFile = (moduleId, file) => {
     if (!file) return;
     setCourseFileError("");
     const MAX_BYTES = 8 * 1024 * 1024; // 8MB — generous for a slide deck, safe for storage as a data URI
@@ -3609,10 +3650,44 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
     const reader = new FileReader();
     reader.onload = (e) => {
-      setCourseForm({ ...courseForm, contentUrl: e.target.result, contentFileName: file.name });
+      updateModule(moduleId, { fileUrl: e.target.result, fileName: file.name });
     };
     reader.onerror = () => setCourseFileError("Could not read that file — please try again.");
     reader.readAsDataURL(file);
+  };
+
+  const uploadCourseThumbnail = (file) => {
+    if (!file) return;
+    compressImage(file, 500, 0.85).then((uri) => setCourseForm({ ...courseForm, thumbnailDataUri: uri }));
+  };
+
+  const addModule = () => {
+    setCourseForm({
+      ...courseForm,
+      modules: [
+        ...courseForm.modules,
+        { id: genId(), title: `Module ${courseForm.modules.length + 1}`, contentType: "video", contentUrl: "", contentText: "" },
+      ],
+    });
+  };
+
+  const updateModule = (moduleId, patch) => {
+    setCourseForm({
+      ...courseForm,
+      modules: courseForm.modules.map((m) => (m.id === moduleId ? { ...m, ...patch } : m)),
+    });
+  };
+
+  const removeModule = (moduleId) => {
+    setCourseForm({ ...courseForm, modules: courseForm.modules.filter((m) => m.id !== moduleId) });
+  };
+
+  const moveModule = (index, dir) => {
+    const modules = [...courseForm.modules];
+    const target = index + dir;
+    if (target < 0 || target >= modules.length) return;
+    [modules[index], modules[target]] = [modules[target], modules[index]];
+    setCourseForm({ ...courseForm, modules });
   };
 
   const saveCourse = async () => {
@@ -3678,6 +3753,73 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     const all = await loadCollection(STORE_KEYS.coursePayments);
     await saveCollection(STORE_KEYS.coursePayments, all.filter((p) => p.id !== payment.id));
     loadPendingCoursePayments();
+  };
+
+  // ---- Grant a course for free, bypassing payment entirely ----
+  const [grantModalCourse, setGrantModalCourse] = useState(null); // course being granted, or null
+  const [grantCoachId, setGrantCoachId] = useState("");
+  const [grantEmail, setGrantEmail] = useState("");
+  const [grantMode, setGrantMode] = useState("coach"); // "coach" | "student"
+  const [granting, setGranting] = useState(false);
+
+  const openGrantModal = (course) => {
+    setGrantModalCourse(course);
+    setGrantMode("coach");
+    setGrantCoachId("");
+    setGrantEmail("");
+  };
+
+  const submitGrant = async () => {
+    setGranting(true);
+    try {
+      const all = await loadCollection(STORE_KEYS.coursePayments);
+      let record;
+      if (grantMode === "coach") {
+        const coach = coaches.find((c) => c.id === grantCoachId);
+        if (!coach) return;
+        record = {
+          id: genId(),
+          buyerType: "coach",
+          coachId: coach.id,
+          coachName: coach.name,
+          courseId: grantModalCourse.id,
+          courseTitle: grantModalCourse.title,
+          price: 0,
+          status: "confirmed",
+          grantedFree: true,
+          createdAt: new Date().toISOString(),
+          confirmedAt: new Date().toISOString(),
+        };
+        logActivity(accountName, role, "Granted free course access", `${coach.name} — ${grantModalCourse.title}`);
+      } else {
+        if (!grantEmail.trim()) return;
+        const students = await loadCollection(STORE_KEYS.courseStudents);
+        const found = students.find((s) => s.email.toLowerCase() === grantEmail.trim().toLowerCase());
+        if (!found) {
+          setGranting(false);
+          return alert("No account found with that email — they need to sign up on the Courses page first.");
+        }
+        record = {
+          id: genId(),
+          buyerType: "student",
+          studentId: found.id,
+          studentName: found.name,
+          studentEmail: found.email,
+          courseId: grantModalCourse.id,
+          courseTitle: grantModalCourse.title,
+          price: 0,
+          status: "confirmed",
+          grantedFree: true,
+          createdAt: new Date().toISOString(),
+          confirmedAt: new Date().toISOString(),
+        };
+        logActivity(accountName, role, "Granted free course access", `${found.name} — ${grantModalCourse.title}`);
+      }
+      await saveCollection(STORE_KEYS.coursePayments, [...all, record]);
+      setGrantModalCourse(null);
+    } finally {
+      setGranting(false);
+    }
   };
 
   const loadFeedback = useCallback(async () => {
@@ -8619,6 +8761,25 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 />
               </div>
               <div className="mb-3">
+                <label className="text-xs text-slate-500 mb-1 block">Cover image (shown next to the course title)</label>
+                <div className="flex items-center gap-3">
+                  {courseForm.thumbnailDataUri && (
+                    <img src={courseForm.thumbnailDataUri} alt="" className="w-16 h-16 rounded-lg object-cover border border-slate-200" />
+                  )}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => uploadCourseThumbnail(e.target.files?.[0])}
+                    className="text-sm"
+                  />
+                  {courseForm.thumbnailDataUri && (
+                    <button onClick={() => setCourseForm({ ...courseForm, thumbnailDataUri: "" })} className="text-xs text-red-500 hover:underline">
+                      Remove
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="mb-3">
                 <label className="text-xs text-slate-500 mb-1 block">Price (EGP — 0 for free)</label>
                 <input
                   type="number"
@@ -8634,77 +8795,99 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 </div>
               </div>
               <div className="mb-3">
-                <label className="text-xs text-slate-500 mb-1 block">Content type</label>
-                <div className="flex gap-2 flex-wrap">
-                  {[
-                    { id: "video", label: "Video link" },
-                    { id: "text", label: "Written lesson" },
-                    { id: "link", label: "External resource" },
-                    { id: "file", label: "Upload a file" },
-                  ].map((t) => (
-                    <button
-                      key={t.id}
-                      onClick={() => setCourseForm({ ...courseForm, contentType: t.id })}
-                      className={`text-sm px-3 py-2 rounded-lg border ${
-                        courseForm.contentType === t.id ? "border-blue-900 bg-blue-50 text-blue-950 font-medium" : "border-slate-200 text-slate-500"
-                      }`}
-                    >
-                      {t.label}
-                    </button>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs text-slate-500 block">Modules</label>
+                  <button
+                    onClick={addModule}
+                    className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
+                  >
+                    + Add module
+                  </button>
+                </div>
+                {courseFileError && <div className="text-xs text-red-500 mb-2">{courseFileError}</div>}
+                <div className="space-y-3">
+                  {courseForm.modules.map((m, mi) => (
+                    <div key={m.id} className="bg-slate-50 rounded-lg p-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-xs text-slate-400 shrink-0">{mi + 1}.</span>
+                        <input
+                          value={m.title}
+                          onChange={(e) => updateModule(m.id, { title: e.target.value })}
+                          placeholder="Module title"
+                          className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                        />
+                        <button onClick={() => moveModule(mi, -1)} disabled={mi === 0} className="p-1.5 text-slate-400 hover:text-slate-600 disabled:opacity-30">
+                          ↑
+                        </button>
+                        <button
+                          onClick={() => moveModule(mi, 1)}
+                          disabled={mi === courseForm.modules.length - 1}
+                          className="p-1.5 text-slate-400 hover:text-slate-600 disabled:opacity-30"
+                        >
+                          ↓
+                        </button>
+                        {courseForm.modules.length > 1 && (
+                          <button onClick={() => removeModule(m.id)} className="p-1.5 text-red-400 hover:text-red-600">
+                            <X className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                      <div className="space-y-2">
+                        <div>
+                          <label className="text-xs text-slate-400 mb-1 block">Video URL (optional)</label>
+                          <input
+                            value={m.videoUrl}
+                            onChange={(e) => updateModule(m.id, { videoUrl: e.target.value })}
+                            placeholder="YouTube, Vimeo, etc."
+                            className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-slate-400 mb-1 block">Written notes (optional)</label>
+                          <textarea
+                            value={m.text}
+                            onChange={(e) => updateModule(m.id, { text: e.target.value })}
+                            rows={3}
+                            placeholder="Any text for this module"
+                            className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-slate-400 mb-1 block">External link (optional)</label>
+                          <input
+                            value={m.linkUrl}
+                            onChange={(e) => updateModule(m.id, { linkUrl: e.target.value })}
+                            placeholder="https://..."
+                            className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-slate-400 mb-1 block">Attached file (optional — PowerPoint, PDF, Word, up to 8MB)</label>
+                          {m.fileName ? (
+                            <div className="flex items-center gap-3 bg-white rounded-lg px-3 py-2 border border-slate-200">
+                              <FileUp className="w-4 h-4 text-slate-400 shrink-0" />
+                              <span className="text-sm text-slate-700 truncate flex-1">{m.fileName}</span>
+                              <button
+                                onClick={() => updateModule(m.id, { fileUrl: "", fileName: "" })}
+                                className="text-xs text-red-500 hover:underline shrink-0"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          ) : (
+                            <input
+                              type="file"
+                              accept=".ppt,.pptx,.pdf,.doc,.docx,.key"
+                              onChange={(e) => uploadCourseFile(m.id, e.target.files?.[0])}
+                              className="text-sm"
+                            />
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   ))}
                 </div>
               </div>
-              {(courseForm.contentType === "video" || courseForm.contentType === "link") && (
-                <div className="mb-3">
-                  <label className="text-xs text-slate-500 mb-1 block">
-                    {courseForm.contentType === "video" ? "Video URL (YouTube, Vimeo, etc.)" : "Resource link (PDF, article, etc.)"}
-                  </label>
-                  <input
-                    value={courseForm.contentUrl}
-                    onChange={(e) => setCourseForm({ ...courseForm, contentUrl: e.target.value })}
-                    placeholder="https://..."
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
-                  />
-                </div>
-              )}
-              {courseForm.contentType === "file" && (
-                <div className="mb-3">
-                  <label className="text-xs text-slate-500 mb-1 block">
-                    File (PowerPoint, PDF, Word — up to 8MB)
-                  </label>
-                  {courseFileError && <div className="text-xs text-red-500 mb-2">{courseFileError}</div>}
-                  {courseForm.contentFileName ? (
-                    <div className="flex items-center gap-3 bg-slate-50 rounded-lg px-3 py-2.5">
-                      <FileUp className="w-4 h-4 text-slate-400 shrink-0" />
-                      <span className="text-sm text-slate-700 truncate flex-1">{courseForm.contentFileName}</span>
-                      <button
-                        onClick={() => setCourseForm({ ...courseForm, contentUrl: "", contentFileName: "" })}
-                        className="text-xs text-red-500 hover:underline shrink-0"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ) : (
-                    <input
-                      type="file"
-                      accept=".ppt,.pptx,.pdf,.doc,.docx,.key"
-                      onChange={(e) => uploadCourseFile(e.target.files?.[0])}
-                      className="text-sm"
-                    />
-                  )}
-                </div>
-              )}
-              {courseForm.contentType === "text" && (
-                <div className="mb-3">
-                  <label className="text-xs text-slate-500 mb-1 block">Lesson content</label>
-                  <textarea
-                    value={courseForm.contentText}
-                    onChange={(e) => setCourseForm({ ...courseForm, contentText: e.target.value })}
-                    rows={6}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
-                  />
-                </div>
-              )}
               <div className="mb-3">
                 <label className="text-xs text-slate-500 mb-1 block">
                   Visible to which coaches?
@@ -8871,16 +9054,30 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <div className="space-y-2">
               {courses.map((c) => (
                 <div key={c.id} className="bg-white rounded-xl border border-slate-200 p-4 flex items-start justify-between gap-3">
-                  <div>
-                    <div className="font-semibold text-slate-800 text-sm">{c.title}</div>
-                    {c.description && <div className="text-xs text-slate-400 mt-0.5">{c.description}</div>}
-                    <div className="text-xs text-slate-300 mt-1 capitalize">
-                      {c.contentType} lesson{Number(c.price) > 0 ? ` · ${c.price} EGP` : " · Free"}
-                      {" · "}
-                      {(c.assignedCoachIds || []).length === 0 ? "All coaches" : `${c.assignedCoachIds.length} coach(es) only`}
+                  <div className="flex items-start gap-3">
+                    {c.thumbnailDataUri && (
+                      <img src={c.thumbnailDataUri} alt="" className="w-12 h-12 rounded-lg object-cover border border-slate-100 shrink-0" />
+                    )}
+                    <div>
+                      <div className="font-semibold text-slate-800 text-sm">{c.title}</div>
+                      {c.description && <div className="text-xs text-slate-400 mt-0.5">{c.description}</div>}
+                      <div className="text-xs text-slate-300 mt-1">
+                        {(c.modules || []).length || 1} module{((c.modules || []).length || 1) === 1 ? "" : "s"}
+                        {Number(c.price) > 0 ? ` · ${c.price} EGP` : " · Free"}
+                        {" · "}
+                        {(c.assignedCoachIds || []).length === 0 ? "All coaches" : `${c.assignedCoachIds.length} coach(es) only`}
+                      </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
+                    {Number(c.price) > 0 && (
+                      <button
+                        onClick={() => openGrantModal(c)}
+                        className="text-xs px-2.5 py-1.5 rounded-lg bg-green-50 text-green-700 font-medium hover:bg-green-100"
+                      >
+                        Grant free
+                      </button>
+                    )}
                     <button onClick={() => openEditCourseForm(c)} className="p-2 rounded-lg hover:bg-slate-50 text-slate-400">
                       <Pencil className="w-4 h-4" />
                     </button>
@@ -8890,6 +9087,66 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {grantModalCourse && (
+            <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 px-4" onClick={() => setGrantModalCourse(null)}>
+              <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-xl" onClick={(e) => e.stopPropagation()}>
+                <h3 className="text-lg font-bold text-slate-900 mb-1">Grant free access</h3>
+                <p className="text-xs text-slate-400 mb-4">"{grantModalCourse.title}" — skips payment entirely for this one person.</p>
+                <div className="flex gap-2 mb-3">
+                  <button
+                    onClick={() => setGrantMode("coach")}
+                    className={`text-sm px-3 py-1.5 rounded-lg border ${grantMode === "coach" ? "border-blue-900 bg-blue-50 text-blue-950 font-medium" : "border-slate-200 text-slate-500"}`}
+                  >
+                    A coach
+                  </button>
+                  <button
+                    onClick={() => setGrantMode("student")}
+                    className={`text-sm px-3 py-1.5 rounded-lg border ${grantMode === "student" ? "border-blue-900 bg-blue-50 text-blue-950 font-medium" : "border-slate-200 text-slate-500"}`}
+                  >
+                    A public course account
+                  </button>
+                </div>
+                {grantMode === "coach" ? (
+                  <select
+                    value={grantCoachId}
+                    onChange={(e) => setGrantCoachId(e.target.value)}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white mb-4"
+                  >
+                    <option value="">Choose a coach...</option>
+                    {coaches.map((co) => (
+                      <option key={co.id} value={co.id}>{co.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="mb-4">
+                    <input
+                      value={grantEmail}
+                      onChange={(e) => setGrantEmail(e.target.value)}
+                      placeholder="Their account email"
+                      className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    />
+                    <div className="text-xs text-slate-400 mt-1">They must already have an account (from signing up on the Courses page).</div>
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <button
+                    onClick={submitGrant}
+                    disabled={granting || (grantMode === "coach" ? !grantCoachId : !grantEmail.trim())}
+                    className="px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                  >
+                    {granting ? "Granting..." : "Grant access"}
+                  </button>
+                  <button
+                    onClick={() => setGrantModalCourse(null)}
+                    className="px-4 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -11740,6 +11997,117 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
    library of videos/lessons/resources the admin has put together, with a
    per-coach "mark as done" checkbox so progress carries over between
    visits. */
+// Older courses (from before modules existed) have their content directly
+// on the course object — this normalizes either shape into a module list,
+// so every viewer only ever has to deal with one format.
+// Normalizes any module (old single-contentType shape, or the current
+// shape with several optional fields) into the current shape, so viewers
+// never have to care which format a given course was saved in.
+function normalizeModuleForViewing(m) {
+  if (!m.contentType) return { videoUrl: "", text: "", linkUrl: "", fileUrl: "", fileName: "", ...m };
+  const base = { id: m.id, title: m.title, videoUrl: "", text: "", linkUrl: "", fileUrl: "", fileName: "" };
+  if (m.contentType === "video") base.videoUrl = m.contentUrl || "";
+  if (m.contentType === "text") base.text = m.contentText || "";
+  if (m.contentType === "link") base.linkUrl = m.contentUrl || "";
+  if (m.contentType === "file") {
+    base.fileUrl = m.contentUrl || "";
+    base.fileName = m.contentFileName || "";
+  }
+  return base;
+}
+
+function getCourseModules(course) {
+  const raw =
+    course.modules && course.modules.length > 0
+      ? course.modules
+      : course.contentType
+      ? [
+          {
+            id: course.id,
+            title: course.title,
+            contentType: course.contentType,
+            contentUrl: course.contentUrl,
+            contentText: course.contentText,
+            contentFileName: course.contentFileName,
+          },
+        ]
+      : [];
+  return raw.map(normalizeModuleForViewing);
+}
+
+function courseEmbedUrl(url) {
+  const yt = (url || "").match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/);
+  if (yt) return `https://www.youtube.com/embed/${yt[1]}`;
+  const vimeo = (url || "").match(/vimeo\.com\/(\d+)/);
+  if (vimeo) return `https://player.vimeo.com/video/${vimeo[1]}`;
+  return null;
+}
+
+/* One module's content, expanded — any mix of video, written notes, a
+   link, and an attached file can appear together in the same module.
+   Shared by every place a paid-for course gets watched (coach dashboard
+   and the public courses portal). */
+function ModuleContent({ module: m, protect = false }) {
+  const embed = m.videoUrl ? courseEmbedUrl(m.videoUrl) : null;
+  const hasAnything = m.videoUrl || m.text || m.linkUrl || m.fileUrl;
+  return (
+    <div className="space-y-3" onContextMenu={protect ? (e) => e.preventDefault() : undefined}>
+      {!hasAnything && <div className="text-sm text-slate-400">Nothing added to this module yet.</div>}
+      {m.videoUrl &&
+        (embed ? (
+          <div className="aspect-video">
+            <iframe src={embed} className="w-full h-full rounded-lg" allowFullScreen title={m.title} />
+          </div>
+        ) : (
+          <div className="text-sm text-slate-500">Video not available right now — please contact the academy.</div>
+        ))}
+      {m.text && <div className="text-sm text-slate-600 whitespace-pre-wrap select-none">{m.text}</div>}
+      {m.linkUrl && (
+        <a href={m.linkUrl} target="_blank" rel="noreferrer" className="text-sm text-blue-900 hover:underline block">
+          Open resource ↗
+        </a>
+      )}
+      {m.fileUrl &&
+        ((m.fileName || "").toLowerCase().endsWith(".pdf") ? (
+          <iframe src={m.fileUrl} className="w-full h-[60vh] rounded-lg border border-slate-100" title={m.title} />
+        ) : (
+          <div className="text-sm text-slate-500">
+            This module's file ({m.fileName}) can only be opened directly —{" "}
+            <a href={m.fileUrl} target="_blank" rel="noreferrer" className="text-blue-900 hover:underline">
+              open it
+            </a>
+            .
+          </div>
+        ))}
+    </div>
+  );
+}
+
+/* The expandable list of a course's modules — click one to open it. */
+function ModuleList({ modules, protect = false }) {
+  const [openIndex, setOpenIndex] = useState(modules.length === 1 ? 0 : null);
+  return (
+    <div className="space-y-2">
+      {modules.map((m, i) => (
+        <div key={m.id || i} className="border border-slate-100 rounded-lg overflow-hidden">
+          <button
+            onClick={() => setOpenIndex(openIndex === i ? null : i)}
+            className="w-full flex items-center justify-between gap-2 px-3 py-2.5 hover:bg-slate-50 text-left"
+          >
+            <span className="text-sm font-medium text-slate-700">{i + 1}. {m.title}</span>
+            <ChevronLeft className={`w-4 h-4 text-slate-300 transition-transform ${openIndex === i ? "-rotate-90" : "rotate-180"}`} />
+          </button>
+          {openIndex === i && (
+            <div className="px-3 pb-3">
+              <ModuleContent module={m} protect={protect} />
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function CoachTrainingSection({ coachId, coachName }) {
   const [courses, setCourses] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -11830,14 +12198,6 @@ function CoachTrainingSection({ coachId, coachName }) {
     }
   };
 
-  const embedUrl = (url) => {
-    const yt = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/);
-    if (yt) return `https://www.youtube.com/embed/${yt[1]}`;
-    const vimeo = url.match(/vimeo\.com\/(\d+)/);
-    if (vimeo) return `https://player.vimeo.com/video/${vimeo[1]}`;
-    return null;
-  };
-
   if (loading) return null;
 
   return (
@@ -11857,17 +12217,19 @@ function CoachTrainingSection({ coachId, coachName }) {
           const isOpen = openCourseId === c.id;
           const isPaid = Number(c.price) === 0 || paidCourseIds.includes(c.id);
           const isPending = pendingCourseIds.includes(c.id);
-          const embed = c.contentType === "video" ? embedUrl(c.contentUrl || "") : null;
           return (
             <div key={c.id} className="border border-slate-100 rounded-xl overflow-hidden">
               <button
                 onClick={() => setOpenCourseId(isOpen ? null : c.id)}
                 className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-slate-50 text-left"
               >
-                <div>
-                  <div className={`text-sm font-medium ${isDone ? "text-slate-400 line-through" : "text-slate-800"}`}>{c.title}</div>
-                  {c.description && <div className="text-xs text-slate-400 mt-0.5">{c.description}</div>}
-                  {!isPaid && <div className="text-xs text-amber-600 mt-0.5 font-medium">{c.price} EGP{isPending ? " · payment under review" : ""}</div>}
+                <div className="flex items-center gap-3">
+                  {c.thumbnailDataUri && <img src={c.thumbnailDataUri} alt="" className="w-10 h-10 rounded-lg object-cover shrink-0" />}
+                  <div>
+                    <div className={`text-sm font-medium ${isDone ? "text-slate-400 line-through" : "text-slate-800"}`}>{c.title}</div>
+                    {c.description && <div className="text-xs text-slate-400 mt-0.5">{c.description}</div>}
+                    {!isPaid && <div className="text-xs text-amber-600 mt-0.5 font-medium">{c.price} EGP{isPending ? " · payment under review" : ""}</div>}
+                  </div>
                 </div>
                 {isDone && <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />}
               </button>
@@ -11916,34 +12278,9 @@ function CoachTrainingSection({ coachId, coachName }) {
                     )
                   ) : (
                     <>
-                      {c.contentType === "video" &&
-                        (embed ? (
-                          <div className="aspect-video mb-3">
-                            <iframe src={embed} className="w-full h-full rounded-lg" allowFullScreen title={c.title} />
-                          </div>
-                        ) : (
-                          <a href={c.contentUrl} target="_blank" rel="noreferrer" className="text-sm text-blue-900 hover:underline block mb-3">
-                            Open video ↗
-                          </a>
-                        ))}
-                      {c.contentType === "link" && (
-                        <a href={c.contentUrl} target="_blank" rel="noreferrer" className="text-sm text-blue-900 hover:underline block mb-3">
-                          Open resource ↗
-                        </a>
-                      )}
-                      {c.contentType === "file" && (
-                        <a
-                          href={c.contentUrl}
-                          download={c.contentFileName || "lesson-file"}
-                          className="flex items-center gap-2 text-sm text-blue-900 hover:underline mb-3 bg-slate-50 rounded-lg px-3 py-2.5"
-                        >
-                          <FileDown className="w-4 h-4 shrink-0" />
-                          {c.contentFileName || "Download file"}
-                        </a>
-                      )}
-                      {c.contentType === "text" && (
-                        <div className="text-sm text-slate-600 whitespace-pre-wrap mb-3">{c.contentText}</div>
-                      )}
+                      <div className="mb-3">
+                        <ModuleList modules={getCourseModules(c)} protect />
+                      </div>
                       {(c.quiz || []).length > 0 ? (
                         quizCourseId === c.id ? (
                           <div className="bg-slate-50 rounded-lg p-4">
@@ -13027,14 +13364,6 @@ function CoursesPortalView({ onBack }) {
     }
   };
 
-  const embedUrl = (url) => {
-    const yt = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]+)/);
-    if (yt) return `https://www.youtube.com/embed/${yt[1]}`;
-    const vimeo = url.match(/vimeo\.com\/(\d+)/);
-    if (vimeo) return `https://player.vimeo.com/video/${vimeo[1]}`;
-    return null;
-  };
-
   // Re-check after every payments reload, once logged in
   useEffect(() => {
     if (!student) return;
@@ -13117,13 +13446,15 @@ function CoursesPortalView({ onBack }) {
     const paidFor = myPayments.find((p) => p.courseId === activeCourse.id && p.status === "confirmed");
     const pendingPay = myPayments.find((p) => p.courseId === activeCourse.id && p.status === "pending");
     const isFree = Number(activeCourse.price) === 0;
-    const embed = activeCourse.contentType === "video" ? embedUrl(activeCourse.contentUrl || "") : null;
     return (
       <div className="min-h-screen bg-slate-50 px-4 py-8">
         <div className="max-w-3xl mx-auto">
           <button onClick={() => setActiveCourseId(null)} className="flex items-center gap-1 text-slate-400 hover:text-slate-600 text-sm mb-4">
             <ChevronLeft className="w-4 h-4" /> Back to courses
           </button>
+          {activeCourse.thumbnailDataUri && (
+            <img src={activeCourse.thumbnailDataUri} alt="" className="w-full max-h-52 object-cover rounded-2xl mb-4" />
+          )}
           <h2 className="text-xl font-bold text-slate-900 mb-1">{activeCourse.title}</h2>
           {activeCourse.description && <p className="text-sm text-slate-500 mb-6">{activeCourse.description}</p>}
 
@@ -13141,38 +13472,8 @@ function CoursesPortalView({ onBack }) {
               </button>
             </div>
           ) : paidFor || isFree ? (
-            <div className="bg-white rounded-2xl border border-slate-200 p-5" onContextMenu={(e) => e.preventDefault()}>
-              {activeCourse.contentType === "video" &&
-                (embed ? (
-                  <div className="aspect-video">
-                    <iframe src={embed} className="w-full h-full rounded-lg" allowFullScreen title={activeCourse.title} />
-                  </div>
-                ) : (
-                  <div className="text-sm text-slate-500">Video not available right now — please contact the academy.</div>
-                ))}
-              {activeCourse.contentType === "text" && (
-                <div className="text-sm text-slate-600 whitespace-pre-wrap select-none">{activeCourse.contentText}</div>
-              )}
-              {activeCourse.contentType === "link" && (
-                <a href={activeCourse.contentUrl} target="_blank" rel="noreferrer" className="text-sm text-blue-900 hover:underline">
-                  Open resource ↗
-                </a>
-              )}
-              {activeCourse.contentType === "file" && (
-                <>
-                  {(activeCourse.contentFileName || "").toLowerCase().endsWith(".pdf") ? (
-                    <iframe src={activeCourse.contentUrl} className="w-full h-[70vh] rounded-lg border border-slate-100" title={activeCourse.title} />
-                  ) : (
-                    <div className="text-sm text-slate-500">
-                      This lesson's file ({activeCourse.contentFileName}) can only be opened directly —{" "}
-                      <a href={activeCourse.contentUrl} target="_blank" rel="noreferrer" className="text-blue-900 hover:underline">
-                        open it
-                      </a>
-                      .
-                    </div>
-                  )}
-                </>
-              )}
+            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <ModuleList modules={getCourseModules(activeCourse)} protect />
             </div>
           ) : pendingPay ? (
             <div className="bg-white rounded-2xl border border-slate-200 p-6 text-center">
@@ -13265,12 +13566,15 @@ function CoursesPortalView({ onBack }) {
               return (
                 <div key={c.id} className="bg-white rounded-2xl border border-slate-200 p-5">
                   <div className="flex items-start justify-between gap-3 flex-wrap">
-                    <div>
-                      <div className="font-semibold text-slate-800">{c.title}</div>
-                      {c.description && <div className="text-sm text-slate-500 mt-0.5">{c.description}</div>}
-                      <div className="text-sm text-slate-400 mt-1">
-                        {Number(c.price) > 0 ? `${c.price} EGP` : "Free"}
-                        {pending && <span className="text-amber-600 ml-2">· payment under review</span>}
+                    <div className="flex items-start gap-3">
+                      {c.thumbnailDataUri && <img src={c.thumbnailDataUri} alt="" className="w-14 h-14 rounded-xl object-cover shrink-0" />}
+                      <div>
+                        <div className="font-semibold text-slate-800">{c.title}</div>
+                        {c.description && <div className="text-sm text-slate-500 mt-0.5">{c.description}</div>}
+                        <div className="text-sm text-slate-400 mt-1">
+                          {Number(c.price) > 0 ? `${c.price} EGP` : "Free"}
+                          {pending && <span className="text-amber-600 ml-2">· payment under review</span>}
+                        </div>
                       </div>
                     </div>
                     <div className="shrink-0">
