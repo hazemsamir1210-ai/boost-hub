@@ -13055,6 +13055,63 @@ function CoursesPortalView({ onBack }) {
     );
   }
 
+  // Built once and reused in both possible return paths below (course
+  // detail view and browse view) — the login/signup modal needs to be
+  // reachable no matter which one is currently showing.
+  const authModal = authOpen && (
+    <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 px-4" onClick={() => setAuthOpen(false)}>
+      <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-lg font-bold text-slate-900 mb-1">{authMode === "signup" ? "Create an account" : "Log in"}</h3>
+        <p className="text-xs text-slate-400 mb-4">
+          {pendingCourse ? `To buy "${pendingCourse.title}", please ${authMode === "signup" ? "sign up" : "log in"} first.` : "Access your courses."}
+        </p>
+        <div className="space-y-3">
+          {authMode === "signup" && (
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Your name"
+              className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+            />
+          )}
+          <input
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder={authMode === "signup" ? "Email" : "Email or coach username"}
+            className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+          />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submitAuth();
+            }}
+            className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+          />
+          {authError && <div className="text-red-500 text-sm">{authError}</div>}
+          <button
+            onClick={submitAuth}
+            disabled={authSubmitting}
+            className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 disabled:opacity-60"
+          >
+            {authSubmitting ? "..." : authMode === "signup" ? "Sign up" : "Log in"}
+          </button>
+          <button
+            onClick={() => {
+              setAuthMode(authMode === "signup" ? "login" : "signup");
+              setAuthError("");
+            }}
+            className="w-full text-xs text-slate-400 hover:text-slate-600"
+          >
+            {authMode === "signup" ? "Already have an account? Log in" : "New here? Create an account"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   const activeCourse = courses.find((c) => c.id === activeCourseId);
   if (activeCourse) {
     const paidFor = myPayments.find((p) => p.courseId === activeCourse.id && p.status === "confirmed");
@@ -13163,6 +13220,7 @@ function CoursesPortalView({ onBack }) {
             </div>
           )}
         </div>
+        {authModal}
       </div>
     );
   }
@@ -13231,59 +13289,7 @@ function CoursesPortalView({ onBack }) {
         )}
       </div>
 
-      {authOpen && (
-        <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 px-4" onClick={() => setAuthOpen(false)}>
-          <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-bold text-slate-900 mb-1">{authMode === "signup" ? "Create an account" : "Log in"}</h3>
-            <p className="text-xs text-slate-400 mb-4">
-              {pendingCourse ? `To buy "${pendingCourse.title}", please ${authMode === "signup" ? "sign up" : "log in"} first.` : "Access your courses."}
-            </p>
-            <div className="space-y-3">
-              {authMode === "signup" && (
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Your name"
-                  className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
-                />
-              )}
-              <input
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder={authMode === "signup" ? "Email" : "Email or coach username"}
-                className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
-              />
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Password"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") submitAuth();
-                }}
-                className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
-              />
-              {authError && <div className="text-red-500 text-sm">{authError}</div>}
-              <button
-                onClick={submitAuth}
-                disabled={authSubmitting}
-                className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 disabled:opacity-60"
-              >
-                {authSubmitting ? "..." : authMode === "signup" ? "Sign up" : "Log in"}
-              </button>
-              <button
-                onClick={() => {
-                  setAuthMode(authMode === "signup" ? "login" : "signup");
-                  setAuthError("");
-                }}
-                className="w-full text-xs text-slate-400 hover:text-slate-600"
-              >
-                {authMode === "signup" ? "Already have an account? Log in" : "New here? Create an account"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {authModal}
     </div>
   );
 }
