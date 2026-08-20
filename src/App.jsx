@@ -12893,8 +12893,17 @@ function CoursesPortalView({ onBack }) {
     setLoading(true);
     try {
       const [items, payments] = await Promise.all([loadCollection(STORE_KEYS.courses), loadCollection(STORE_KEYS.coursePayments)]);
-      setCourses(items.sort((a, b) => (a.order || 0) - (b.order || 0)));
-      if (student) setMyPayments(payments.filter((p) => p.buyerType === "student" && p.studentId === student.id));
+      const visible = student?.isCoach
+        ? items.filter((c) => !(c.assignedCoachIds || []).length || c.assignedCoachIds.includes(student.id))
+        : items;
+      setCourses(visible.sort((a, b) => (a.order || 0) - (b.order || 0)));
+      if (student) {
+        setMyPayments(
+          payments.filter((p) =>
+            student.isCoach ? p.buyerType === "coach" && p.coachId === student.id : p.buyerType === "student" && p.studentId === student.id
+          )
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -12921,22 +12930,40 @@ function CoursesPortalView({ onBack }) {
 
   const submitAuth = async () => {
     setAuthError("");
-    if (!/^\S+@\S+\.\S+$/.test(email.trim())) return setAuthError("Enter a valid email");
+    if (authMode === "signup" && !/^\S+@\S+\.\S+$/.test(email.trim())) return setAuthError("Enter a valid email");
+    if (!email.trim()) return setAuthError("Enter your email or username");
     if (!password) return setAuthError("Enter a password");
     setAuthSubmitting(true);
     try {
-      const all = await loadCollection(STORE_KEYS.courseStudents);
       if (authMode === "signup") {
+        const all = await loadCollection(STORE_KEYS.courseStudents);
         if (!name.trim()) return setAuthError("Enter your name");
         if (all.some((s) => s.email.toLowerCase() === email.trim().toLowerCase()))
           return setAuthError("An account with that email already exists — log in instead");
         const record = { id: genId(), name: name.trim(), email: email.trim().toLowerCase(), password, createdAt: new Date().toISOString() };
-        await saveCollection(STORE_KEYS.courseStudents, [...all, record]);
-        persistStudent(record);
+        const res = await saveCollection(STORE_KEYS.courseStudents, [...all, record]);
+        if (!res) return setAuthError("Could not create your account — please try again");
+        persistStudent({ ...record, isCoach: false });
       } else {
+        // Log in checks two places: a public course-buyer account (by
+        // email), or an existing staff account with the coach role (by
+        // username) — coaches already have a login, so they never need to
+        // create a separate one just to reach this page.
+        const all = await loadCollection(STORE_KEYS.courseStudents);
         const found = all.find((s) => s.email.toLowerCase() === email.trim().toLowerCase() && s.password === password);
-        if (!found) return setAuthError("Wrong email or password");
-        persistStudent(found);
+        if (found) {
+          persistStudent({ ...found, isCoach: false });
+        } else {
+          const accounts = await loadCollection(STORE_KEYS.accounts);
+          const acct = accounts.find(
+            (a) => a.username.toLowerCase() === email.trim().toLowerCase() && a.password === password && a.role === "coach"
+          );
+          if (!acct) return setAuthError("Wrong email/username or password");
+          const coaches = await loadCollection(STORE_KEYS.coaches);
+          const coach = coaches.find((c) => c.id === acct.linkedCoachId);
+          if (!coach) return setAuthError("This coach account isn't linked properly — ask an admin to fix it");
+          persistStudent({ id: coach.id, name: coach.name, isCoach: true });
+        }
       }
       setAuthOpen(false);
       setPassword("");
@@ -12944,6 +12971,8 @@ function CoursesPortalView({ onBack }) {
         setActiveCourseId(pendingCourse.id);
         setPendingCourse(null);
       }
+    } catch (e) {
+      setAuthError(e?.message || "Something went wrong — please try again");
     } finally {
       setAuthSubmitting(false);
     }
@@ -12963,19 +12992,32 @@ function CoursesPortalView({ onBack }) {
     setPaymentSubmitting(true);
     try {
       const all = await loadCollection(STORE_KEYS.coursePayments);
-      const record = {
-        id: genId(),
-        buyerType: "student",
-        studentId: student.id,
-        studentName: student.name,
-        studentEmail: student.email,
-        courseId: course.id,
-        courseTitle: course.title,
-        price: course.price,
-        screenshotDataUri: paymentScreenshot,
-        status: "pending",
-        createdAt: new Date().toISOString(),
-      };
+      const record = student.isCoach
+        ? {
+            id: genId(),
+            buyerType: "coach",
+            coachId: student.id,
+            coachName: student.name,
+            courseId: course.id,
+            courseTitle: course.title,
+            price: course.price,
+            screenshotDataUri: paymentScreenshot,
+            status: "pending",
+            createdAt: new Date().toISOString(),
+          }
+        : {
+            id: genId(),
+            buyerType: "student",
+            studentId: student.id,
+            studentName: student.name,
+            studentEmail: student.email,
+            courseId: course.id,
+            courseTitle: course.title,
+            price: course.price,
+            screenshotDataUri: paymentScreenshot,
+            status: "pending",
+            createdAt: new Date().toISOString(),
+          };
       await saveCollection(STORE_KEYS.coursePayments, [...all, record]);
       setMyPayments([...myPayments, record]);
       setPayingCourseId(null);
@@ -12997,7 +13039,11 @@ function CoursesPortalView({ onBack }) {
   useEffect(() => {
     if (!student) return;
     loadCollection(STORE_KEYS.coursePayments).then((payments) => {
-      setMyPayments(payments.filter((p) => p.buyerType === "student" && p.studentId === student.id));
+      setMyPayments(
+        payments.filter((p) =>
+          student.isCoach ? p.buyerType === "coach" && p.coachId === student.id : p.buyerType === "student" && p.studentId === student.id
+        )
+      );
     });
   }, [student]);
 
@@ -13204,7 +13250,7 @@ function CoursesPortalView({ onBack }) {
               <input
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="Email"
+                placeholder={authMode === "signup" ? "Email" : "Email or coach username"}
                 className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
               />
               <input
