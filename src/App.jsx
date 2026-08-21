@@ -5988,12 +5988,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       bucket[key].count += 1;
       if (level) bucket[key].levels.add(level);
     };
-    swimmers.forEach((s) => {
-      addBooking(s.coachId, s.day, s.time, s.sessionType, s.level);
-      // A swimmer with a second weekly session (different coach or slot)
-      // shows up under that booking too — same swimmer, two commitments.
-      if (s.day2 && s.time2) addBooking(s.coachId2, s.day2, s.time2, s.sessionType2, s.level);
-    });
+    // Only swimmers actually scheduled for the month currently being
+    // viewed — otherwise a swimmer booked for next month would still show
+    // up (and count against capacity) on this month's grid, and vice
+    // versa. A swimmer saved before scheduleMonth existed is treated as
+    // "this month", the only option there used to be.
+    swimmers
+      .filter((s) => (s.scheduleMonth || monthKey()) === scheduleMonth)
+      .forEach((s) => {
+        addBooking(s.coachId, s.day, s.time, s.sessionType, s.level);
+        // A swimmer with a second weekly session (different coach or slot)
+        // shows up under that booking too — same swimmer, two commitments.
+        if (s.day2 && s.time2) addBooking(s.coachId2, s.day2, s.time2, s.sessionType2, s.level);
+      });
     const bookingsById = {};
     Object.keys(bookingsMapById).forEach((coachId) => {
       bookingsById[coachId] = Object.values(bookingsMapById[coachId])
@@ -6005,7 +6012,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         );
     });
     return { coachLoadById: loadById, coachBookingsById: bookingsById };
-  }, [swimmers]);
+  }, [swimmers, scheduleMonth]);
 
   if (checkingSession) {
     return (
