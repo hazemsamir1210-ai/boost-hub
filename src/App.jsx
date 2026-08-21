@@ -1436,6 +1436,29 @@ function unfreezeSwimmer(swimmer) {
    their day/time slot is released (so it doesn't sit blocked forever) —
    name, phone and level are kept, only the schedule is cleared.
    A frozen swimmer is exempt — their spot stays reserved while frozen. */
+// Once the real calendar reaches whatever month a swimmer's nextSchedule
+// was pre-booked for, that becomes their live schedule — this runs
+// alongside clearedIfUnpaid, once per calendar month, so an advance
+// booking made while last month was still running switches over
+// automatically without anyone having to remember to do it by hand.
+function promotedIfDue(swimmer, currentMonthKey) {
+  if (!swimmer.nextSchedule || swimmer.nextSchedule.scheduleMonth !== currentMonthKey) return swimmer;
+  const { day, time, sessionType, coachId, day2, time2, sessionType2, coachId2 } = swimmer.nextSchedule;
+  return {
+    ...swimmer,
+    day: day || "",
+    time: time || "",
+    sessionType: sessionType || "group",
+    coachId: coachId || null,
+    day2: day2 || "",
+    time2: time2 || "",
+    sessionType2: sessionType2 || "",
+    coachId2: coachId2 || null,
+    scheduleMonth: currentMonthKey,
+    nextSchedule: null,
+  };
+}
+
 function clearedIfUnpaid(swimmer) {
   if (isPaidThisMonth(swimmer)) return swimmer;
   if (isFrozen(swimmer)) return swimmer;
@@ -2830,6 +2853,17 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
       setTime2(initial?.time2 || "");
       setCoachId2(initial?.coachId2 || "");
       setHasSecondSlot(!!(initial?.day2 && initial?.time2));
+    } else if (initial?.nextSchedule && initial.nextSchedule.scheduleMonth === newMonth) {
+      // Already has an advance booking for this month — load it back in
+      // so it can be reviewed or changed, instead of showing blank.
+      const ns = initial.nextSchedule;
+      setDay(ns.day || "");
+      setTime(ns.time || "");
+      setCoachId(ns.coachId || "");
+      setDay2(ns.day2 || "");
+      setTime2(ns.time2 || "");
+      setCoachId2(ns.coachId2 || "");
+      setHasSecondSlot(!!(ns.day2 && ns.time2));
     } else {
       setDay("");
       setTime("");
@@ -2890,30 +2924,32 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
       return;
     }
     let cancelled = false;
+    // Fetches every swimmer (not filtered by coach in the query) because a
+    // competing swimmer might hold this exact slot as an advance booking
+    // in nextSchedule under a DIFFERENT coach than their current one —
+    // matching both current and pending schedules happens in JS below.
     supabase
       .from("swimmers")
       .select("data")
       .eq("academy_id", window.__academy?.id)
-      .filter("data->>coachId", "eq", coachId)
-      .filter("data->>day", "eq", day)
-      .filter("data->>time", "eq", time)
       .then(({ data, error }) => {
         if (cancelled) return;
         if (error) {
           setSlotUsage([]);
           return;
         }
-        // Only count swimmers actually registered for the SAME month
-        // we're scheduling into — day/time alone is shared across every
-        // month a swimmer has ever used it, so without this a September
-        // pick would look "full" just because August's roster is still
-        // sitting on that same day/time. A record saved before this field
-        // existed is treated as "this month" (the only month there was).
-        setSlotUsage(
-          (data || [])
-            .map((r) => r.data)
-            .filter((s) => s.id !== initial?.id && (s.scheduleMonth || monthKey()) === scheduleMonth)
-        );
+        const all = (data || []).map((r) => r.data).filter((s) => s.id !== initial?.id);
+        // Only count swimmers actually competing for the SAME month we're
+        // scheduling into — checked against their live schedule if that's
+        // the month in question, or their pending nextSchedule if it's the
+        // month ahead. A record saved before scheduleMonth existed is
+        // treated as "this month" (the only month there used to be).
+        const matches = all.filter((s) => {
+          if (s.coachId === coachId && s.day === day && s.time === time && (s.scheduleMonth || monthKey()) === scheduleMonth) return true;
+          if (s.nextSchedule && s.nextSchedule.coachId === coachId && s.nextSchedule.day === day && s.nextSchedule.time === time && s.nextSchedule.scheduleMonth === scheduleMonth) return true;
+          return false;
+        });
+        setSlotUsage(matches);
       });
     return () => {
       cancelled = true;
@@ -2943,50 +2979,85 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
       }
     }
 
+    const isCurrentMonthBooking = scheduleMonth === (initial?.scheduleMonth || monthKey()) || scheduleMonth === monthKey();
+
     // Safety net: if this save is actually changing an existing day/time
     // (not just setting one for the first time), keep a record of what it
-    // used to be under its old scheduleMonth — so accidentally overwriting
-    // the wrong month's slot (e.g. meaning to book next month but leaving
-    // this on "current") never permanently loses the old schedule. Only
-    // acts when day/time genuinely changed, so normal saves that leave the
-    // schedule alone don't pile up duplicate history entries.
-    const oldScheduleHistory = initial && (initial.day !== day || initial.time !== time) && initial.day && initial.time
-      ? [
-          ...(initial.scheduleHistory || []),
-          { day: initial.day, time: initial.time, date: `${initial.scheduleMonth || monthKey()}-01` },
-        ]
-      : initial?.scheduleHistory || [];
+    // used to be — so accidentally overwriting a slot never permanently
+    // loses the old schedule. Only acts when day/time genuinely changed,
+    // so normal saves that leave the schedule alone don't pile up
+    // duplicate history entries. Only relevant when this save is actually
+    // touching the live schedule — booking a future month doesn't touch
+    // it at all, so there's nothing to protect there.
+    const oldScheduleHistory =
+      isCurrentMonthBooking && initial && (initial.day !== day || initial.time !== time) && initial.day && initial.time
+        ? [
+            ...(initial.scheduleHistory || []),
+            { day: initial.day, time: initial.time, date: `${initial.scheduleMonth || monthKey()}-01` },
+          ]
+        : initial?.scheduleHistory || [];
 
-    const record = {
-      // Preserve every field this form doesn't manage (skills ratings,
-      // session notes, manual payment log, freeze status, etc.) — only
-      // the fields listed below are ever changed by this form.
-      ...(initial || {}),
-      id: recordIdRef.current,
-      name: name.trim(),
-      age: Number(age),
-      phone: phone.trim(),
-      altPhone: altPhone.trim(),
-      branch,
-      level,
-      day,
-      time,
-      scheduleMonth,
-      scheduleHistory: oldScheduleHistory,
-      sessionType,
-      coachId: coachId || null,
-      day2: hasSecondSlot ? day2 : "",
-      time2: hasSecondSlot ? time2 : "",
-      sessionType2: hasSecondSlot ? sessionType2 : "",
-      coachId2: hasSecondSlot ? coachId2 || null : null,
-      notes: notes.trim(),
-      paidMonths: initial?.paidMonths || [],
-      levelHistory: initial?.levelHistory || [],
-      trainingDates: initial?.trainingDates || [],
-      attendance: initial?.attendance || {},
-      parentPin: parentPin,
-      createdAt: initial?.createdAt || new Date().toISOString(),
-    };
+    // Booking a future month never touches today's live schedule at all —
+    // it's saved separately in nextSchedule, and only becomes the live
+    // schedule automatically once the calendar actually reaches that
+    // month (see promotedIfDue). Booking the current month works exactly
+    // as it always has, updating the live fields directly.
+    const record = isCurrentMonthBooking
+      ? {
+          // Preserve every field this form doesn't manage (skills ratings,
+          // session notes, manual payment log, freeze status, etc.) — only
+          // the fields listed below are ever changed by this form.
+          ...(initial || {}),
+          id: recordIdRef.current,
+          name: name.trim(),
+          age: Number(age),
+          phone: phone.trim(),
+          altPhone: altPhone.trim(),
+          branch,
+          level,
+          day,
+          time,
+          scheduleMonth,
+          scheduleHistory: oldScheduleHistory,
+          sessionType,
+          coachId: coachId || null,
+          day2: hasSecondSlot ? day2 : "",
+          time2: hasSecondSlot ? time2 : "",
+          sessionType2: hasSecondSlot ? sessionType2 : "",
+          coachId2: hasSecondSlot ? coachId2 || null : null,
+          notes: notes.trim(),
+          paidMonths: initial?.paidMonths || [],
+          levelHistory: initial?.levelHistory || [],
+          trainingDates: initial?.trainingDates || [],
+          attendance: initial?.attendance || {},
+          parentPin: parentPin,
+          createdAt: initial?.createdAt || new Date().toISOString(),
+        }
+      : {
+          ...(initial || {}),
+          id: recordIdRef.current,
+          name: name.trim(),
+          age: Number(age),
+          phone: phone.trim(),
+          altPhone: altPhone.trim(),
+          branch,
+          level,
+          notes: notes.trim(),
+          parentPin: parentPin,
+          createdAt: initial?.createdAt || new Date().toISOString(),
+          // The live schedule stays exactly as it already was.
+          nextSchedule: {
+            day,
+            time,
+            sessionType,
+            coachId: coachId || null,
+            day2: hasSecondSlot ? day2 : "",
+            time2: hasSecondSlot ? time2 : "",
+            sessionType2: hasSecondSlot ? sessionType2 : "",
+            coachId2: hasSecondSlot ? coachId2 || null : null,
+            scheduleMonth,
+          },
+        };
 
     setSaving(true);
     try {
@@ -4681,13 +4752,27 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       // A swimmer's main slot AND their second weekly slot (if it also
       // falls on this day/time) each count as their own entry here, so a
       // swimmer with two sessions this day shows up under both coaches.
+      // Only swimmers actually scheduled for the month being exported —
+      // either their live schedule (if tagged for this month) or a
+      // pending nextSchedule pre-booked for it.
       const inSession = [];
       all.forEach((s) => {
-        if (s.day === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time === scheduleTimeFilter)) {
-          inSession.push({ swimmer: s, time: s.time, coachId: s.coachId, sessionType: s.sessionType });
+        if ((s.scheduleMonth || monthKey()) === scheduleMonth) {
+          if (s.day === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time === scheduleTimeFilter)) {
+            inSession.push({ swimmer: s, time: s.time, coachId: s.coachId, sessionType: s.sessionType });
+          }
+          if (s.day2 === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time2 === scheduleTimeFilter)) {
+            inSession.push({ swimmer: s, time: s.time2, coachId: s.coachId2, sessionType: s.sessionType2 });
+          }
         }
-        if (s.day2 === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time2 === scheduleTimeFilter)) {
-          inSession.push({ swimmer: s, time: s.time2, coachId: s.coachId2, sessionType: s.sessionType2 });
+        if (s.nextSchedule && s.nextSchedule.scheduleMonth === scheduleMonth) {
+          const ns = s.nextSchedule;
+          if (ns.day === scheduleDayFilter && (scheduleTimeFilter === "all" || ns.time === scheduleTimeFilter)) {
+            inSession.push({ swimmer: s, time: ns.time, coachId: ns.coachId, sessionType: ns.sessionType });
+          }
+          if (ns.day2 === scheduleDayFilter && (scheduleTimeFilter === "all" || ns.time2 === scheduleTimeFilter)) {
+            inSession.push({ swimmer: s, time: ns.time2, coachId: ns.coachId2, sessionType: ns.sessionType2 });
+          }
         }
       });
       const byCoach = {};
@@ -4988,7 +5073,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       if (resetCheckedForMonthRef.current !== key) {
         const lastReset = await getLastScheduleResetMonth();
         if (lastReset !== key) {
-          const reset = items.map(clearedIfUnpaid);
+          const reset = items.map((s) => clearedIfUnpaid(promotedIfDue(s, key)));
           if (reset.some((s, i) => s !== items[i])) {
             try {
               await saveCollection(STORE_KEYS.swimmers, reset);
@@ -5989,18 +6074,25 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       if (level) bucket[key].levels.add(level);
     };
     // Only swimmers actually scheduled for the month currently being
-    // viewed — otherwise a swimmer booked for next month would still show
-    // up (and count against capacity) on this month's grid, and vice
-    // versa. A swimmer saved before scheduleMonth existed is treated as
-    // "this month", the only option there used to be.
-    swimmers
-      .filter((s) => (s.scheduleMonth || monthKey()) === scheduleMonth)
-      .forEach((s) => {
+    // viewed — either their live schedule (if it's already tagged for
+    // this month) or a pending nextSchedule pre-booked for it — so a
+    // swimmer booked for next month doesn't show up (or count against
+    // capacity) on this month's grid, and vice versa. A swimmer saved
+    // before scheduleMonth existed is treated as "this month".
+    swimmers.forEach((s) => {
+      if ((s.scheduleMonth || monthKey()) === scheduleMonth) {
         addBooking(s.coachId, s.day, s.time, s.sessionType, s.level);
         // A swimmer with a second weekly session (different coach or slot)
         // shows up under that booking too — same swimmer, two commitments.
         if (s.day2 && s.time2) addBooking(s.coachId2, s.day2, s.time2, s.sessionType2, s.level);
-      });
+      }
+      if (s.nextSchedule && s.nextSchedule.scheduleMonth === scheduleMonth) {
+        addBooking(s.nextSchedule.coachId, s.nextSchedule.day, s.nextSchedule.time, s.nextSchedule.sessionType, s.level);
+        if (s.nextSchedule.day2 && s.nextSchedule.time2) {
+          addBooking(s.nextSchedule.coachId2, s.nextSchedule.day2, s.nextSchedule.time2, s.nextSchedule.sessionType2, s.level);
+        }
+      }
+    });
     const bookingsById = {};
     Object.keys(bookingsMapById).forEach((coachId) => {
       bookingsById[coachId] = Object.values(bookingsMapById[coachId])
