@@ -130,6 +130,74 @@ async function saveAcademySettings({ name, logoDataUri, instapayHandle, instapay
   window.__academy = { ...window.__academy, name, logoDataUri, instapayHandle, instapayPhone };
 }
 
+/* ============================================================
+   Real Supabase Auth for staff — this is the migration path off
+   the old shared/plaintext-password logins. Every staff member
+   keeps working through their existing username/password until
+   they set up a real email login (self-serve, from the staff
+   login screen); once they do, their "account" record (role,
+   permissions — still the source of truth for those) is linked
+   to their real Auth user via authUserId, and future logins go
+   through supabase.auth instead of comparing a stored password.
+   ============================================================ */
+
+// Checks that a signed-in Supabase Auth user is actually linked to the
+// academy this link belongs to (or is a super admin, who can access any
+// academy). Shared by every real-auth login screen in the app (admin,
+// staff, and the "already signed in" auto-check on mount).
+async function verifyProfileForThisAcademy(userId) {
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("academy_id, is_super_admin")
+    .eq("id", userId)
+    .maybeSingle();
+  if (profileError || !profile) return false;
+  if (!profile.is_super_admin && profile.academy_id !== window.__academy?.id) return false;
+  return true;
+}
+
+// Runs once right after a staff member's first successful real-auth
+// sign-in (whether that's moments after they just set up their email
+// login, or a normal sign-in on a later day): makes sure they have a
+// "profiles" row for this academy, and — if a matching legacy account
+// username was supplied — links that account record to this real Auth
+// user (authUserId) so future logins resolve their role/permissions
+// through the real session instead of the old stored password. Safe to
+// call every time; it's a no-op once both are already in place.
+async function ensureStaffProfileAndLink(user, matchingAccountUsername) {
+  let { data: profile } = await supabase
+    .from("profiles")
+    .select("academy_id, is_super_admin")
+    .eq("id", user.id)
+    .maybeSingle();
+  if (!profile) {
+    const { error } = await supabase
+      .from("profiles")
+      .insert({ id: user.id, academy_id: window.__academy.id, is_super_admin: false });
+    if (error) throw error;
+    profile = { academy_id: window.__academy.id, is_super_admin: false };
+  }
+  if (matchingAccountUsername) {
+    const accounts = await loadCollection(STORE_KEYS.accounts);
+    const idx = accounts.findIndex((a) => a.username.toLowerCase() === matchingAccountUsername.toLowerCase());
+    if (idx !== -1 && accounts[idx].authUserId !== user.id) {
+      const next = [...accounts];
+      next[idx] = { ...next[idx], authUserId: user.id, email: user.email };
+      await saveCollection(STORE_KEYS.accounts, next);
+    }
+  }
+  return profile;
+}
+
+// After a real-auth staff sign-in, finds the matching staff account
+// record (role, permissions, linked coach, restrictions) by authUserId —
+// this is what lets the rest of the app keep working exactly as it does
+// today (routing by account.role) once someone's on the new login.
+async function findAccountByAuthUserId(userId) {
+  const accounts = await loadCollection(STORE_KEYS.accounts);
+  return accounts.find((a) => a.authUserId === userId) || null;
+}
+
 window.storage = {
   async get(key) {
     if (!window.__academy) return null;
@@ -186,7 +254,7 @@ const CONFIG = {
   ],
 };
 
-const PLANS = [
+let PLANS = [
   { id: "baby", name: "Baby", price: 3500, desc: "Monthly baby class subscription.", photo: "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%22200%22%20height%3D%22200%22%3E%3Crect%20width%3D%22200%22%20height%3D%22200%22%20fill%3D%22%230369a1%22/%3E%3Ctext%20x%3D%22100%22%20y%3D%22115%22%20font-family%3D%22sans-serif%22%20font-size%3D%2260%22%20text-anchor%3D%22middle%22%3E%F0%9F%91%B6%3C/text%3E%3C/svg%3E" },
   { id: "group", name: "Group", price: 1600, desc: "Monthly group subscription." },
   { id: "exp", name: "Exp", price: 2000, desc: "Monthly experience subscription." },
@@ -195,7 +263,42 @@ const PLANS = [
 ];
 
 /* Swimmer levels — Baby gets a 30-minute schedule automatically */
-const PLAN_PRICES = Object.fromEntries(PLANS.map((p) => [p.id, Number(p.price) || 0]));
+let PLAN_PRICES = Object.fromEntries(PLANS.map((p) => [p.id, Number(p.price) || 0]));
+
+const PLANS_KEY = "plans-custom";
+const DEFAULT_PLANS = JSON.parse(JSON.stringify(PLANS)); // frozen snapshot of the built-in defaults, for the "Reset to default" option
+
+async function loadCustomPlanPrices() {
+  const res = await window.storage.get(PLANS_KEY);
+  if (!res) return {};
+  try {
+    return JSON.parse(res.value);
+  } catch {
+    return {};
+  }
+}
+
+async function saveCustomPlanPrices(overrides) {
+  return storageSet(PLANS_KEY, JSON.stringify(overrides));
+}
+
+// Applies saved name/price overrides (keyed by plan id) on top of the
+// built-in defaults — mutating the shared PLANS array binding (and its
+// derived PLAN_PRICES lookup) so every part of the app that already
+// reads PLANS/PLAN_PRICES sees the change immediately, without needing
+// to touch every place that calls PLANS.find(...).
+function applyCustomPlanPrices(overrides) {
+  PLANS = DEFAULT_PLANS.map((defaultPlan) => {
+    const o = overrides[defaultPlan.id];
+    if (!o) return { ...defaultPlan };
+    return {
+      ...defaultPlan,
+      ...(o.name ? { name: o.name } : {}),
+      ...(o.price != null && o.price !== "" ? { price: Number(o.price) || defaultPlan.price } : {}),
+    };
+  });
+  PLAN_PRICES = Object.fromEntries(PLANS.map((p) => [p.id, Number(p.price) || 0]));
+}
 
 function inferPlanId(swimmer) {
   if (swimmer?.planId && PLAN_PRICES[swimmer.planId] != null) return swimmer.planId;
@@ -1390,6 +1493,32 @@ function getAccountPermissions(account, role) {
     if (typeof overrides[key] === "boolean") base[key] = overrides[key];
   }
   return base;
+}
+
+// Builds a readable summary of what actually changed on a staff account —
+// role and/or individual permissions — so the Activity Log shows exactly
+// what was granted or revoked, not just "Edited account".
+function describeAccountChange(oldAccount, newAccount) {
+  if (!oldAccount) {
+    const role = newAccount.role || "—";
+    const perms = getAccountPermissions(newAccount, newAccount.role);
+    const granted = PERMISSION_DEFS.filter(([k]) => perms[k]).map(([, label]) => label);
+    return `role: ${role}${granted.length ? ` (${granted.join(", ")})` : ""}`;
+  }
+  const parts = [];
+  if (oldAccount.role !== newAccount.role) {
+    parts.push(`role: ${oldAccount.role || "—"} → ${newAccount.role || "—"}`);
+  }
+  if (oldAccount.name !== newAccount.name) {
+    parts.push(`name: ${oldAccount.name || "—"} → ${newAccount.name || "—"}`);
+  }
+  const oldPerms = getAccountPermissions(oldAccount, oldAccount.role);
+  const newPerms = getAccountPermissions(newAccount, newAccount.role);
+  const added = PERMISSION_DEFS.filter(([k]) => newPerms[k] && !oldPerms[k]).map(([, label]) => label);
+  const removed = PERMISSION_DEFS.filter(([k]) => !newPerms[k] && oldPerms[k]).map(([, label]) => label);
+  if (added.length) parts.push(`+${added.join(", +")}`);
+  if (removed.length) parts.push(`-${removed.join(", -")}`);
+  return parts.length ? parts.join("; ") : "no changes";
 }
 
 function levelBelongsToProgram(level, program) {
@@ -3500,20 +3629,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
 
-  // Checks that a signed-in Supabase Auth user is actually linked to the
-  // academy this link belongs to (or is a super admin, who can access
-  // any academy) — shared by both the explicit login form below and the
-  // automatic "already signed in" check on mount.
-  const verifyProfileForThisAcademy = async (userId) => {
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("academy_id, is_super_admin")
-      .eq("id", userId)
-      .maybeSingle();
-    if (profileError || !profile) return false;
-    if (!profile.is_super_admin && profile.academy_id !== window.__academy?.id) return false;
-    return true;
-  };
+  // verifyProfileForThisAcademy is a module-level function (shared with
+  // the staff login screens) — no local copy needed here anymore.
 
   // If the person already signed in moments ago at the general login
   // gateway, they land here with a live session — skip asking for the
@@ -3604,6 +3721,87 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [skillsRefreshKey, setSkillsRefreshKey] = useState(0); // bumped after saving, to force re-render of anything reading LEVEL_SKILLS
   const [newSkillText, setNewSkillText] = useState({}); // level -> draft text for the "add skill" input
   const [skillsSaving, setSkillsSaving] = useState(false);
+
+  const [customPlanPrices, setCustomPlanPrices] = useState({}); // planId -> { name?, price? } override
+  const [plansRefreshKey, setPlansRefreshKey] = useState(0); // bumped after saving, to force re-render of anything reading PLANS
+  const [planDrafts, setPlanDrafts] = useState({}); // planId -> { name, price } draft while editing
+  const [plansSaving, setPlansSaving] = useState(false);
+  const [plansError, setPlansError] = useState("");
+  const [plansSaved, setPlansSaved] = useState(false);
+
+  useEffect(() => {
+    if (tab === "plans") {
+      loadCustomPlanPrices().then((custom) => {
+        setCustomPlanPrices(custom);
+        applyCustomPlanPrices(custom);
+        setPlansRefreshKey((k) => k + 1);
+      });
+    }
+  }, [tab]);
+
+  // Load once as soon as the dashboard opens (not just when visiting the
+  // Plans tab), so any custom pricing is reflected right away in payment
+  // amounts, receipts, and reports elsewhere in the app.
+  useEffect(() => {
+    if (!authed) return;
+    loadCustomPlanPrices().then((custom) => {
+      setCustomPlanPrices(custom);
+      applyCustomPlanPrices(custom);
+      setPlansRefreshKey((k) => k + 1);
+    });
+  }, [authed]);
+
+  // Seed the editable drafts from the current overrides (or the built-in
+  // defaults where there's no override) whenever they change.
+  useEffect(() => {
+    const seeded = {};
+    DEFAULT_PLANS.forEach((p) => {
+      const o = customPlanPrices[p.id] || {};
+      seeded[p.id] = { name: o.name || p.name, price: o.price != null ? String(o.price) : String(p.price) };
+    });
+    setPlanDrafts(seeded);
+  }, [customPlanPrices]);
+
+  const savePlanPrices = async () => {
+    setPlansError("");
+    setPlansSaved(false);
+    if (!canManagePlans) return setPlansError("You do not have permission to manage plans");
+    setPlansSaving(true);
+    try {
+      const overrides = {};
+      DEFAULT_PLANS.forEach((p) => {
+        const draft = planDrafts[p.id] || {};
+        const trimmedName = (draft.name || "").trim();
+        const priceNum = Number(draft.price);
+        const nameChanged = trimmedName && trimmedName !== p.name;
+        const priceChanged = draft.price !== "" && !isNaN(priceNum) && priceNum >= 0 && priceNum !== p.price;
+        if (nameChanged || priceChanged) {
+          overrides[p.id] = {
+            ...(nameChanged ? { name: trimmedName } : {}),
+            ...(priceChanged ? { price: priceNum } : {}),
+          };
+        }
+      });
+      const res = await saveCustomPlanPrices(overrides);
+      if (!res) throw new Error("Could not save, please try again");
+      setCustomPlanPrices(overrides);
+      applyCustomPlanPrices(overrides);
+      setPlansRefreshKey((k) => k + 1);
+      logActivity(accountName, role, "Updated plan prices", Object.keys(overrides).length ? Object.keys(overrides).join(", ") : "reset to defaults");
+      setPlansSaved(true);
+      setTimeout(() => setPlansSaved(false), 2000);
+    } catch (e) {
+      setPlansError(e?.message || "Could not save, please try again");
+    } finally {
+      setPlansSaving(false);
+    }
+  };
+
+  const resetPlanDraft = (planId) => {
+    const def = DEFAULT_PLANS.find((p) => p.id === planId);
+    if (!def) return;
+    setPlanDrafts((prev) => ({ ...prev, [planId]: { name: def.name, price: String(def.price) } }));
+  };
 
   useEffect(() => {
     if (tab === "skills") {
@@ -4690,6 +4888,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const canManageDiscounts = can("manageDiscounts") || canEdit;
   const canViewPayments = can("viewPayments") || canRecordPayments;
   const canViewFinancialReports = can("viewFinancialReports") || canEdit;
+  const canManageRefunds = can("refundPayments") || canEdit;
+  const canManagePlans = can("managePlans") || canEdit;
   const canEditStaffAttendance = can("editStaffAttendance") || canEdit;
   const canViewStaffAttendance = can("viewStaffAttendance") || canEditStaffAttendance;
 
@@ -5052,6 +5252,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   // recording a cash payment (marks paid + logs it as revenue)
   const [cashModal, setCashModal] = useState(null); // swimmer, or null
+  const [refundModal, setRefundModal] = useState(null); // invoice/request record, or null
+  const [refundAmount, setRefundAmount] = useState("");
+  const [refundReason, setRefundReason] = useState("");
+  const [refundError, setRefundError] = useState("");
+  const [refundSaving, setRefundSaving] = useState(false);
   const [makeupModal, setMakeupModal] = useState(null); // swimmer, or null
   const [makeupDate, setMakeupDate] = useState("");
   const [makeupTime, setMakeupTime] = useState("");
@@ -5466,36 +5671,105 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
   };
 
-  // Removes a confirmed payment made by mistake — deletes it from the
-  // requests list (so it disappears from Reports and revenue right away)
-  // and, if it's known which month it paid for, un-marks that month on
-  // the swimmer too, so their "paid" status reverts along with it.
-  const deleteInvoice = (invoice) => {
-    setConfirmAction({
-      message: `Delete this ${invoice.price} EGP invoice for ${invoice.name}? This can't be undone, and will un-mark them as paid for that month if applicable.`,
-      onConfirm: async () => {
-        try {
-          const nextRequests = requests.filter((r) => r.id !== invoice.id);
-          const res = await saveCollection(STORE_KEYS.subs, nextRequests);
-          if (!res) throw new Error("delete failed");
-          setRequests(nextRequests);
+  // Opens the refund modal for a confirmed payment, seeded with whatever's
+  // still refundable (a payment already partially refunded can only be
+  // refunded further up to what's left of it).
+  const openRefundModal = (invoice) => {
+    const alreadyRefunded = Number(invoice.refundedAmount) || 0;
+    const maxRefundable = Math.max(0, (Number(invoice.price) || 0) - alreadyRefunded);
+    setRefundModal(invoice);
+    setRefundAmount(String(maxRefundable));
+    setRefundReason("");
+    setRefundError("");
+  };
 
-          const monthToUnmark = invoice.paidMonth || (invoice.confirmedAt || invoice.createdAt || "").slice(0, 7);
-          if (monthToUnmark) {
-            const all = await fetchAllSwimmers();
-            const matches = invoice.swimmerId ? all.filter((s) => s.id === invoice.swimmerId) : all.filter((s) => s.phone === invoice.phone);
-            const next = all.map((s) =>
-              matches.some((m) => m.id === s.id) ? { ...s, paidMonths: (s.paidMonths || []).filter((m) => m !== monthToUnmark) } : s
-            );
-            await saveCollection(STORE_KEYS.swimmers, next);
-            loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
-          }
-          logActivity(accountName, role, "Deleted invoice", `${invoice.name} — ${invoice.price} EGP`);
-        } catch (e) {
-          loadRequests();
-        }
-      },
-    });
+  // Refunds/voids all or part of a confirmed payment. A full refund (or a
+  // partial one that reaches the full amount across multiple refunds)
+  // marks the record "refunded" — kept, not deleted, so it stays visible
+  // in Reports/Payment requests for the audit trail, and excluded from
+  // revenue. A partial refund keeps the record "confirmed" but reduces
+  // its net amount and logs the refund in its history. Either way, the
+  // swimmer's payment ledger and that month's paid amount/balance/paid
+  // status are recomputed from what's actually left — leaving stale
+  // ledger data behind would wrongly count toward "already paid" the
+  // next time a payment is recorded for that swimmer/month.
+  const submitRefund = async () => {
+    setRefundError("");
+    if (!canManageRefunds) return setRefundError("You do not have permission to refund payments");
+    const invoice = refundModal;
+    const alreadyRefunded = Number(invoice.refundedAmount) || 0;
+    const maxRefundable = Math.max(0, (Number(invoice.price) || 0) - alreadyRefunded);
+    const amount = Number(refundAmount);
+    if (!amount || amount <= 0) return setRefundError("Enter a valid amount");
+    if (amount > maxRefundable) return setRefundError(`Maximum refundable is ${maxRefundable} EGP`);
+    setRefundSaving(true);
+    try {
+      const newRefundedAmount = alreadyRefunded + amount;
+      const isFullRefund = newRefundedAmount >= (Number(invoice.price) || 0);
+      const refundEntry = { amount, reason: refundReason.trim(), at: new Date().toISOString(), by: accountName };
+      const nextRequests = requests.map((r) =>
+        r.id === invoice.id
+          ? {
+              ...r,
+              refundedAmount: newRefundedAmount,
+              refundHistory: [...(r.refundHistory || []), refundEntry],
+              status: isFullRefund ? "refunded" : "confirmed",
+              ...(isFullRefund ? { refundedAt: new Date().toISOString(), refundedBy: accountName } : {}),
+            }
+          : r
+      );
+      const res = await saveCollection(STORE_KEYS.subs, nextRequests);
+      if (!res) throw new Error("Could not save the refund, please try again");
+      setRequests(nextRequests);
+
+      const monthToUnmark = invoice.paidMonth || (invoice.confirmedAt || invoice.createdAt || "").slice(0, 7);
+      if (monthToUnmark) {
+        const all = await fetchAllSwimmers();
+        const matches = invoice.swimmerId ? all.filter((s) => s.id === invoice.swimmerId) : all.filter((s) => s.phone === invoice.phone);
+        const next = all.map((s) => {
+          if (!matches.some((m) => m.id === s.id)) return s;
+          const nextLedger = isFullRefund
+            ? (s.paymentLedger || []).filter((p) => p.id !== invoice.id)
+            : (s.paymentLedger || []).map((p) =>
+                p.id === invoice.id ? { ...p, price: Math.max(0, (Number(invoice.price) || 0) - newRefundedAmount) } : p
+              );
+          const paidAmount = nextLedger
+            .filter((p) => p.paidMonth === monthToUnmark || p.month === monthToUnmark)
+            .reduce((sum, p) => sum + (Number(p.price ?? p.amount) || 0), 0);
+          const existingBilling = s.billingByMonth?.[monthToUnmark];
+          const finalAmount = existingBilling ? Number(existingBilling.finalAmount) || 0 : Number(invoice.finalAmount) || Number(invoice.price) || 0;
+          const balance = Math.max(0, finalAmount - paidAmount);
+          const billing = {
+            ...(existingBilling || {}),
+            month: monthToUnmark,
+            paidAmount,
+            balance,
+            status: balance === 0 && finalAmount > 0 ? "paid" : paidAmount > 0 ? "partial" : "unpaid",
+          };
+          return {
+            ...s,
+            paidMonths: balance === 0 && finalAmount > 0 ? s.paidMonths : (s.paidMonths || []).filter((m) => m !== monthToUnmark),
+            paymentLedger: nextLedger,
+            billingByMonth: { ...(s.billingByMonth || {}), [monthToUnmark]: billing },
+          };
+        });
+        await saveCollection(STORE_KEYS.swimmers, next);
+        loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
+      }
+      logActivity(
+        accountName,
+        role,
+        isFullRefund ? "Refunded / voided payment" : "Partially refunded payment",
+        `${invoice.name} — ${amount} EGP${refundReason.trim() ? ` (${refundReason.trim()})` : ""}`
+      );
+      setRefundModal(null);
+      setRefundAmount("");
+      setRefundReason("");
+    } catch (e) {
+      setRefundError(e?.message || "Could not refund, please try again");
+    } finally {
+      setRefundSaving(false);
+    }
   };
 
   const saveSwimmer = async (record) => {
@@ -6033,11 +6307,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   // Staff accounts — only admins manage these. Each account gets a role
   // that controls what it can see and do once it logs in.
   const saveAccount = async (record) => {
-    const exists = accounts.some((a) => a.id === record.id);
+    const existingAccount = accounts.find((a) => a.id === record.id);
+    const exists = !!existingAccount;
     const nextAccounts = exists ? accounts.map((a) => (a.id === record.id ? record : a)) : [...accounts, record];
     const res = await saveCollection(STORE_KEYS.accounts, nextAccounts);
     if (!res) throw new Error("Could not save the account, please try again");
-    logActivity(accountName, role, exists ? "Edited account" : "Added account", record.name);
+    logActivity(accountName, role, exists ? "Edited account" : "Added account", `${record.name} — ${describeAccountChange(existingAccount, record)}`);
     setAccounts(nextAccounts);
     setShowAccountForm(false);
     setEditingAccount(null);
@@ -6401,6 +6676,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     pending: requests.filter((r) => r.status === "pending").length,
     confirmed: requests.filter((r) => r.status === "confirmed").length,
     rejected: requests.filter((r) => r.status === "rejected").length,
+    refunded: requests.filter((r) => r.status === "refunded").length,
   };
 
   return (
@@ -6497,7 +6773,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             )}
           </button>
         )}
-        {role !== "technical_director" && (
+        {role !== "technical_director" && canViewPayments && (
         <button
           onClick={() => setTab("requests")}
           className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6507,6 +6783,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <Bell className="w-4 h-4" /> Payment requests
         </button>
         )}
+        {can("viewSwimmers") && (
         <button
           onClick={() => setTab("swimmers")}
           className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6515,6 +6792,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         >
           <Users className="w-4 h-4" /> Swimmers
         </button>
+        )}
         {role !== "technical_director" && (
         <button
           onClick={() => setTab("coaches")}
@@ -6533,7 +6811,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         >
           <CalendarDays className="w-4 h-4" /> Schedule
         </button>
-        {role !== "technical_director" && (
+        {role !== "technical_director" && (canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && (
         <button
           onClick={() => setTab("reports")}
           className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6553,7 +6831,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <Star className="w-4 h-4" /> Achievements
           </button>
         )}
-        {canEdit && role !== "technical_director" && (
+        {(can("manageCurriculum") || canEdit) && role !== "technical_director" && (
           <button
             onClick={() => setTab("skills")}
             className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6561,6 +6839,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             }`}
           >
             <Award className="w-4 h-4" /> Skills
+          </button>
+        )}
+        {(canManagePlans) && role !== "technical_director" && (
+          <button
+            onClick={() => setTab("plans")}
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+              tab === "plans" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+            }`}
+          >
+            <Wallet className="w-4 h-4" /> Plans & Pricing
           </button>
         )}
         {canViewPayroll && role !== "technical_director" && (
@@ -6643,7 +6931,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <GraduationCap className="w-4 h-4" /> Courses
           </button>
         )}
-        {canEditContent && role !== "technical_director" && (
+        {(can("manageWaitlist") || canEditContent) && role !== "technical_director" && (
           <button
             onClick={() => setTab("waitlist")}
             className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6843,9 +7131,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               {[
                 { label: "Add swimmer", icon: UserPlus, onClick: () => { setTab("swimmers"); setTimeout(() => setShowForm(true), 0); } },
                 { label: "View coaches", icon: Users, onClick: () => setTab("coaches") },
-                { label: "Full reports", icon: TrendingUp, onClick: () => setTab("reports") },
+                (canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && { label: "Full reports", icon: TrendingUp, onClick: () => setTab("reports") },
                 { label: "Staff chat", icon: MessageSquare, onClick: () => setTab("chat") },
-              ].map((action) => (
+              ].filter(Boolean).map((action) => (
                 <button
                   key={action.label}
                   onClick={action.onClick}
@@ -6987,6 +7275,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 { key: "pending", label: "Pending", count: counts.pending },
                 { key: "confirmed", label: "Confirmed", count: counts.confirmed },
                 { key: "rejected", label: "Rejected", count: counts.rejected },
+                { key: "refunded", label: "Refunded", count: counts.refunded },
                 { key: "all", label: "All", count: requests.length },
               ].map((f) => (
                 <button
@@ -7055,10 +7344,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                           ? "bg-amber-100 text-amber-700"
                           : r.status === "confirmed"
                           ? "bg-blue-100 text-blue-900"
+                          : r.status === "refunded"
+                          ? "bg-slate-200 text-slate-600"
                           : "bg-red-100 text-red-600"
                       }`}
                     >
-                      {r.status === "pending" ? "Pending" : r.status === "confirmed" ? "Confirmed" : "Rejected"}
+                      {r.status === "pending" ? "Pending" : r.status === "confirmed" ? "Confirmed" : r.status === "refunded" ? "Refunded" : "Rejected"}
                     </span>
                   </div>
                   <div className="text-sm text-slate-500 mb-1">{r.phone}</div>
@@ -7072,7 +7363,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     <Clock className="w-3 h-3" />
                     {new Date(r.createdAt).toLocaleString("en-GB")}
                   </div>
-                  {r.status === "pending" && canEditContent && (
+                  {r.status === "pending" && canRecordPayments && (
                     <div className="flex gap-2">
                       <button
                         onClick={() => {
@@ -7094,9 +7385,27 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     </div>
                   )}
                   {r.status === "confirmed" && (
-                    <div className="text-xs text-blue-900 flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Linked swimmer marked as paid automatically
-                      {r.receiptNo && <span className="ml-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium">Receipt #{r.receiptNo}</span>}
+                    <div>
+                      <div className="text-xs text-blue-900 flex items-center gap-1 mb-2">
+                        <CheckCircle2 className="w-3.5 h-3.5" /> Linked swimmer marked as paid automatically
+                        {r.receiptNo && <span className="ml-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium">Receipt #{r.receiptNo}</span>}
+                      </div>
+                      {Number(r.refundedAmount) > 0 && (
+                        <div className="text-xs text-amber-600 mb-2">{r.refundedAmount} EGP refunded so far</div>
+                      )}
+                      {canManageRefunds && (
+                        <button
+                          onClick={() => openRefundModal(r)}
+                          className="w-full py-2 rounded-lg bg-red-50 text-red-600 text-sm font-medium hover:bg-red-100 flex items-center justify-center gap-1"
+                        >
+                          <XCircle className="w-3.5 h-3.5" /> Refund / void
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {r.status === "refunded" && (
+                    <div className="text-xs text-slate-500 flex items-center gap-1">
+                      <XCircle className="w-3.5 h-3.5" /> Refunded{r.refundedAt ? ` on ${new Date(r.refundedAt).toLocaleDateString("en-GB")}` : ""}
                     </div>
                   )}
                 </div>
@@ -7417,29 +7726,35 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         </button>
                       )
                     ) : !(s.paidMonths || []).includes(paymentMonthFilter) ? (
-                      canEditContent && (
+                      (canRecordPayments || canEditContent) && (
                         <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => {
-                              setCashModal(s);
-                              setCashAmount("");
-                              setCashNote("");
-                              setCashReceiptNo(nextReceiptNo());
-                              setCashMethod("cash");
-                              setCashError("");
-                            }}
-                            className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-950 text-white hover:bg-blue-900 transition"
-                            title="Cash or card, paid in person — marks paid and logs it in the revenue report"
-                          >
-                            <Wallet className="w-3.5 h-3.5" /> In-person payment
-                          </button>
-                          <button
-                            onClick={() => openMarkPaidOnly(s)}
-                            className="text-xs px-2.5 py-1.5 rounded-full font-medium text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition whitespace-nowrap"
-                            title="Mark paid with a simple yes/no — no receipt or amount needed"
-                          >
-                            Mark paid only
-                          </button>
+                          {canRecordPayments && (
+                            <button
+                              onClick={() => {
+                                setCashModal(s);
+                                setCashAmount("");
+                                setCashNote("");
+                                setCashReceiptNo(nextReceiptNo());
+                                setCashMethod("cash");
+                                setCashError("");
+                                setCashDiscountPercent("0");
+                                setCashDiscountReason("");
+                              }}
+                              className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-950 text-white hover:bg-blue-900 transition"
+                              title="Cash or card, paid in person — marks paid and logs it in the revenue report"
+                            >
+                              <Wallet className="w-3.5 h-3.5" /> In-person payment
+                            </button>
+                          )}
+                          {canRecordPayments && (
+                            <button
+                              onClick={() => openMarkPaidOnly(s)}
+                              className="text-xs px-2.5 py-1.5 rounded-full font-medium text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition whitespace-nowrap"
+                              title="Mark paid with a simple yes/no — no receipt or amount needed"
+                            >
+                              Mark paid only
+                            </button>
+                          )}
                           {waLink(s.phone) && (
                             <a
                               href={waLink(s.phone, renewalWaMessage(s))}
@@ -7616,14 +7931,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         <div className="space-y-1 max-h-40 overflow-y-auto pr-1">
                           {[...(s.trainingDates || [])].sort().reverse().map((d) => {
                             const status = (s.attendance || {})[d];
+                            const isPastDate = d < todayISO();
+                            const canEditThisDate = canTakeSwimmerAttendance && (!isPastDate || can("editOldAttendance") || canEdit);
                             return (
                               <div key={d} className="flex items-center justify-between text-xs bg-slate-50 rounded-lg px-2 py-1.5">
                                 <span className="text-slate-600">{dateLabel(d)}</span>
                                 {canEditContent ? (
                                   <div className="flex items-center gap-1">
                                     <button
-                                      onClick={() => canTakeSwimmerAttendance && markAttendance(s, d, "present")}
-                                      disabled={!canTakeSwimmerAttendance}
+                                      onClick={() => canEditThisDate && markAttendance(s, d, "present")}
+                                      disabled={!canEditThisDate}
+                                      title={isPastDate && !canEditThisDate ? "You don't have permission to edit past attendance" : undefined}
                                       className={`px-2 py-0.5 rounded-full font-semibold ${
                                         status === "present" ? "bg-green-100 text-green-700" : "text-slate-400 hover:bg-green-50"
                                       }`}
@@ -7631,8 +7949,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                       <Check className="w-3 h-3" />
                                     </button>
                                     <button
-                                      onClick={() => canTakeSwimmerAttendance && markAttendance(s, d, "absent")}
-                                      disabled={!canTakeSwimmerAttendance}
+                                      onClick={() => canEditThisDate && markAttendance(s, d, "absent")}
+                                      disabled={!canEditThisDate}
+                                      title={isPastDate && !canEditThisDate ? "You don't have permission to edit past attendance" : undefined}
                                       className={`px-2 py-0.5 rounded-full font-semibold ${
                                         status === "absent" ? "bg-red-100 text-red-600" : "text-slate-400 hover:bg-red-50"
                                       }`}
@@ -7696,10 +8015,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       if (swimmerInvoices.length === 0) return <div className="text-xs text-slate-400">No invoices on file yet</div>;
                       return (
                         <div className="space-y-1.5">
-                          {swimmerInvoices.map((inv) => (
+                          {swimmerInvoices.map((inv) => {
+                            const refunded = Number(inv.refundedAmount) || 0;
+                            return (
                             <div key={inv.id} className="flex items-center justify-between text-xs bg-slate-50 rounded-lg px-3 py-2">
                               <div>
                                 <span className="font-medium text-slate-700">{inv.price} EGP</span>
+                                {refunded > 0 && (
+                                  <span className="text-amber-600"> ({refunded} EGP refunded)</span>
+                                )}
                                 <span className="text-slate-400"> · {inv.planName} · {new Date(inv.confirmedAt || inv.createdAt).toLocaleDateString("en-GB")}</span>
                               </div>
                               <div className="flex items-center gap-3">
@@ -7719,14 +8043,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                 >
                                   Reprint
                                 </button>
-                                {canEdit && (
-                                  <button onClick={() => deleteInvoice(inv)} className="text-red-500 hover:underline font-medium">
-                                    Delete
+                                {canManageRefunds && (
+                                  <button onClick={() => openRefundModal(inv)} className="text-red-500 hover:underline font-medium">
+                                    Refund / void
                                   </button>
                                 )}
                               </div>
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       );
                     })()}
@@ -7797,6 +8122,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     )}
                   </div>
 
+                  {(can("viewAssessments") || can("editAssessments") || canEditContent) && (
                   <div className="mt-4 pt-4 border-t border-slate-100">
                     <div className="flex items-center justify-between mb-2">
                       <div className="text-xs font-semibold text-slate-500">Skills checklist — {s.level}</div>
@@ -7821,7 +8147,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               }`}
                             >
                               <span className={rating >= 5 ? "text-green-700 font-medium" : "text-slate-600"}>{skill}</span>
-                              {canEditContent ? (
+                              {(can("editAssessments") || canEditContent) ? (
                                 <StarRating value={rating} onChange={(n) => setSkillRating(s, skill, n)} />
                               ) : (
                                 <StarsDisplay value={rating} />
@@ -7832,6 +8158,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       </div>
                     )}
                   </div>
+                  )}
                   </div>
                 )}
               </div>
@@ -7861,7 +8188,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <button onClick={loadCoaches} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
                 <RefreshCw className={`w-4 h-4 ${coachesLoading ? "animate-spin" : ""}`} />
               </button>
-              {canEditContent && (
+              {(can("manageCoaches") || canEditContent) && (
                 <button
                   onClick={() => { setEditingCoach(null); setShowCoachForm(true); }}
                   className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
@@ -7872,7 +8199,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             </div>
           </div>
 
-          {showCoachForm && canEditContent && (
+          {showCoachForm && (can("manageCoaches") || canEditContent) && (
             <CoachForm
               initial={editingCoach}
               onSave={saveCoach}
@@ -7901,9 +8228,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <div className="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 font-medium">
                     {load} swimmer{load === 1 ? "" : "s"} assigned
                   </div>
-                  {(canEditContent || canEdit) && (
+                  {(can("manageCoaches") || canEditContent || canEdit) && (
                     <div className="flex items-center gap-1">
-                      {canEditContent && (
+                      {(can("manageCoaches") || canEditContent) && (
                         <button
                           onClick={() => { setEditingCoach(c); setShowCoachForm(true); }}
                           className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"
@@ -7911,7 +8238,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                           <Pencil className="w-4 h-4" />
                         </button>
                       )}
-                      {canEdit && (
+                      {(can("manageCoaches") || canEdit) && (
                         <button onClick={() => deleteCoach(c)} className="p-2 rounded-lg hover:bg-red-50 text-red-500">
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -8197,14 +8524,23 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "reports" && (() => {
+      {tab === "reports" && !(canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && (
+        <div className="max-w-md mx-auto px-4 py-16 text-center">
+          <Lock className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+          <h3 className="font-bold text-slate-900 mb-1">No access</h3>
+          <p className="text-sm text-slate-500">You don't have permission to view reports. Ask an admin to grant "View reports" or "View financial reports".</p>
+        </div>
+      )}
+
+      {tab === "reports" && (canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && (() => {
         const { startISO, endISO, label } = periodRange(reportType, reportAnchor);
 
         // Revenue: confirmed payment requests dated (by confirmation time) within the period
         const incomeRows = requests
           .filter((r) => r.status === "confirmed" && inRange((r.confirmedAt || r.createdAt || "").slice(0, 10), startISO, endISO))
           .sort((a, b) => new Date(b.confirmedAt || b.createdAt) - new Date(a.confirmedAt || a.createdAt));
-        const incomeTotal = incomeRows.reduce((sum, r) => sum + (Number(r.price) || 0), 0);
+        const netPrice = (r) => Math.max(0, (Number(r.price) || 0) - (Number(r.refundedAmount) || 0));
+        const incomeTotal = incomeRows.reduce((sum, r) => sum + netPrice(r), 0);
 
         // "Mark paid only" entries within the period — no amount, so these
         // never enter the revenue totals above, but they're still worth
@@ -8243,7 +8579,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
           const monthTotal = requests
             .filter((r) => r.status === "confirmed" && (r.confirmedAt || r.createdAt || "").slice(0, 7) === key)
-            .reduce((sum, r) => sum + (Number(r.price) || 0), 0);
+            .reduce((sum, r) => sum + Math.max(0, (Number(r.price) || 0) - (Number(r.refundedAmount) || 0)), 0);
           revenueTrend.push({ key, label: d.toLocaleDateString("en-GB", { month: "short" }), total: monthTotal });
         }
         const revenueTrendMax = Math.max(...revenueTrend.map((m) => m.total), 1);
@@ -8586,7 +8922,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                             <td className="px-4 py-2 text-slate-800">{r.name}</td>
                             <td className="px-4 py-2 text-slate-600">{r.planName}</td>
                             <td className="px-4 py-2 text-slate-400 text-xs">{r.method === "cash" ? "Cash" : r.method === "card" ? "Card" : "Instapay"}</td>
-                            <td className="px-4 py-2 text-green-600 font-semibold">{r.price}</td>
+                            <td className="px-4 py-2 text-green-600 font-semibold">
+                              {netPrice(r)}
+                              {Number(r.refundedAmount) > 0 && (
+                                <span className="text-amber-600 font-normal text-xs"> ({r.refundedAmount} refunded)</span>
+                              )}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -8615,7 +8956,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                             <td className="px-4 py-2 text-slate-800">{e.note || "—"}</td>
                             <td className="px-4 py-2 text-red-500 font-semibold">{e.amount}</td>
                             <td className="px-4 py-2 print:hidden">
-                              {canEdit && (
+                              {(can("manageExpenses") || canEdit) && (
                                 <button onClick={() => deleteExpense(e)} className="text-slate-300 hover:text-red-500">
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>
@@ -8724,7 +9065,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             </div>
 
             {/* Add an expense — not printed */}
-            {canEdit && (
+            {(can("manageExpenses") || canEdit) && (
               <div className="print:hidden">
                 <h3 className="font-bold text-slate-900 mb-3">Log an expense</h3>
                 <div className="bg-white rounded-2xl border border-slate-200 p-4">
@@ -8775,7 +9116,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         );
       })()}
 
-      {tab === "skills" && canEdit && (
+      {tab === "skills" && (can("manageCurriculum") || canEdit) && (
         <div key={skillsRefreshKey}>
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-slate-900">Required skills per level</h3>
@@ -8863,6 +9204,65 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               );
             })}
           </div>
+        </div>
+      )}
+
+      {tab === "plans" && canManagePlans && (
+        <div className="max-w-2xl" key={plansRefreshKey}>
+          <h3 className="font-bold text-slate-900 mb-1">Plans & pricing</h3>
+          <p className="text-sm text-slate-500 mb-5">
+            Edit the name and monthly price of each plan. Changes apply to new payments right away — amounts already recorded for past months aren't affected.
+          </p>
+          <div className="space-y-3">
+            {DEFAULT_PLANS.map((defaultPlan) => {
+              const draft = planDrafts[defaultPlan.id] || { name: defaultPlan.name, price: String(defaultPlan.price) };
+              const isCustomized = !!customPlanPrices[defaultPlan.id];
+              return (
+                <div key={defaultPlan.id} className="bg-white rounded-2xl border border-slate-200 p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs text-slate-400">{defaultPlan.id}</span>
+                    {isCustomized && (
+                      <button
+                        onClick={() => resetPlanDraft(defaultPlan.id)}
+                        className="text-xs text-slate-400 hover:text-slate-600 underline"
+                      >
+                        Reset to default ({defaultPlan.name} — {defaultPlan.price} EGP)
+                      </button>
+                    )}
+                  </div>
+                  <div className="grid sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs text-slate-500 mb-1 block">Plan name</label>
+                      <input
+                        value={draft.name}
+                        onChange={(e) => setPlanDrafts((prev) => ({ ...prev, [defaultPlan.id]: { ...draft, name: e.target.value } }))}
+                        className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-500 mb-1 block">Monthly price (EGP)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={draft.price}
+                        onChange={(e) => setPlanDrafts((prev) => ({ ...prev, [defaultPlan.id]: { ...draft, price: e.target.value } }))}
+                        className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {plansError && <div className="text-red-500 text-sm mt-3">{plansError}</div>}
+          {plansSaved && <div className="text-green-700 text-sm mt-3 bg-green-50 rounded-lg px-3 py-2">Saved.</div>}
+          <button
+            onClick={savePlanPrices}
+            disabled={plansSaving}
+            className="mt-4 px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+          >
+            {plansSaving ? "Saving..." : "Save"}
+          </button>
         </div>
       )}
 
@@ -9101,7 +9501,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "waitlist" && canEditContent && (
+      {tab === "waitlist" && (can("manageWaitlist") || canEditContent) && (
         <div>
           <div className="mb-4">
             <h3 className="font-bold text-slate-900">Waitlist</h3>
@@ -10561,6 +10961,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     <div className="font-semibold text-slate-900">{a.name}</div>
                     <div className="text-xs text-slate-400">Username: {a.username}</div>
                   </div>
+                  <div
+                    className={`text-xs px-2.5 py-1 rounded-full font-medium ${
+                      a.authUserId ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"
+                    }`}
+                    title={a.authUserId ? `Email login set up (${a.email || "email on file"})` : "Still using the old username/password login"}
+                  >
+                    {a.authUserId ? "Email login ✓" : "Old login only"}
+                  </div>
                   <div className="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 font-medium">
                     {ROLES.find((r) => r.id === a.role)?.label || a.role}
                   </div>
@@ -10619,8 +11027,61 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
+      {refundModal && (
+        <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 px-4" onClick={() => setRefundModal(null)}>
+          <div className="bg-white rounded-2xl p-5 max-w-sm w-full shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-bold text-slate-900 mb-1">Refund / void payment</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              For {refundModal.name} · {refundModal.planName} · originally {refundModal.price} EGP
+              {Number(refundModal.refundedAmount) > 0 && ` (already refunded ${refundModal.refundedAmount} EGP)`}.
+            </p>
+            <div className="mb-3">
+              <label className="text-xs text-slate-500 mb-1 block">Amount to refund (EGP)</label>
+              <input
+                type="number"
+                min="0"
+                autoFocus
+                value={refundAmount}
+                onChange={(e) => setRefundAmount(e.target.value)}
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Maximum refundable: {Math.max(0, (Number(refundModal.price) || 0) - (Number(refundModal.refundedAmount) || 0))} EGP
+              </p>
+            </div>
+            <div className="mb-3">
+              <label className="text-xs text-slate-500 mb-1 block">Reason (optional)</label>
+              <input
+                value={refundReason}
+                onChange={(e) => setRefundReason(e.target.value)}
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                placeholder="e.g. Cancelled before the month started"
+              />
+            </div>
+            {refundError && <div className="text-red-500 text-sm mb-3">{refundError}</div>}
+            <div className="flex gap-2">
+              <button
+                onClick={submitRefund}
+                disabled={refundSaving}
+                className="flex-1 py-2.5 rounded-lg bg-red-600 text-white text-sm font-semibold hover:bg-red-700 disabled:opacity-60 flex items-center justify-center gap-2"
+              >
+                {refundSaving && <RefreshCw className="w-4 h-4 animate-spin" />}
+                {refundSaving ? "Refunding..." : "Confirm refund"}
+              </button>
+              <button
+                onClick={() => setRefundModal(null)}
+                disabled={refundSaving}
+                className="px-4 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {cashModal && (
-        <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 px-4" onClick={() => setCashModal(null)}>
+        <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 px-4" onClick={() => { setCashModal(null); setCashDiscountPercent("0"); setCashDiscountReason(""); }}>
           <div className="bg-white rounded-2xl p-5 max-w-sm w-full shadow-xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-bold text-slate-900 mb-1">Record in-person payment</h3>
             <p className="text-sm text-slate-500 mb-4">
@@ -10654,6 +11115,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               const pct = Math.max(0, Math.min(100, Number(cashDiscountPercent) || 0));
               const discount = Math.round((Number(p.price) || 0) * pct / 100);
               const final = Math.max(0, (Number(p.price) || 0) - discount);
+              const alreadyPaid = (cashModal.paymentLedger || [])
+                .filter((pay) => pay.paidMonth === paymentMonthFilter || pay.month === paymentMonthFilter)
+                .reduce((sum, pay) => sum + (Number(pay.price ?? pay.amount) || 0), 0);
+              const remaining = Math.max(0, final - alreadyPaid);
               return <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 mb-3">
                 <div className="flex justify-between text-sm"><span>Plan</span><strong>{p.name}</strong></div>
                 <div className="flex justify-between text-sm"><span>Original price</span><strong>{p.price} EGP</strong></div>
@@ -10661,6 +11126,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <div><label className="text-xs text-slate-500 mb-1 block">Discount %</label><input type="number" min="0" max="100" value={cashDiscountPercent} onChange={(e) => setCashDiscountPercent(e.target.value)} disabled={!canManageDiscounts} className="w-full border border-slate-200 rounded-lg py-2 px-3 bg-white disabled:bg-slate-100" /></div>
                   <div><label className="text-xs text-slate-500 mb-1 block">Final amount</label><input value={`${final} EGP`} readOnly className="w-full border border-slate-200 rounded-lg py-2 px-3 bg-slate-100" /></div>
                 </div>
+                {alreadyPaid > 0 && (
+                  <div className="mt-2 pt-2 border-t border-blue-200 space-y-1">
+                    <div className="flex justify-between text-sm text-slate-600"><span>Already paid this month</span><strong>{alreadyPaid} EGP</strong></div>
+                    <div className="flex justify-between text-sm font-semibold text-blue-900"><span>Remaining balance</span><strong>{remaining} EGP</strong></div>
+                  </div>
+                )}
               </div>;
             })()}
             <div className="mb-3">
@@ -10700,7 +11171,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 {cashSaving ? "Saving..." : "Confirm payment"}
               </button>
               <button
-                onClick={() => setCashModal(null)}
+                onClick={() => { setCashModal(null); setCashDiscountPercent("0"); setCashDiscountReason(""); }}
                 disabled={cashSaving}
                 className="px-4 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200 disabled:opacity-60"
               >
@@ -12460,7 +12931,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
                 </div>
               )}
 
-              {(LEVEL_SKILLS[s.level] || []).length > 0 && (
+              {(LEVEL_SKILLS[s.level] || []).length > 0 && (canViewAssessments || canEditAssessments) && (
                 <div className="mt-3 pt-3 border-t border-slate-100">
                   <div className="text-xs font-semibold text-slate-500 mb-2">Skills — {s.level}</div>
                   <div className="space-y-1.5">
@@ -12469,7 +12940,11 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
                       return (
                         <div key={skill} className="flex items-center justify-between gap-2 text-xs bg-slate-50 rounded-lg px-3 py-2">
                           <span className={rating >= 5 ? "text-green-700 font-medium" : "text-slate-600"}>{skill}</span>
-                          <StarRating value={rating} onChange={(n) => setSkillRating(s, skill, n)} />
+                          {canEditAssessments ? (
+                            <StarRating value={rating} onChange={(n) => setSkillRating(s, skill, n)} />
+                          ) : (
+                            <StarsDisplay value={rating} />
+                          )}
                         </div>
                       );
                     })}
@@ -12989,6 +13464,8 @@ function CoachView({ onExit, preAuthedCoach = null }) {
 
   const canTakeSwimmerAttendance = !!coachPermissions.takeSwimmerAttendance;
   const canViewSwimmerAttendance = !!coachPermissions.viewSwimmerAttendance || canTakeSwimmerAttendance;
+  const canViewAssessments = !!coachPermissions.viewAssessments;
+  const canEditAssessments = !!coachPermissions.editAssessments;
   const canFollowProgram = coachProgramAccess.length > 0 || coachLevelAccess.length > 0;
   const coachSwimmerInScope = useCallback((s) => {
     if (coachLevelAccess.length && coachLevelAccess.includes(s.level)) return true;
@@ -13608,6 +14085,22 @@ function StaffPortal({ onExit }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState("");
+  // "old" = the existing username/password login everyone's used so far.
+  // "email" = real Supabase Auth login, for staff who've already set one up.
+  // "claim" = one-time self-serve setup: prove who you are with your
+  // current username/password, then create a real email login.
+  const [mode, setMode] = useState("old");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [claimUsername, setClaimUsername] = useState("");
+  const [claimOldPassword, setClaimOldPassword] = useState("");
+  const [claimEmail, setClaimEmail] = useState("");
+  const [claimNewPassword, setClaimNewPassword] = useState("");
+  const [claimError, setClaimError] = useState("");
+  const [claimSaving, setClaimSaving] = useState(false);
+  const [claimSuccess, setClaimSuccess] = useState(false);
   // Restored from localStorage on load, if a previous login left one there —
   // this is what keeps someone logged in after their browser tab gets
   // suspended/reloaded (switching apps on mobile, etc.), instead of having
@@ -13645,6 +14138,19 @@ function StaffPortal({ onExit }) {
     onExit();
   };
 
+  // Shared by every login path (old password, real email, freshly claimed
+  // account) — turns a staff account record into the session shape the
+  // rest of this component routes on. Throws if something's not set up
+  // right (e.g. a coach account with no linked coach profile).
+  const sessionFromAccount = (acct) => {
+    if (acct.role === "coach") {
+      const coach = coaches.find((c) => c.id === acct.linkedCoachId);
+      if (!coach) throw new Error("This account isn't linked to a coach anymore — ask an admin to fix it");
+      return { role: "coach", name: acct.name, coach };
+    }
+    return { role: acct.role, name: acct.name, levelRestriction: acct.levelRestriction || null, branchRestriction: acct.branchRestriction || null };
+  };
+
   const login = async () => {
     setLoginError("");
     const u = username.trim();
@@ -13659,13 +14165,71 @@ function StaffPortal({ onExit }) {
     }
     const acct = accounts.find((a) => a.username.toLowerCase() === u.toLowerCase() && a.password === password);
     if (!acct) return setLoginError("Wrong username or password");
-    if (acct.role === "coach") {
-      const coach = coaches.find((c) => c.id === acct.linkedCoachId);
-      if (!coach) return setLoginError("This account isn't linked to a coach anymore — ask an admin to fix it");
-      setSessionAndPersist({ role: "coach", name: acct.name, coach });
-      return;
+    try {
+      setSessionAndPersist(sessionFromAccount(acct));
+    } catch (e) {
+      setLoginError(e.message);
     }
-    setSessionAndPersist({ role: acct.role, name: acct.name, levelRestriction: acct.levelRestriction || null, branchRestriction: acct.branchRestriction || null });
+  };
+
+  // Real Supabase Auth login, for staff who've already set one up.
+  const emailLogin = async () => {
+    setAuthError("");
+    if (!authEmail.trim() || !authPassword) return setAuthError("Enter your email and password");
+    setAuthLoading(true);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword });
+      if (error) throw new Error("Wrong email or password");
+      const ok = await verifyProfileForThisAcademy(data.user.id);
+      if (!ok) {
+        await supabase.auth.signOut();
+        throw new Error("This account isn't linked to this academy's link");
+      }
+      const acct = await findAccountByAuthUserId(data.user.id);
+      if (!acct) {
+        await supabase.auth.signOut();
+        throw new Error("This login isn't linked to a staff account yet — set it up from \"Set up email login\" first");
+      }
+      setSessionAndPersist(sessionFromAccount(acct));
+    } catch (e) {
+      setAuthError(e?.message || "Could not sign in, please try again");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // One-time setup: proves identity with the current username/password,
+  // then creates a real email+password login and links it to that same
+  // account — from then on, this staff member can (and should) use the
+  // "Log in with email" option instead of the old shared password.
+  const claimAccount = async () => {
+    setClaimError("");
+    const u = claimUsername.trim();
+    if (!u || !claimOldPassword) return setClaimError("Enter your current username and password");
+    if (!claimEmail.trim() || !claimNewPassword) return setClaimError("Enter an email and choose a password");
+    if (claimNewPassword.length < 6) return setClaimError("Password should be at least 6 characters");
+    const acct = accounts.find((a) => a.username.toLowerCase() === u.toLowerCase() && a.password === claimOldPassword);
+    if (!acct) return setClaimError("Wrong username or password — this has to match your current login");
+    setClaimSaving(true);
+    try {
+      const { data, error } = await supabase.auth.signUp({ email: claimEmail.trim(), password: claimNewPassword });
+      if (error) throw new Error(error.message || "Could not create your login");
+      if (data.user) {
+        await ensureStaffProfileAndLink(data.user, acct.username);
+      }
+      if (data.session) {
+        // Signed in immediately (this project doesn't require confirming
+        // the email first) — log them straight into their dashboard.
+        const fresh = await findAccountByAuthUserId(data.user.id);
+        if (fresh) setSessionAndPersist(sessionFromAccount(fresh));
+      } else {
+        setClaimSuccess(true);
+      }
+    } catch (e) {
+      setClaimError(e?.message || "Could not set up your login, please try again");
+    } finally {
+      setClaimSaving(false);
+    }
   };
 
   if (!session) {
@@ -13674,30 +14238,140 @@ function StaffPortal({ onExit }) {
         <div className="max-w-sm w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
           <img src={CONFIG.logoDataUri} alt={CONFIG.academyName} className="w-14 h-14 mx-auto mb-4 object-contain" />
           <h2 className="text-xl font-bold text-slate-900 mb-4 text-center">Staff login</h2>
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
-            placeholder="Username"
-          />
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") login();
-            }}
-            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
-            placeholder="Password"
-          />
-          {loginError && <div className="text-red-500 text-sm mb-3">{loginError}</div>}
-          <button
-            onClick={login}
-            className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition mb-2"
-          >
-            Log in
-          </button>
-          <button onClick={onExit} className="w-full py-2 text-slate-400 text-sm hover:text-slate-600">
+
+          {mode === "old" && (
+            <>
+              <input
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+                placeholder="Username"
+              />
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") login();
+                }}
+                className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+                placeholder="Password"
+              />
+              {loginError && <div className="text-red-500 text-sm mb-3">{loginError}</div>}
+              <button
+                onClick={login}
+                className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition mb-2"
+              >
+                Log in
+              </button>
+              <div className="flex items-center justify-between mt-2 mb-1">
+                <button onClick={() => { setMode("email"); setAuthError(""); }} className="text-xs text-slate-400 hover:text-slate-600 underline">
+                  Log in with email
+                </button>
+                <button onClick={() => { setMode("claim"); setClaimError(""); setClaimSuccess(false); }} className="text-xs text-slate-400 hover:text-slate-600 underline">
+                  Set up email login
+                </button>
+              </div>
+            </>
+          )}
+
+          {mode === "email" && (
+            <>
+              <input
+                type="email"
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
+                className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+                placeholder="Email"
+                autoComplete="username"
+              />
+              <input
+                type="password"
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") emailLogin();
+                }}
+                className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+                placeholder="Password"
+                autoComplete="current-password"
+              />
+              {authError && <div className="text-red-500 text-sm mb-3">{authError}</div>}
+              <button
+                onClick={emailLogin}
+                disabled={authLoading}
+                className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition mb-2 disabled:opacity-60 flex items-center justify-center gap-2"
+              >
+                {authLoading && <RefreshCw className="w-4 h-4 animate-spin" />}
+                {authLoading ? "Signing in..." : "Log in"}
+              </button>
+              <button onClick={() => { setMode("old"); setLoginError(""); }} className="w-full text-center text-xs text-slate-400 hover:text-slate-600 underline mt-1">
+                Use the old username/password login instead
+              </button>
+            </>
+          )}
+
+          {mode === "claim" && (
+            claimSuccess ? (
+              <div className="text-center">
+                <CheckCircle2 className="w-10 h-10 text-green-500 mx-auto mb-3" />
+                <p className="text-sm text-slate-600 mb-4">Almost done — check your email to confirm it, then come back and log in with your new email and password.</p>
+                <button onClick={() => { setMode("email"); setClaimSuccess(false); }} className="w-full py-2.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition">
+                  Go to email login
+                </button>
+              </div>
+            ) : (
+              <>
+                <p className="text-xs text-slate-400 mb-3">Confirm your current login, then set up a real email + password you'll use from now on.</p>
+                <input
+                  value={claimUsername}
+                  onChange={(e) => setClaimUsername(e.target.value)}
+                  className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+                  placeholder="Current username"
+                />
+                <input
+                  type="password"
+                  value={claimOldPassword}
+                  onChange={(e) => setClaimOldPassword(e.target.value)}
+                  className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+                  placeholder="Current password"
+                />
+                <div className="border-t border-slate-100 pt-3 mb-1">
+                  <input
+                    type="email"
+                    value={claimEmail}
+                    onChange={(e) => setClaimEmail(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+                    placeholder="Your email"
+                  />
+                  <input
+                    type="password"
+                    value={claimNewPassword}
+                    onChange={(e) => setClaimNewPassword(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") claimAccount();
+                    }}
+                    className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+                    placeholder="Choose a new password"
+                  />
+                </div>
+                {claimError && <div className="text-red-500 text-sm mb-3">{claimError}</div>}
+                <button
+                  onClick={claimAccount}
+                  disabled={claimSaving}
+                  className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition mb-2 disabled:opacity-60 flex items-center justify-center gap-2"
+                >
+                  {claimSaving && <RefreshCw className="w-4 h-4 animate-spin" />}
+                  {claimSaving ? "Setting up..." : "Set up email login"}
+                </button>
+                <button onClick={() => { setMode("old"); setClaimError(""); }} className="w-full text-center text-xs text-slate-400 hover:text-slate-600 underline mt-1">
+                  Back
+                </button>
+              </>
+            )
+          )}
+
+          <button onClick={onExit} className="w-full py-2 text-slate-400 text-sm hover:text-slate-600 mt-2">
             Back
           </button>
         </div>
@@ -15696,6 +16370,7 @@ export default function App() {
         loadHomepageContent().then(applyHomepageContent),
         loadCustomPrograms().then(applyCustomPrograms),
         loadCustomBranches().then(applyCustomBranches),
+        loadCustomPlanPrices().then(applyCustomPlanPrices),
         loadCustomSignature().then((sig) => {
           if (sig) CONFIG.signatureDataUri = sig;
         }),
