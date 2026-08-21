@@ -1441,19 +1441,66 @@ function unfreezeSwimmer(swimmer) {
 // alongside clearedIfUnpaid, once per calendar month, so an advance
 // booking made while last month was still running switches over
 // automatically without anyone having to remember to do it by hand.
+function getMonthlySchedule(swimmer, key) {
+  const direct = (swimmer.monthlySchedules || []).find((x) => x.month === key);
+  if (direct) return direct;
+  const legacy = (swimmer.scheduleHistory || []).filter((x) => (x.date || "").slice(0, 7) === key);
+  if (legacy.length) {
+    return {
+      month: key,
+      day: legacy[0]?.day || "",
+      time: legacy[0]?.time || "",
+      day2: legacy[1]?.day || "",
+      time2: legacy[1]?.time || "",
+      sessionType: swimmer.sessionType || "group",
+      sessionType2: swimmer.sessionType2 || "",
+      coachId: swimmer.coachId || null,
+      coachId2: swimmer.coachId2 || null,
+    };
+  }
+  if ((swimmer.scheduleMonth || monthKey()) === key && (swimmer.day || swimmer.time)) {
+    return { month: key, day: swimmer.day || "", time: swimmer.time || "", day2: swimmer.day2 || "", time2: swimmer.time2 || "", sessionType: swimmer.sessionType || "group", sessionType2: swimmer.sessionType2 || "", coachId: swimmer.coachId || null, coachId2: swimmer.coachId2 || null };
+  }
+  return null;
+}
+
+function upsertMonthlySchedule(swimmer, schedule) {
+  const key = schedule.month;
+  const existing = [...(swimmer.monthlySchedules || [])];
+  // Migrate old scheduleHistory into monthly records the first time this swimmer is edited.
+  if (!existing.length && (swimmer.scheduleHistory || []).length) {
+    const months = [...new Set((swimmer.scheduleHistory || []).map((h) => (h.date || "").slice(0, 7)).filter(Boolean))];
+    months.forEach((m) => {
+      const hs = (swimmer.scheduleHistory || []).filter((h) => (h.date || "").slice(0, 7) === m);
+      existing.push({ month: m, day: hs[0]?.day || "", time: hs[0]?.time || "", day2: hs[1]?.day || "", time2: hs[1]?.time || "", sessionType: swimmer.sessionType || "group", sessionType2: swimmer.sessionType2 || "", coachId: swimmer.coachId || null, coachId2: swimmer.coachId2 || null });
+    });
+  }
+  return [...existing.filter((x) => x.month !== key), schedule].sort((a, b) => a.month.localeCompare(b.month));
+}
+
+function monthlySchedulesToHistory(monthlySchedules) {
+  return (monthlySchedules || []).flatMap((m) => {
+    const date = `${m.month}-01T00:00:00.000Z`;
+    const out = [];
+    if (m.day && m.time) out.push({ day: m.day, time: m.time, date });
+    if (m.day2 && m.time2) out.push({ day: m.day2, time: m.time2, date });
+    return out;
+  });
+}
+
 function promotedIfDue(swimmer, currentMonthKey) {
-  if (!swimmer.nextSchedule || swimmer.nextSchedule.scheduleMonth !== currentMonthKey) return swimmer;
-  const { day, time, sessionType, coachId, day2, time2, sessionType2, coachId2 } = swimmer.nextSchedule;
+  const schedule = getMonthlySchedule(swimmer, currentMonthKey);
+  if (!schedule) return swimmer;
   return {
     ...swimmer,
-    day: day || "",
-    time: time || "",
-    sessionType: sessionType || "group",
-    coachId: coachId || null,
-    day2: day2 || "",
-    time2: time2 || "",
-    sessionType2: sessionType2 || "",
-    coachId2: coachId2 || null,
+    day: schedule.day || "",
+    time: schedule.time || "",
+    sessionType: schedule.sessionType || "group",
+    coachId: schedule.coachId || null,
+    day2: schedule.day2 || "",
+    time2: schedule.time2 || "",
+    sessionType2: schedule.sessionType2 || "",
+    coachId2: schedule.coachId2 || null,
     scheduleMonth: currentMonthKey,
     nextSchedule: null,
   };
@@ -1463,7 +1510,7 @@ function clearedIfUnpaid(swimmer) {
   if (isPaidThisMonth(swimmer)) return swimmer;
   if (isFrozen(swimmer)) return swimmer;
   if (!swimmer.day && !swimmer.time) return swimmer;
-  return { ...swimmer, day: "", time: "", coachId: null, scheduleMonth: "" };
+  return { ...swimmer, day: "", time: "", coachId: null, day2: "", time2: "", coachId2: null, scheduleMonth: "" };
 }
 
 /* ---------- WhatsApp click-to-chat ----------
@@ -2844,33 +2891,18 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
   // month they're already saved under restores their real schedule.
   const handleScheduleMonthChange = (newMonth) => {
     setScheduleMonth(newMonth);
-    const savedMonth = initial?.scheduleMonth || monthKey();
-    if (newMonth === savedMonth) {
-      setDay(initial?.day || "");
-      setTime(initial?.time || "");
-      setCoachId(initial?.coachId || "");
-      setDay2(initial?.day2 || "");
-      setTime2(initial?.time2 || "");
-      setCoachId2(initial?.coachId2 || "");
-      setHasSecondSlot(!!(initial?.day2 && initial?.time2));
-    } else if (initial?.nextSchedule && initial.nextSchedule.scheduleMonth === newMonth) {
-      // Already has an advance booking for this month — load it back in
-      // so it can be reviewed or changed, instead of showing blank.
-      const ns = initial.nextSchedule;
-      setDay(ns.day || "");
-      setTime(ns.time || "");
-      setCoachId(ns.coachId || "");
-      setDay2(ns.day2 || "");
-      setTime2(ns.time2 || "");
-      setCoachId2(ns.coachId2 || "");
-      setHasSecondSlot(!!(ns.day2 && ns.time2));
+    const saved = getMonthlySchedule(initial || {}, newMonth);
+    if (saved) {
+      setDay(saved.day || "");
+      setTime(saved.time || "");
+      setCoachId(saved.coachId || "");
+      setDay2(saved.day2 || "");
+      setTime2(saved.time2 || "");
+      setCoachId2(saved.coachId2 || "");
+      setHasSecondSlot(!!(saved.day2 && saved.time2));
     } else {
-      setDay("");
-      setTime("");
-      setCoachId("");
-      setDay2("");
-      setTime2("");
-      setCoachId2("");
+      setDay(""); setTime(""); setCoachId("");
+      setDay2(""); setTime2(""); setCoachId2("");
       setHasSecondSlot(false);
     }
   };
@@ -2945,9 +2977,8 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
         // month ahead. A record saved before scheduleMonth existed is
         // treated as "this month" (the only month there used to be).
         const matches = all.filter((s) => {
-          if (s.coachId === coachId && s.day === day && s.time === time && (s.scheduleMonth || monthKey()) === scheduleMonth) return true;
-          if (s.nextSchedule && s.nextSchedule.coachId === coachId && s.nextSchedule.day === day && s.nextSchedule.time === time && s.nextSchedule.scheduleMonth === scheduleMonth) return true;
-          return false;
+          const ms = getMonthlySchedule(s, scheduleMonth);
+          return !!ms && ms.coachId === coachId && ms.day === day && ms.time === time;
         });
         setSlotUsage(matches);
       });
@@ -2979,7 +3010,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
       }
     }
 
-    const isCurrentMonthBooking = scheduleMonth === (initial?.scheduleMonth || monthKey()) || scheduleMonth === monthKey();
+    const isCurrentMonthBooking = scheduleMonth === monthKey();
 
     // Safety net: if this save is actually changing an existing day/time
     // (not just setting one for the first time), keep a record of what it
@@ -3002,6 +3033,18 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
     // schedule automatically once the calendar actually reaches that
     // month (see promotedIfDue). Booking the current month works exactly
     // as it always has, updating the live fields directly.
+    const monthlySchedule = {
+      month: scheduleMonth,
+      day, time,
+      day2: hasSecondSlot ? day2 : "",
+      time2: hasSecondSlot ? time2 : "",
+      sessionType,
+      sessionType2: hasSecondSlot ? sessionType2 : "",
+      coachId: coachId || null,
+      coachId2: hasSecondSlot ? coachId2 || null : null,
+    };
+    const monthlySchedules = upsertMonthlySchedule(initial || {}, monthlySchedule);
+
     const record = isCurrentMonthBooking
       ? {
           // Preserve every field this form doesn't manage (skills ratings,
@@ -3018,7 +3061,8 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           day,
           time,
           scheduleMonth,
-          scheduleHistory: oldScheduleHistory,
+          scheduleHistory: monthlySchedulesToHistory(monthlySchedules),
+          monthlySchedules,
           sessionType,
           coachId: coachId || null,
           day2: hasSecondSlot ? day2 : "",
@@ -3043,6 +3087,8 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           branch,
           level,
           notes: notes.trim(),
+          scheduleHistory: monthlySchedulesToHistory(monthlySchedules),
+          monthlySchedules,
           parentPin: parentPin,
           createdAt: initial?.createdAt || new Date().toISOString(),
           // The live schedule stays exactly as it already was.
@@ -3642,6 +3688,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         manualPayments: [],
         levelHistory: [],
         scheduleHistory: [],
+        monthlySchedules: [],
         trainingDates: [],
         attendance: {},
         makeupSessions: [],
@@ -4757,22 +4804,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       // pending nextSchedule pre-booked for it.
       const inSession = [];
       all.forEach((s) => {
-        if ((s.scheduleMonth || monthKey()) === scheduleMonth) {
-          if (s.day === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time === scheduleTimeFilter)) {
-            inSession.push({ swimmer: s, time: s.time, coachId: s.coachId, sessionType: s.sessionType });
-          }
-          if (s.day2 === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time2 === scheduleTimeFilter)) {
-            inSession.push({ swimmer: s, time: s.time2, coachId: s.coachId2, sessionType: s.sessionType2 });
-          }
+        const ms = getMonthlySchedule(s, scheduleMonth);
+        if (!ms) return;
+        if (ms.day === scheduleDayFilter && (scheduleTimeFilter === "all" || ms.time === scheduleTimeFilter)) {
+          inSession.push({ swimmer: s, time: ms.time, coachId: ms.coachId, sessionType: ms.sessionType });
         }
-        if (s.nextSchedule && s.nextSchedule.scheduleMonth === scheduleMonth) {
-          const ns = s.nextSchedule;
-          if (ns.day === scheduleDayFilter && (scheduleTimeFilter === "all" || ns.time === scheduleTimeFilter)) {
-            inSession.push({ swimmer: s, time: ns.time, coachId: ns.coachId, sessionType: ns.sessionType });
-          }
-          if (ns.day2 === scheduleDayFilter && (scheduleTimeFilter === "all" || ns.time2 === scheduleTimeFilter)) {
-            inSession.push({ swimmer: s, time: ns.time2, coachId: ns.coachId2, sessionType: ns.sessionType2 });
-          }
+        if (ms.day2 === scheduleDayFilter && (scheduleTimeFilter === "all" || ms.time2 === scheduleTimeFilter)) {
+          inSession.push({ swimmer: s, time: ms.time2, coachId: ms.coachId2, sessionType: ms.sessionType2 });
         }
       });
       const byCoach = {};
@@ -6080,18 +6118,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     // capacity) on this month's grid, and vice versa. A swimmer saved
     // before scheduleMonth existed is treated as "this month".
     swimmers.forEach((s) => {
-      if ((s.scheduleMonth || monthKey()) === scheduleMonth) {
-        addBooking(s.coachId, s.day, s.time, s.sessionType, s.level);
-        // A swimmer with a second weekly session (different coach or slot)
-        // shows up under that booking too — same swimmer, two commitments.
-        if (s.day2 && s.time2) addBooking(s.coachId2, s.day2, s.time2, s.sessionType2, s.level);
-      }
-      if (s.nextSchedule && s.nextSchedule.scheduleMonth === scheduleMonth) {
-        addBooking(s.nextSchedule.coachId, s.nextSchedule.day, s.nextSchedule.time, s.nextSchedule.sessionType, s.level);
-        if (s.nextSchedule.day2 && s.nextSchedule.time2) {
-          addBooking(s.nextSchedule.coachId2, s.nextSchedule.day2, s.nextSchedule.time2, s.nextSchedule.sessionType2, s.level);
-        }
-      }
+      const ms = getMonthlySchedule(s, scheduleMonth);
+      if (!ms) return;
+      addBooking(ms.coachId, ms.day, ms.time, ms.sessionType, s.level);
+      if (ms.day2 && ms.time2) addBooking(ms.coachId2, ms.day2, ms.time2, ms.sessionType2, s.level);
     });
     const bookingsById = {};
     Object.keys(bookingsMapById).forEach((coachId) => {
