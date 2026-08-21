@@ -3441,42 +3441,6 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           Generate new PIN
         </button>
       </div>
-      {role !== "admin" && (
-        <div className="mt-4 border border-slate-200 rounded-xl p-4 bg-slate-50">
-          <div className="font-semibold text-slate-800 mb-1">Program / level access</div>
-          <div className="text-xs text-slate-500 mb-3">Choose which swimmers this staff member can follow for technical monitoring, even when another coach owns their class.</div>
-          <div className="grid sm:grid-cols-2 gap-2 mb-3">
-            {Object.keys(PROGRAM_LEVEL_SCOPE).map((program) => (
-              <label key={program} className="flex items-center gap-2 text-sm text-slate-700 bg-white border border-slate-200 rounded-lg px-3 py-2">
-                <input type="checkbox" checked={programAccess.includes(program)} onChange={(e) => setProgramAccess(prev => e.target.checked ? [...new Set([...prev, program])] : prev.filter(x => x !== program))} />
-                {program}
-              </label>
-            ))}
-          </div>
-          <label className="text-xs text-slate-500 mb-1 block">Specific levels (optional)</label>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {LEVELS.map((l) => (
-              <label key={l} className="flex items-center gap-2 text-xs text-slate-700 bg-white border border-slate-200 rounded-lg px-2 py-1.5">
-                <input type="checkbox" checked={levelAccess.includes(l)} onChange={(e) => setLevelAccess(prev => e.target.checked ? [...new Set([...prev, l])] : prev.filter(x => x !== l))} />
-                {l}
-              </label>
-            ))}
-          </div>
-        </div>
-      )}
-      {role !== "admin" && (
-        <div className="mt-4 border border-slate-200 rounded-xl p-4 bg-white">
-          <div className="font-semibold text-slate-800 mb-3">Granular permissions</div>
-          <div className="grid sm:grid-cols-2 gap-2">
-            {PERMISSION_DEFS.map(([key, label]) => (
-              <label key={key} className="flex items-center gap-2 text-sm text-slate-700 border border-slate-100 rounded-lg px-3 py-2">
-                <input type="checkbox" checked={!!permissions[key]} onChange={(e) => setPermissions(prev => ({ ...prev, [key]: e.target.checked }))} />
-                {label}
-              </label>
-            ))}
-          </div>
-        </div>
-      )}
       {error && <div className="text-red-500 text-sm mb-3">{error}</div>}
       <div className="flex gap-2">
         <button
