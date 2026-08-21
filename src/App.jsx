@@ -1274,6 +1274,7 @@ const ROLES = [
   { id: "admin", label: "Admin (full access)" },
   { id: "branch_admin", label: "Branch admin manager (full access)" },
   { id: "branch_manager", label: "Branch manager (view only)" },
+  { id: "technical_director", label: "Technical director (assigns coaches to swimmers)" },
   { id: "technical", label: "Technical (search & check-in only)" },
   { id: "coach", label: "Coach (own schedule & swimmers only)" },
 ];
@@ -2924,6 +2925,19 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
       }
     }
 
+    // Safety net: if this save is actually changing an existing day/time
+    // (not just setting one for the first time), keep a record of what it
+    // used to be under its old scheduleMonth — so accidentally overwriting
+    // the wrong month's slot (e.g. meaning to book next month but leaving
+    // this on "current") never permanently loses the old schedule. Only
+    // acts when day/time genuinely changed, so normal saves that leave the
+    // schedule alone don't pile up duplicate history entries.
+    const oldScheduleHistory = initial && (initial.day !== day || initial.time !== time) && initial.day && initial.time
+      ? [
+          ...(initial.scheduleHistory || []),
+          { day: initial.day, time: initial.time, date: `${initial.scheduleMonth || monthKey()}-01` },
+        ]
+      : initial?.scheduleHistory || [];
 
     const record = {
       // Preserve every field this form doesn't manage (skills ratings,
@@ -2940,6 +2954,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
       day,
       time,
       scheduleMonth,
+      scheduleHistory: oldScheduleHistory,
       sessionType,
       coachId: coachId || null,
       day2: hasSecondSlot ? day2 : "",
@@ -3007,19 +3022,26 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           </select>
         </div>
         {!isNew && (
-        <div>
-          <label className="text-xs text-slate-500 mb-1 block">Schedule for month</label>
-          <select
-            value={scheduleMonth}
-            onChange={(e) => handleScheduleMonthChange(e.target.value)}
-            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
-          >
-            <option value={monthKey()}>{monthLabel(monthKey())} (current)</option>
-            <option value={nextMonthKey()}>{monthLabel(nextMonthKey())} (next)</option>
-          </select>
-          {scheduleMonth !== (initial?.scheduleMonth || monthKey()) && (
-            <div className="text-xs text-blue-900 mt-1">New schedule for {monthLabel(scheduleMonth)} — pick a day/time/coach below</div>
-          )}
+        <div className="sm:col-span-2">
+          <div className={`rounded-xl border-2 p-3 ${scheduleMonth === (initial?.scheduleMonth || monthKey()) ? "border-slate-200 bg-slate-50" : "border-blue-400 bg-blue-50"}`}>
+            <label className="text-xs font-semibold text-slate-700 mb-1 block">
+              ⚠️ Which month are you editing the schedule for?
+            </label>
+            <select
+              value={scheduleMonth}
+              onChange={(e) => handleScheduleMonthChange(e.target.value)}
+              className="w-full border border-slate-300 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white font-medium"
+            >
+              <option value={monthKey()}>{monthLabel(monthKey())} (current)</option>
+              <option value={nextMonthKey()}>{monthLabel(nextMonthKey())} (next)</option>
+            </select>
+            <div className="text-xs text-slate-500 mt-1.5">
+              This swimmer's schedule currently on file is for <strong>{monthLabel(initial?.scheduleMonth || monthKey())}</strong>.
+              {scheduleMonth === (initial?.scheduleMonth || monthKey())
+                ? " You're about to change that month's schedule — pick \"next\" above instead if you meant to book a future month."
+                : ` You're booking ${monthLabel(scheduleMonth)} — their ${monthLabel(initial?.scheduleMonth || monthKey())} schedule below won't be touched.`}
+            </div>
+          </div>
         </div>
         )}
         {!isNew && (
@@ -3066,13 +3088,13 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
         )}
         {!isNew && (
         <div>
-          <label className="text-xs text-slate-500 mb-1 block">Coach</label>
+          <label className="text-xs text-slate-500 mb-1 block">Coach (optional — can be assigned later)</label>
           <select
             value={coachId}
             onChange={(e) => setCoachId(e.target.value)}
             className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
           >
-            <option value="">No coach assigned</option>
+            <option value="">No coach assigned yet</option>
             {(coaches || []).filter((c) => c.branch === branch && !isCoachClosedAt(c, day, time)).map((c) => (
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
@@ -4408,6 +4430,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   // Editor and full access can both add/edit swimmers, coaches, schedules,
   // payments — everything short of deleting things or managing accounts.
   const canEditContent = myAccessLevel === "full" || myAccessLevel === "editor";
+  // A technical director's whole job is assigning coaches to swimmers who
+  // already have a day/time booked — they get this one narrow permission
+  // regardless of their accessLevel, without unlocking full editing.
+  const canAssignCoaches = canEditContent || role === "technical_director";
 
   const loadActivityLog = useCallback(async () => {
     if (!canEdit) return;
@@ -5039,13 +5065,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     // and every action on it (payments, freezing, editing...) reads/writes
     // the full roster fresh each time via fetchAllSwimmers/updateSwimmerById
     // instead of keeping it sitting in state.
-    if (tab === "reports" || tab === "coaches" || tab === "schedule" || tab === "dashboard") loadSwimmers();
+    if (tab === "reports" || tab === "coaches" || tab === "schedule" || tab === "dashboard" || tab === "coachassign") loadSwimmers();
     const t = setInterval(() => {
       loadRequests();
       loadCoaches();
       if (tab === "reports") loadExpenses();
       if (tab === "accounts") loadAccounts();
-      if (tab === "reports" || tab === "coaches" || tab === "schedule" || tab === "dashboard") loadSwimmers();
+      if (tab === "reports" || tab === "coaches" || tab === "schedule" || tab === "dashboard" || tab === "coachassign") loadSwimmers();
     }, 15000);
     return () => clearInterval(t);
   }, [authed, tab, loadRequests, loadSwimmers, loadCoaches, loadExpenses, loadAccounts, loadAchievements, loadMyAccessLevel, loadMyPayrollAccess]);
@@ -6105,6 +6131,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         >
           <LayoutGrid className="w-4 h-4" /> Dashboard
         </button>
+        {canAssignCoaches && (
+          <button
+            onClick={() => setTab("coachassign")}
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+              tab === "coachassign" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+            }`}
+          >
+            <Users className="w-4 h-4" /> Coach Assignments
+          </button>
+        )}
         {canEditContent && (
           <button
             onClick={() => setTab("registrations")}
@@ -6472,6 +6508,85 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <span className="text-xs font-medium text-slate-600">{action.label}</span>
                 </button>
               ))}
+            </div>
+          </div>
+        );
+      })()}
+
+      {tab === "coachassign" && canAssignCoaches && (() => {
+        const needsCoach = swimmers.filter((s) => s.day && s.time && !s.coachId);
+        const alreadyAssigned = swimmers.filter((s) => s.day && s.time && s.coachId);
+
+        const assignCoach = async (swimmer, newCoachId) => {
+          try {
+            const updated = await updateSwimmerById(swimmer.id, (s) => ({ ...s, coachId: newCoachId || null }));
+            setSwimmers((prev) => prev.map((s) => (s.id === swimmer.id ? updated : s)));
+            logActivity(accountName, role, "Assigned coach", `${swimmer.name} → ${coaches.find((c) => c.id === newCoachId)?.name || "unassigned"}`);
+          } catch (e) {
+            loadSwimmers();
+          }
+        };
+
+        const CoachPicker = ({ s }) => (
+          <select
+            value={s.coachId || ""}
+            onChange={(e) => assignCoach(s, e.target.value)}
+            className="border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-blue-900 bg-white"
+          >
+            <option value="">— No coach —</option>
+            {coaches
+              .filter((c) => c.branch === s.branch && !isCoachClosedAt(c, s.day, s.time))
+              .map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+          </select>
+        );
+
+        return (
+          <div>
+            <div className="mb-6">
+              <h3 className="font-bold text-slate-900 mb-1">Needs a coach</h3>
+              <p className="text-xs text-slate-400 mb-3">Swimmers already scheduled (day/time set) but with no coach assigned yet.</p>
+              {needsCoach.length === 0 ? (
+                <div className="text-sm text-slate-400 bg-white rounded-xl border border-slate-200 p-6 text-center">Everyone scheduled has a coach 🎉</div>
+              ) : (
+                <div className="space-y-2">
+                  {needsCoach.map((s) => (
+                    <div key={s.id} className="bg-white rounded-xl border border-amber-200 bg-amber-50/40 p-4 flex items-center justify-between gap-3 flex-wrap">
+                      <div>
+                        <div className="font-semibold text-slate-800 text-sm">{s.name}</div>
+                        <div className="text-xs text-slate-400">
+                          {DAY_GROUPS.find((d) => d.id === s.day)?.label || s.day} · {s.time} · {s.level}
+                        </div>
+                      </div>
+                      <CoachPicker s={s} />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <h3 className="font-bold text-slate-900 mb-1">Already assigned</h3>
+              <p className="text-xs text-slate-400 mb-3">Change a swimmer's coach any time — no need to open their full profile.</p>
+              {alreadyAssigned.length === 0 ? (
+                <div className="text-sm text-slate-400 bg-white rounded-xl border border-slate-200 p-6 text-center">No one has a coach assigned yet</div>
+              ) : (
+                <div className="space-y-2">
+                  {alreadyAssigned.map((s) => (
+                    <div key={s.id} className="bg-white rounded-xl border border-slate-200 p-4 flex items-center justify-between gap-3 flex-wrap">
+                      <div>
+                        <div className="font-semibold text-slate-800 text-sm">{s.name}</div>
+                        <div className="text-xs text-slate-400">
+                          {DAY_GROUPS.find((d) => d.id === s.day)?.label || s.day} · {s.time} · {s.level}
+                          {" · "}currently <span className="font-medium text-slate-600">{coaches.find((c) => c.id === s.coachId)?.name || "—"}</span>
+                        </div>
+                      </div>
+                      <CoachPicker s={s} />
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         );
@@ -10929,6 +11044,10 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
   const [role, setRole] = useState(initial?.role || "technical");
   const [levelRestriction, setLevelRestriction] = useState(initial?.levelRestriction || "");
   const [branchRestriction, setBranchRestriction] = useState(initial?.branchRestriction || "");
+  // "" means "create a brand-new coach profile using this account's name"
+  // — the default, since most coach accounts are made before any matching
+  // coach profile exists. Picking an existing coach from the list links to
+  // that one instead, for when the profile was already set up separately.
   const [linkedCoachId, setLinkedCoachId] = useState(initial?.linkedCoachId || "");
   const [expectedStartTime, setExpectedStartTime] = useState(initial?.expectedStartTime || "");
   const [monthlySalary, setMonthlySalary] = useState(initial?.monthlySalary || "");
@@ -10944,9 +11063,26 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
     if (!name.trim()) return setError("Please enter a name");
     if (!username.trim()) return setError("Please enter a username");
     if (!password.trim()) return setError("Please enter a password");
-    if (role === "coach" && !linkedCoachId) return setError("Choose which coach this account logs in as");
     setSaving(true);
     try {
+      // If this is a coach account with no existing coach picked, create
+      // the coach profile right now instead of making the admin do it as
+      // a separate step in the Coaches tab first.
+      let finalCoachId = linkedCoachId;
+      if (role === "coach" && !linkedCoachId) {
+        const allCoaches = await loadCollection(STORE_KEYS.coaches);
+        const newCoach = {
+          id: genId(),
+          name: name.trim(),
+          branch: BRANCHES[0].id,
+          offDays: [],
+          offSlots: [],
+          createdAt: new Date().toISOString(),
+        };
+        const res = await saveCollection(STORE_KEYS.coaches, [...allCoaches, newCoach]);
+        if (!res) throw new Error("Could not create the coach profile — please try again");
+        finalCoachId = newCoach.id;
+      }
       await onSave({
         id: recordIdRef.current,
         name: name.trim(),
@@ -10955,7 +11091,7 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
         role,
         levelRestriction: role === "technical" ? levelRestriction || null : null,
         branchRestriction: role === "admin" ? null : branchRestriction || null,
-        linkedCoachId: role === "coach" ? linkedCoachId : null,
+        linkedCoachId: role === "coach" ? finalCoachId : null,
         expectedStartTime: expectedStartTime || null,
         monthlySalary: monthlySalary ? Number(monthlySalary) : null,
         overtimeHourlyRate: overtimeHourlyRate ? Number(overtimeHourlyRate) : null,
@@ -11045,14 +11181,16 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
               onChange={(e) => setLinkedCoachId(e.target.value)}
               className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
             >
-              <option value="">— Choose —</option>
+              <option value="">+ Create a new coach profile named "{name.trim() || "..."}"</option>
               {coaches.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
+                <option key={c.id} value={c.id}>{c.name} (existing)</option>
               ))}
             </select>
-            {coaches.length === 0 && (
-              <div className="text-xs text-amber-600 mt-1">No coaches added yet — add them from the Coaches tab first.</div>
-            )}
+            <div className="text-xs text-slate-400 mt-1">
+              {linkedCoachId
+                ? "Linking to an existing coach profile — nothing new gets created."
+                : "A new coach profile is created automatically when you save, using the name above."}
+            </div>
           </div>
         )}
         <div>
@@ -13598,7 +13736,7 @@ function CoursesPortalView({ onBack }) {
   );
 }
 
-function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff, onCoach, onStaffPortal, onParentPortal }) {
+function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff, onStaffPortal, onParentPortal }) {
   const hasPhotos = CONFIG.heroPhotos && CONFIG.heroPhotos.length > 0;
   const [menuOpen, setMenuOpen] = useState(false);
   const [loginPickerOpen, setLoginPickerOpen] = useState(false);
@@ -13810,6 +13948,9 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
       <footer className="py-8 text-center text-slate-400 text-sm flex flex-col items-center gap-2">
         <img src={CONFIG.logoDataUri} alt={CONFIG.academyName} className="w-8 h-8 object-contain opacity-80" />
         <span>{CONFIG.academyName} © {new Date().getFullYear()}</span>
+        <a href="/_signup" className="text-xs text-slate-300 hover:text-slate-400 underline">
+          Own a swim academy? Register yours here
+        </a>
       </footer>
     </div>
   );
@@ -14118,6 +14259,36 @@ function FeedbackCard({ swimmer }) {
    in `profiles`, so the gateway doesn't know which academy they belong to
    until they tell it). Academy names/slugs are public info (the same
    thing a parent sees on the sign-up page), so this is a safe lookup. */
+/* Remembers the person's academy on this device (localStorage), so the
+   "which academy?" step in the login gateway only has to happen once —
+   exactly like iClassPro's Staff Portal app remembering the organization's
+   account name until you clear it. Next visit, the gateway skips straight
+   past AcademyScopedGatewayLogin's picker and into the role's own login. */
+const LAST_ACADEMY_KEY = "swim_last_academy";
+function getSavedAcademy() {
+  try {
+    const raw = localStorage.getItem(LAST_ACADEMY_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+function saveAcademyChoice(academy) {
+  try {
+    localStorage.setItem(LAST_ACADEMY_KEY, JSON.stringify({ id: academy.id, slug: academy.slug, name: academy.name }));
+  } catch {
+    // localStorage can fail (private browsing, storage full) — worst case
+    // they're just asked to pick their academy again next time.
+  }
+}
+function clearSavedAcademy() {
+  try {
+    localStorage.removeItem(LAST_ACADEMY_KEY);
+  } catch {
+    // nothing to do — see saveAcademyChoice
+  }
+}
+
 function AcademyPicker({ value, onChange }) {
   const [query, setQuery] = useState(value?.name || "");
   const [results, setResults] = useState([]);
@@ -14174,20 +14345,31 @@ function AcademyPicker({ value, onChange }) {
   );
 }
 
-/* The single link everyone uses. Asks who's logging in first, then — for
-   roles that don't have a global account (parent/coach/staff, unlike
-   admin which signs in with Supabase Auth directly) — which academy,
-   before sending them straight to that academy's own login for their
-   role. No detour through the academy's public marketing page. */
+/* The single link everyone uses. Asks who's logging in first, then:
+   - Admin signs in with a real Supabase Auth email+password (global account).
+   - Parent and Coach/Pool staff pick their academy — but only the first
+     time on this device (see getSavedAcademy/saveAcademyChoice above);
+     after that they land straight on their role's own login, no re-typing
+     the academy every visit. */
 function GatewayView() {
-  const [role, setRole] = useState(null); // "admin" | "parent" | "coach" | "staff" | null
+  const [role, setRole] = useState(null); // "admin" | "parent" | "staff" | null
+  const [savedAcademy, setSavedAcademy] = useState(() => getSavedAcademy());
 
   const roleOptions = [
     { id: "parent", label: "Parent", sub: "Check progress & renew", icon: Star },
-    { id: "coach", label: "Coach", sub: "Log in with your PIN", icon: User },
-    { id: "staff", label: "Pool staff / Front desk", sub: "Attendance & schedules", icon: CalendarCheck },
+    { id: "staff", label: "Coach / Pool staff", sub: "Pick your academy, then log in", icon: CalendarCheck },
     { id: "admin", label: "Admin / Academy owner", sub: "Full dashboard access", icon: Bell },
   ];
+
+  const goToRole = (id) => {
+    // Parent and staff already have a remembered academy on this device —
+    // skip straight to their login instead of asking again.
+    if (savedAcademy && (id === "parent" || id === "staff")) {
+      window.location.href = id === "parent" ? `/${savedAcademy.slug}/parent` : `/${savedAcademy.slug}/staffportal`;
+      return;
+    }
+    setRole(id);
+  };
 
   if (!role) {
     return (
@@ -14197,12 +14379,24 @@ function GatewayView() {
             <Waves className="w-7 h-7 text-white" />
           </div>
           <h2 className="text-xl font-bold text-slate-900 mb-1 text-center">Swimming Academy Management</h2>
-          <p className="text-sm text-slate-400 mb-6 text-center">Who's logging in?</p>
+          <p className="text-sm text-slate-400 mb-1 text-center">Who's logging in?</p>
+          {savedAcademy && (
+            <p className="text-xs text-slate-400 mb-6 text-center">
+              Academy: <span className="font-semibold text-slate-600">{savedAcademy.name}</span>{" "}
+              <button
+                onClick={() => { clearSavedAcademy(); setSavedAcademy(null); }}
+                className="underline hover:text-slate-600"
+              >
+                Not you? Change
+              </button>
+            </p>
+          )}
+          {!savedAcademy && <div className="mb-6" />}
           <div className="space-y-2">
             {roleOptions.map((opt) => (
               <button
                 key={opt.id}
-                onClick={() => setRole(opt.id)}
+                onClick={() => goToRole(opt.id)}
                 className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-slate-200 hover:border-blue-900 hover:bg-blue-50/50 transition text-left"
               >
                 <opt.icon className="w-5 h-5 text-blue-900 shrink-0" />
@@ -14300,28 +14494,26 @@ function AdminGatewayLogin({ onBack }) {
 }
 
 /* Parent / Coach / Pool staff — none of these have a global account, so
-   this asks which academy first, then sends them straight to that
-   academy's own login for their role (parents go all the way in, since
-   the parent portal already lives at its own URL; coach/staff land on
-   their academy's page ready to pick their PIN/password login in one
-   more tap, since those don't have their own URLs yet). */
+   (exactly like iClassPro's "enter your organization" step) this asks
+   which academy first, then sends them straight into that academy's own
+   login for their role: parents go all the way into the parent portal;
+   coach/staff land directly on the username+password login screen,
+   already knowing which academy they're signing into. */
 function AcademyScopedGatewayLogin({ role, onBack }) {
   const [academy, setAcademy] = useState(null);
 
   const titles = {
     parent: "Parent — which academy?",
-    coach: "Coach — which academy?",
-    staff: "Staff — which academy?",
+    staff: "Coach / Pool staff — which academy?",
   };
 
   const go = () => {
     if (!academy) return;
+    saveAcademyChoice(academy);
     if (role === "parent") {
       window.location.href = `/${academy.slug}/parent`;
     } else {
-      // Coach and front-desk staff logins don't have their own URL yet —
-      // land on the academy's page, one tap away from their login.
-      window.location.href = `/${academy.slug}`;
+      window.location.href = `/${academy.slug}/staffportal`;
     }
   };
 
@@ -14368,12 +14560,16 @@ function SignupView() {
   const slugify = (text) =>
     text.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
+  const [emailAccountWarning, setEmailAccountWarning] = useState("");
+
   const submit = async () => {
     setError("");
+    setEmailAccountWarning("");
     if (!name.trim()) return setError("Enter your academy's name");
     const cleanSlug = slugify(slug || name);
     if (!cleanSlug) return setError("Enter a valid link name (letters, numbers, dashes)");
-    if (!adminPassword || adminPassword.length < 4) return setError("Choose a password of at least 4 characters");
+    if (!contactEmail.trim() || !/^\S+@\S+\.\S+$/.test(contactEmail.trim())) return setError("Enter a valid email — you'll log in with it");
+    if (!adminPassword || adminPassword.length < 6) return setError("Choose a password of at least 6 characters");
     if (adminPassword !== confirmPassword) return setError("Passwords don't match");
     setSubmitting(true);
     try {
@@ -14392,14 +14588,40 @@ function SignupView() {
         .single();
       if (insertError) throw new Error(insertError.message.includes("duplicate") ? "That link name is already taken — try another" : insertError.message);
 
-      // Set their admin login password directly — this page runs before
-      // window.__academy is resolved to anything (this URL isn't a real
-      // academy's own page), so this writes straight to their new row
-      // instead of going through the usual window.storage helpers.
+      // Set their legacy "admin" username password too — this is the
+      // fallback login shown on the academy's own page, so they're never
+      // locked out even if the real email account below can't be created.
       const { error: pwError } = await supabase
         .from("app_storage")
         .upsert({ key: "admin-password-override", value: adminPassword, academy_id: data.id, updated_at: new Date().toISOString() });
       if (pwError) throw new Error("Academy created, but couldn't set the password — please contact support");
+
+      // Create a real Supabase Auth account with their email + the same
+      // password, and link it to this academy — this is what lets them
+      // log in with email + password from the universal /_login gateway
+      // afterwards, instead of only the per-academy "admin" username.
+      // Kept non-fatal: if this fails (e.g. email already registered,
+      // or a confirmation step is required), the academy itself is still
+      // created and the legacy admin login above still works.
+      try {
+        const { data: authData, error: signUpError } = await supabase.auth.signUp({
+          email: contactEmail.trim(),
+          password: adminPassword,
+        });
+        if (signUpError) throw signUpError;
+        if (authData?.user?.id) {
+          const { error: profileError } = await supabase
+            .from("profiles")
+            .upsert({ id: authData.user.id, academy_id: data.id, is_super_admin: false });
+          if (profileError) throw profileError;
+        }
+      } catch (authErr) {
+        setEmailAccountWarning(
+          "Your academy was created, but the email+password login couldn't be set up (" +
+            (authErr?.message || "unknown error") +
+            "). You can still log in with the admin username below, or ask support to link your email."
+        );
+      }
 
       setCreated({ name: name.trim(), slug: cleanSlug });
     } catch (e) {
@@ -14422,9 +14644,13 @@ function SignupView() {
           <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 mb-4 text-sm font-mono text-blue-900 break-all">
             {link}
           </div>
-          <p className="text-xs text-slate-400 mb-6">
-            Log in there with username <strong>admin</strong> and the password you just chose.
-          </p>
+          {emailAccountWarning ? (
+            <p className="text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2 mb-6 text-left">{emailAccountWarning}</p>
+          ) : (
+            <p className="text-xs text-slate-400 mb-6">
+              Log in with your email and password from the <a href="/_login" className="underline">login page</a>, or with username <strong>admin</strong> and the same password on your academy's own page.
+            </p>
+          )}
           <a
             href={link}
             className="inline-block px-6 py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900"
@@ -14476,20 +14702,23 @@ function SignupView() {
             />
           </div>
           <div>
-            <label className="text-xs text-slate-500 mb-1 block">Your email (optional)</label>
+            <label className="text-xs text-slate-500 mb-1 block">Your email — you'll log in with this</label>
             <input
+              type="email"
               value={contactEmail}
               onChange={(e) => setContactEmail(e.target.value)}
               className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+              autoComplete="username"
             />
           </div>
           <div>
-            <label className="text-xs text-slate-500 mb-1 block">Choose an admin password</label>
+            <label className="text-xs text-slate-500 mb-1 block">Choose a password (at least 6 characters)</label>
             <input
               type="password"
               value={adminPassword}
               onChange={(e) => setAdminPassword(e.target.value)}
               className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+              autoComplete="new-password"
             />
           </div>
           <div>
@@ -14965,7 +15194,13 @@ class ErrorBoundary extends React.Component {
 
 export default function App() {
   const [view, setView] = useState(
-    secondPathSegment() === "parent" ? "parentportal" : secondPathSegment() === "admin" ? "admin" : "home"
+    secondPathSegment() === "parent"
+      ? "parentportal"
+      : secondPathSegment() === "admin"
+      ? "admin"
+      : secondPathSegment() === "staffportal"
+      ? "staffportal"
+      : "home"
   );
   const [chosenPlan, setChosenPlan] = useState(null);
   const [renewSwimmer, setRenewSwimmer] = useState(null);
@@ -14975,9 +15210,17 @@ export default function App() {
   // A reserved path that never maps to a real academy — the super admin's
   // own panel for registering new academies.
   const isSuperAdminRoute = academySlugFromPath() === "_admin";
+  // Reserved paths for the iClassPro-style universal entry points: "who's
+  // logging in" (then, for admin, a real email+password sign-in; for
+  // parent/coach/staff, an academy picker before their normal login) and
+  // the self-service "register your academy" signup flow. Neither of
+  // these belongs to any one academy, so — like _admin — they skip
+  // academy resolution entirely.
+  const isLoginGatewayRoute = academySlugFromPath() === "_login";
+  const isSignupRoute = academySlugFromPath() === "_signup";
 
   useEffect(() => {
-    if (isSuperAdminRoute) return;
+    if (isSuperAdminRoute || isLoginGatewayRoute || isSignupRoute) return;
     resolveAcademy().then((academy) => {
       if (!academy) {
         setAcademyStatus("not-found");
@@ -15002,12 +15245,28 @@ export default function App() {
         setAcademyStatus("ready");
       });
     });
-  }, [isSuperAdminRoute]);
+  }, [isSuperAdminRoute, isLoginGatewayRoute, isSignupRoute]);
 
   if (isSuperAdminRoute) {
     return (
       <ErrorBoundary>
         <SuperAdminView />
+      </ErrorBoundary>
+    );
+  }
+
+  if (isLoginGatewayRoute) {
+    return (
+      <ErrorBoundary>
+        <GatewayView />
+      </ErrorBoundary>
+    );
+  }
+
+  if (isSignupRoute) {
+    return (
+      <ErrorBoundary>
+        <SignupView />
       </ErrorBoundary>
     );
   }
@@ -15051,7 +15310,6 @@ export default function App() {
           onCourses={() => setView("courses")}
           onAdmin={() => setView("admin")}
           onStaff={() => setView("staff")}
-          onCoach={() => setView("coach")}
           onStaffPortal={() => setView("staffportal")}
           onParentPortal={() => setView("parentportal")}
         />
@@ -15096,8 +15354,6 @@ export default function App() {
       {view === "admin" && <AdminView onExit={() => setView("home")} />}
 
       {view === "staff" && <StaffView onExit={() => setView("home")} />}
-
-      {view === "coach" && <CoachView onExit={() => setView("home")} />}
 
       {view === "staffportal" && <StaffPortal onExit={() => setView("home")} />}
 
