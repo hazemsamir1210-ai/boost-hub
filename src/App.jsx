@@ -189,11 +189,58 @@ const CONFIG = {
 const PLANS = [
   { id: "baby", name: "Baby", price: 3500, desc: "Monthly baby class subscription.", photo: "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%22200%22%20height%3D%22200%22%3E%3Crect%20width%3D%22200%22%20height%3D%22200%22%20fill%3D%22%230369a1%22/%3E%3Ctext%20x%3D%22100%22%20y%3D%22115%22%20font-family%3D%22sans-serif%22%20font-size%3D%2260%22%20text-anchor%3D%22middle%22%3E%F0%9F%91%B6%3C/text%3E%3C/svg%3E" },
   { id: "group", name: "Group", price: 1600, desc: "Monthly group subscription." },
+  { id: "exp", name: "Exp", price: 2000, desc: "Monthly experience subscription." },
   { id: "semi-private", name: "Semi Private", price: 2000, desc: "Monthly semi-private subscription." },
   { id: "private", name: "Private", price: 4200, desc: "Monthly fully private subscription." },
 ];
 
 /* Swimmer levels — Baby gets a 30-minute schedule automatically */
+const PLAN_PRICES = Object.fromEntries(PLANS.map((p) => [p.id, Number(p.price) || 0]));
+
+function inferPlanId(swimmer) {
+  if (swimmer?.planId && PLAN_PRICES[swimmer.planId] != null) return swimmer.planId;
+  if (swimmer?.level === "Baby") return "baby";
+  if (["Exp", "Exp 2", "Exp 3"].includes(swimmer?.level)) return "exp";
+  if (swimmer?.sessionType === "private") return "private";
+  if (swimmer?.sessionType === "semi-private") return "semi-private";
+  return "group";
+}
+
+function getMonthlyBilling(swimmer, key) {
+  const saved = swimmer?.billingByMonth?.[key];
+  if (saved) return saved;
+  const planId = inferPlanId(swimmer);
+  const plan = PLANS.find((p) => p.id === planId) || { name: swimmer?.planName || planId, price: Number(swimmer?.planPrice) || 0 };
+  const originalPrice = Number(plan.price) || 0;
+  const payments = (swimmer?.paymentLedger || []).filter((p) => p.paidMonth === key || p.month === key);
+  const paidAmount = payments.reduce((sum, p) => sum + (Number(p.price ?? p.amount) || 0), 0);
+  const finalAmount = originalPrice;
+  return { month: key, planId, planName: plan.name, originalPrice, discountPercent: 0, discountAmount: 0, finalAmount, paidAmount, balance: Math.max(0, finalAmount - paidAmount), status: paidAmount >= finalAmount && finalAmount > 0 ? "paid" : paidAmount > 0 ? "partial" : "unpaid" };
+}
+
+function getProgramForLevel(level) {
+  return Object.entries(PROGRAM_LEVEL_SCOPE).find(([, levels]) => levels.includes(level))?.[0] || "";
+}
+
+function getMonthlySchedule(swimmer, key) {
+  const monthly = swimmer?.monthlySchedules?.[key];
+  if (monthly) return monthly;
+  if (swimmer?.nextSchedule?.scheduleMonth === key) return swimmer.nextSchedule;
+  if ((swimmer?.scheduleMonth || monthKey()) === key && (swimmer?.day || swimmer?.time)) {
+    return {
+      day: swimmer.day || "", time: swimmer.time || "", sessionType: swimmer.sessionType || "group", coachId: swimmer.coachId || null,
+      day2: swimmer.day2 || "", time2: swimmer.time2 || "", sessionType2: swimmer.sessionType2 || "", coachId2: swimmer.coachId2 || null,
+      classId: swimmer.classId || null, substituteCoachId: swimmer.substituteCoachId || null, substituteDate: swimmer.substituteDate || "",
+      scheduleMonth: key,
+    };
+  }
+  return null;
+}
+
+function classIdForSchedule({ branch, level, day, time, sessionType, month }) {
+  return [month, branch || "", level || "", sessionType || "", day || "", time || ""].join("|");
+}
+
 const LEVELS = [
   "Baby", "Exp", "Exp 2", "Exp 3",
   "Level 1", "Level 2", "Level 3", "Level 4",
@@ -1286,6 +1333,71 @@ const ROLES = [
   { id: "coach", label: "Coach (own schedule & swimmers only)" },
 ];
 
+// Granular permissions. Roles provide sensible defaults, while each account
+// can override them individually. Program/level access is separate from
+// the coach's own roster so a STAR lead can follow STAR swimmers coached by
+// other staff without gaining administrative access.
+const PERMISSION_DEFS = [
+  ["viewSwimmers", "View swimmers"],
+  ["manageSwimmers", "Add / edit swimmers"],
+  ["manageSchedule", "Create / edit / cancel bookings"],
+  ["manageWaitlist", "Manage waitlist"],
+  ["manageSubstitute", "Assign substitute coach"],
+  ["viewSwimmerAttendance", "View swimmer attendance"],
+  ["takeSwimmerAttendance", "Take swimmer attendance"],
+  ["editOldAttendance", "Edit old swimmer attendance"],
+  ["viewPayments", "View payment status / amounts"],
+  ["recordPayments", "Record payments"],
+  ["manageDiscounts", "Apply discounts"],
+  ["refundPayments", "Refund / void payments"],
+  ["viewFinancialReports", "View financial reports"],
+  ["managePlans", "Manage plans / prices"],
+  ["manageCoaches", "Add / edit coaches"],
+  ["assignCoaches", "Change main coach"],
+  ["viewCoachReports", "View coach reports / KPI"],
+  ["manageCurriculum", "Manage levels / curriculum"],
+  ["viewAssessments", "View swimmer assessments"],
+  ["editAssessments", "Edit swimmer assessments"],
+  ["viewStaffAttendance", "View staff attendance / payroll"],
+  ["editStaffAttendance", "Edit staff attendance / payroll"],
+  ["manageExpenses", "Manage expenses"],
+  ["viewReports", "View general reports"],
+  ["manageAccounts", "Manage staff accounts / permissions"],
+];
+
+const ROLE_DEFAULT_PERMISSIONS = {
+  admin: Object.fromEntries(PERMISSION_DEFS.map(([k]) => [k, true])),
+  branch_admin: Object.fromEntries(PERMISSION_DEFS.map(([k]) => [k, true])),
+  branch_manager: { viewSwimmers:true, viewSwimmerAttendance:true, viewPayments:true, viewFinancialReports:true, viewCoachReports:true, viewAssessments:true, viewStaffAttendance:true, viewReports:true },
+  technical_director: { viewSwimmers:true, manageSchedule:true, manageWaitlist:true, manageSubstitute:true, viewSwimmerAttendance:true, takeSwimmerAttendance:true, editOldAttendance:true, viewPayments:true, manageCoaches:true, assignCoaches:true, viewCoachReports:true, viewAssessments:true, editAssessments:true, viewReports:true },
+  technical: { viewSwimmers:true, viewSwimmerAttendance:true, takeSwimmerAttendance:true, viewAssessments:true },
+  coach: { viewSwimmers:true, viewSwimmerAttendance:true, takeSwimmerAttendance:true, viewAssessments:true, editAssessments:true },
+};
+
+const PROGRAM_LEVEL_SCOPE = {
+  "Baby Swim Program": ["Baby"],
+  "Learn to Swim": ["Level 1","Level 2","Level 3","Level 4","Level 5","Level 6","Level 7","Level 8"],
+  "STAR": ["Star 1","Star 2","Star 3","Star 4"],
+  "Development Swim": ["Star 1","Star 2","Star 3","Star 4","Team"],
+  "Exp": ["Exp","Exp 2","Exp 3"],
+};
+
+function getAccountPermissions(account, role) {
+  if (role === "admin") return Object.fromEntries(PERMISSION_DEFS.map(([k]) => [k, true]));
+  const base = { ...(ROLE_DEFAULT_PERMISSIONS[role] || {}) };
+  const overrides = account?.permissions || {};
+  for (const [key] of PERMISSION_DEFS) {
+    if (typeof overrides[key] === "boolean") base[key] = overrides[key];
+  }
+  return base;
+}
+
+function levelBelongsToProgram(level, program) {
+  if (!program) return true;
+  const levels = PROGRAM_LEVEL_SCOPE[program] || [];
+  return levels.includes(level);
+}
+
 
 async function loadCollection(storeKey) {
   try {
@@ -1441,66 +1553,17 @@ function unfreezeSwimmer(swimmer) {
 // alongside clearedIfUnpaid, once per calendar month, so an advance
 // booking made while last month was still running switches over
 // automatically without anyone having to remember to do it by hand.
-function getMonthlySchedule(swimmer, key) {
-  const direct = (swimmer.monthlySchedules || []).find((x) => x.month === key);
-  if (direct) return direct;
-  const legacy = (swimmer.scheduleHistory || []).filter((x) => (x.date || "").slice(0, 7) === key);
-  if (legacy.length) {
-    return {
-      month: key,
-      day: legacy[0]?.day || "",
-      time: legacy[0]?.time || "",
-      day2: legacy[1]?.day || "",
-      time2: legacy[1]?.time || "",
-      sessionType: swimmer.sessionType || "group",
-      sessionType2: swimmer.sessionType2 || "",
-      coachId: swimmer.coachId || null,
-      coachId2: swimmer.coachId2 || null,
-    };
-  }
-  if ((swimmer.scheduleMonth || monthKey()) === key && (swimmer.day || swimmer.time)) {
-    return { month: key, day: swimmer.day || "", time: swimmer.time || "", day2: swimmer.day2 || "", time2: swimmer.time2 || "", sessionType: swimmer.sessionType || "group", sessionType2: swimmer.sessionType2 || "", coachId: swimmer.coachId || null, coachId2: swimmer.coachId2 || null };
-  }
-  return null;
-}
-
-function upsertMonthlySchedule(swimmer, schedule) {
-  const key = schedule.month;
-  const existing = [...(swimmer.monthlySchedules || [])];
-  // Migrate old scheduleHistory into monthly records the first time this swimmer is edited.
-  if (!existing.length && (swimmer.scheduleHistory || []).length) {
-    const months = [...new Set((swimmer.scheduleHistory || []).map((h) => (h.date || "").slice(0, 7)).filter(Boolean))];
-    months.forEach((m) => {
-      const hs = (swimmer.scheduleHistory || []).filter((h) => (h.date || "").slice(0, 7) === m);
-      existing.push({ month: m, day: hs[0]?.day || "", time: hs[0]?.time || "", day2: hs[1]?.day || "", time2: hs[1]?.time || "", sessionType: swimmer.sessionType || "group", sessionType2: swimmer.sessionType2 || "", coachId: swimmer.coachId || null, coachId2: swimmer.coachId2 || null });
-    });
-  }
-  return [...existing.filter((x) => x.month !== key), schedule].sort((a, b) => a.month.localeCompare(b.month));
-}
-
-function monthlySchedulesToHistory(monthlySchedules) {
-  return (monthlySchedules || []).flatMap((m) => {
-    const date = `${m.month}-01T00:00:00.000Z`;
-    const out = [];
-    if (m.day && m.time) out.push({ day: m.day, time: m.time, date });
-    if (m.day2 && m.time2) out.push({ day: m.day2, time: m.time2, date });
-    return out;
-  });
-}
-
 function promotedIfDue(swimmer, currentMonthKey) {
-  const schedule = getMonthlySchedule(swimmer, currentMonthKey);
-  if (!schedule) return swimmer;
+  const monthly = swimmer.monthlySchedules?.[currentMonthKey];
+  const source = monthly || (swimmer.nextSchedule?.scheduleMonth === currentMonthKey ? swimmer.nextSchedule : null);
+  if (!source) return swimmer;
+  const { day, time, sessionType, coachId, day2, time2, sessionType2, coachId2, classId, substituteCoachId, substituteDate } = source;
   return {
     ...swimmer,
-    day: schedule.day || "",
-    time: schedule.time || "",
-    sessionType: schedule.sessionType || "group",
-    coachId: schedule.coachId || null,
-    day2: schedule.day2 || "",
-    time2: schedule.time2 || "",
-    sessionType2: schedule.sessionType2 || "",
-    coachId2: schedule.coachId2 || null,
+    day: day || "", time: time || "", sessionType: sessionType || "group", coachId: coachId || null,
+    day2: day2 || "", time2: time2 || "", sessionType2: sessionType2 || "", coachId2: coachId2 || null,
+    classId: classId || classIdForSchedule({ branch: swimmer.branch, level: swimmer.level, day, time, sessionType, month: currentMonthKey }),
+    substituteCoachId: substituteCoachId || null, substituteDate: substituteDate || "",
     scheduleMonth: currentMonthKey,
     nextSchedule: null,
   };
@@ -1510,7 +1573,7 @@ function clearedIfUnpaid(swimmer) {
   if (isPaidThisMonth(swimmer)) return swimmer;
   if (isFrozen(swimmer)) return swimmer;
   if (!swimmer.day && !swimmer.time) return swimmer;
-  return { ...swimmer, day: "", time: "", coachId: null, day2: "", time2: "", coachId2: null, scheduleMonth: "" };
+  return { ...swimmer, day: "", time: "", coachId: null, scheduleMonth: "" };
 }
 
 /* ---------- WhatsApp click-to-chat ----------
@@ -2848,7 +2911,7 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
 /* ============================================================
    Swimmer registration form (used for both add & edit)
    ============================================================ */
-function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = false, onJoinWaitlist }) {
+function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = false, onJoinWaitlist, canManageSubstitute = true }) {
   const isNew = !initial;
   const [name, setName] = useState(initial?.name || "");
   const [age, setAge] = useState(initial?.age || "");
@@ -2856,14 +2919,18 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
   const [altPhone, setAltPhone] = useState(initial?.altPhone || "");
   const [branch, setBranch] = useState(initial?.branch || BRANCHES[0].id);
   const [level, setLevel] = useState(initial?.level || LEVELS[1]);
+  const [planId, setPlanId] = useState(initial?.planId || inferPlanId(initial || {}));
+  const [substituteCoachId, setSubstituteCoachId] = useState(initial?.substituteCoachId || "");
+  const [substituteDate, setSubstituteDate] = useState(initial?.substituteDate || "");
   const [waitlistJoined, setWaitlistJoined] = useState(false);
   // Day & time are NOT auto-picked for a new swimmer — they stay unscheduled
   // ("Not scheduled yet") until a payment is activated for them. Editing an
   // existing swimmer keeps whatever schedule they already have.
-  const [day, setDay] = useState(initial?.day || "");
-  const [time, setTime] = useState(initial?.time || "");
-  const [sessionType, setSessionType] = useState(initial?.sessionType || "group");
-  const [coachId, setCoachId] = useState(initial?.coachId || "");
+  const initialSchedule = getMonthlySchedule(initial || {}, initial?.scheduleMonth || monthKey()) || {};
+  const [day, setDay] = useState(initialSchedule.day || initial?.day || "");
+  const [time, setTime] = useState(initialSchedule.time || initial?.time || "");
+  const [sessionType, setSessionType] = useState(initialSchedule.sessionType || initial?.sessionType || "group");
+  const [coachId, setCoachId] = useState(initialSchedule.coachId || initial?.coachId || "");
   // Which calendar month this day/time/coach is actually for — lets the
   // admin pre-book NEXT month's slot while THIS month is still running,
   // without that slot getting confused with (or blocked by) this month's
@@ -2893,17 +2960,17 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
     setScheduleMonth(newMonth);
     const saved = getMonthlySchedule(initial || {}, newMonth);
     if (saved) {
-      setDay(saved.day || "");
-      setTime(saved.time || "");
-      setCoachId(saved.coachId || "");
-      setDay2(saved.day2 || "");
-      setTime2(saved.time2 || "");
-      setCoachId2(saved.coachId2 || "");
+      setDay(saved.day || ""); setTime(saved.time || ""); setCoachId(saved.coachId || "");
+      setSessionType(saved.sessionType || "group");
+      setDay2(saved.day2 || ""); setTime2(saved.time2 || ""); setCoachId2(saved.coachId2 || "");
+      setSessionType2(saved.sessionType2 || "group");
       setHasSecondSlot(!!(saved.day2 && saved.time2));
+      setSubstituteCoachId(saved.substituteCoachId || "");
+      setSubstituteDate(saved.substituteDate || "");
     } else {
-      setDay(""); setTime(""); setCoachId("");
-      setDay2(""); setTime2(""); setCoachId2("");
-      setHasSecondSlot(false);
+      setDay(""); setTime(""); setCoachId(""); setDay2(""); setTime2(""); setCoachId2("");
+      setSessionType(initial?.planId === "private" ? "private" : initial?.planId === "semi-private" ? "semi-private" : "group");
+      setSessionType2("group"); setHasSecondSlot(false); setSubstituteCoachId(""); setSubstituteDate("");
     }
   };
 
@@ -2978,7 +3045,9 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
         // treated as "this month" (the only month there used to be).
         const matches = all.filter((s) => {
           const ms = getMonthlySchedule(s, scheduleMonth);
-          return !!ms && ms.coachId === coachId && ms.day === day && ms.time === time;
+          if (ms && ms.coachId === coachId && ms.day === day && ms.time === time) return true;
+          if (!ms && s.coachId === coachId && s.day === day && s.time === time && (s.scheduleMonth || monthKey()) === scheduleMonth) return true;
+          return false;
         });
         setSlotUsage(matches);
       });
@@ -2993,6 +3062,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
 
   const save = async () => {
     setError("");
+    if (!canManageSubstitute && (substituteCoachId || substituteDate) && initial) return setError("You do not have permission to assign a substitute coach");
     if (!name.trim()) return setError("Please enter the swimmer's name");
     if (!age || Number(age) <= 0) return setError("Please enter a valid age");
     if (!/^01[0-2,5][0-9]{8}$/.test(phone.trim())) return setError("Please enter a valid phone number");
@@ -3033,18 +3103,6 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
     // schedule automatically once the calendar actually reaches that
     // month (see promotedIfDue). Booking the current month works exactly
     // as it always has, updating the live fields directly.
-    const monthlySchedule = {
-      month: scheduleMonth,
-      day, time,
-      day2: hasSecondSlot ? day2 : "",
-      time2: hasSecondSlot ? time2 : "",
-      sessionType,
-      sessionType2: hasSecondSlot ? sessionType2 : "",
-      coachId: coachId || null,
-      coachId2: hasSecondSlot ? coachId2 || null : null,
-    };
-    const monthlySchedules = upsertMonthlySchedule(initial || {}, monthlySchedule);
-
     const record = isCurrentMonthBooking
       ? {
           // Preserve every field this form doesn't manage (skills ratings,
@@ -3061,8 +3119,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           day,
           time,
           scheduleMonth,
-          scheduleHistory: monthlySchedulesToHistory(monthlySchedules),
-          monthlySchedules,
+          scheduleHistory: oldScheduleHistory,
           sessionType,
           coachId: coachId || null,
           day2: hasSecondSlot ? day2 : "",
@@ -3070,6 +3127,21 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           sessionType2: hasSecondSlot ? sessionType2 : "",
           coachId2: hasSecondSlot ? coachId2 || null : null,
           notes: notes.trim(),
+          planId,
+          planName: PLANS.find((p) => p.id === planId)?.name || planId,
+          planPrice: PLAN_PRICES[planId] || 0,
+          classId: classIdForSchedule({ branch, level, day, time, sessionType, month: scheduleMonth }),
+          substituteCoachId: substituteCoachId || null,
+          substituteDate: substituteDate || "",
+          monthlySchedules: {
+            ...(initial?.monthlySchedules || {}),
+            [scheduleMonth]: {
+              day, time, sessionType, coachId: coachId || null, day2: hasSecondSlot ? day2 : "", time2: hasSecondSlot ? time2 : "",
+              sessionType2: hasSecondSlot ? sessionType2 : "", coachId2: hasSecondSlot ? coachId2 || null : null,
+              classId: classIdForSchedule({ branch, level, day, time, sessionType, month: scheduleMonth }),
+              substituteCoachId: substituteCoachId || null, substituteDate: substituteDate || "", scheduleMonth,
+            },
+          },
           paidMonths: initial?.paidMonths || [],
           levelHistory: initial?.levelHistory || [],
           trainingDates: initial?.trainingDates || [],
@@ -3087,21 +3159,26 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           branch,
           level,
           notes: notes.trim(),
-          scheduleHistory: monthlySchedulesToHistory(monthlySchedules),
-          monthlySchedules,
           parentPin: parentPin,
           createdAt: initial?.createdAt || new Date().toISOString(),
-          // The live schedule stays exactly as it already was.
+          // The live schedule stays exactly as it already was. The future month is stored independently.
+          monthlySchedules: {
+            ...(initial?.monthlySchedules || {}),
+            [scheduleMonth]: {
+              day, time, sessionType, coachId: coachId || null, day2: hasSecondSlot ? day2 : "", time2: hasSecondSlot ? time2 : "",
+              sessionType2: hasSecondSlot ? sessionType2 : "", coachId2: hasSecondSlot ? coachId2 || null : null,
+              classId: classIdForSchedule({ branch, level, day, time, sessionType, month: scheduleMonth }),
+              substituteCoachId: substituteCoachId || null, substituteDate: substituteDate || "", scheduleMonth,
+            },
+          },
+          planId,
+          planName: PLANS.find((p) => p.id === planId)?.name || planId,
+          planPrice: PLAN_PRICES[planId] || 0,
           nextSchedule: {
-            day,
-            time,
-            sessionType,
-            coachId: coachId || null,
-            day2: hasSecondSlot ? day2 : "",
-            time2: hasSecondSlot ? time2 : "",
-            sessionType2: hasSecondSlot ? sessionType2 : "",
-            coachId2: hasSecondSlot ? coachId2 || null : null,
-            scheduleMonth,
+            day, time, sessionType, coachId: coachId || null, day2: hasSecondSlot ? day2 : "", time2: hasSecondSlot ? time2 : "",
+            sessionType2: hasSecondSlot ? sessionType2 : "", coachId2: hasSecondSlot ? coachId2 || null : null,
+            classId: classIdForSchedule({ branch, level, day, time, sessionType, month: scheduleMonth }),
+            substituteCoachId: substituteCoachId || null, substituteDate: substituteDate || "", scheduleMonth,
           },
         };
 
@@ -3154,6 +3231,12 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
             {LEVELS.map((l) => (
               <option key={l} value={l}>{l}</option>
             ))}
+          </select>
+        </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Monthly plan</label>
+          <select value={planId} onChange={(e) => setPlanId(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
+            {PLANS.map((p) => <option key={p.id} value={p.id}>{p.name} — {p.price} EGP</option>)}
           </select>
         </div>
         {!isNew && (
@@ -3267,6 +3350,19 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           {waitlistJoined && <div className="text-xs text-green-600 mt-1">Added to the waitlist for this slot.</div>}
         </div>
         )}
+        {!isNew && day && time && canManageSubstitute && (
+          <div className="sm:col-span-2 border border-amber-200 bg-amber-50 rounded-xl p-3">
+            <div className="text-xs font-semibold text-amber-800 mb-2">Substitute coach (optional)</div>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <input type="date" value={substituteDate} onChange={(e) => setSubstituteDate(e.target.value)} className="w-full border border-amber-200 rounded-lg py-2.5 px-3 bg-white" />
+              <select value={substituteCoachId} onChange={(e) => setSubstituteCoachId(e.target.value)} className="w-full border border-amber-200 rounded-lg py-2.5 px-3 bg-white">
+                <option value="">No substitute</option>
+                {(coaches || []).filter((c) => c.branch === branch && c.id !== coachId && !isCoachClosedAt(c, day, time)).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div className="text-[11px] text-amber-700 mt-1">The main coach stays unchanged; this records a substitute for the selected date.</div>
+          </div>
+        )}
       </div>
 
       <label className="flex items-center gap-2 mb-3 text-sm text-slate-600 select-none">
@@ -3345,6 +3441,42 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           Generate new PIN
         </button>
       </div>
+      {role !== "admin" && (
+        <div className="mt-4 border border-slate-200 rounded-xl p-4 bg-slate-50">
+          <div className="font-semibold text-slate-800 mb-1">Program / level access</div>
+          <div className="text-xs text-slate-500 mb-3">Choose which swimmers this staff member can follow for technical monitoring, even when another coach owns their class.</div>
+          <div className="grid sm:grid-cols-2 gap-2 mb-3">
+            {Object.keys(PROGRAM_LEVEL_SCOPE).map((program) => (
+              <label key={program} className="flex items-center gap-2 text-sm text-slate-700 bg-white border border-slate-200 rounded-lg px-3 py-2">
+                <input type="checkbox" checked={programAccess.includes(program)} onChange={(e) => setProgramAccess(prev => e.target.checked ? [...new Set([...prev, program])] : prev.filter(x => x !== program))} />
+                {program}
+              </label>
+            ))}
+          </div>
+          <label className="text-xs text-slate-500 mb-1 block">Specific levels (optional)</label>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {LEVELS.map((l) => (
+              <label key={l} className="flex items-center gap-2 text-xs text-slate-700 bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+                <input type="checkbox" checked={levelAccess.includes(l)} onChange={(e) => setLevelAccess(prev => e.target.checked ? [...new Set([...prev, l])] : prev.filter(x => x !== l))} />
+                {l}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+      {role !== "admin" && (
+        <div className="mt-4 border border-slate-200 rounded-xl p-4 bg-white">
+          <div className="font-semibold text-slate-800 mb-3">Granular permissions</div>
+          <div className="grid sm:grid-cols-2 gap-2">
+            {PERMISSION_DEFS.map(([key, label]) => (
+              <label key={key} className="flex items-center gap-2 text-sm text-slate-700 border border-slate-100 rounded-lg px-3 py-2">
+                <input type="checkbox" checked={!!permissions[key]} onChange={(e) => setPermissions(prev => ({ ...prev, [key]: e.target.checked }))} />
+                {label}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
       {error && <div className="text-red-500 text-sm mb-3">{error}</div>}
       <div className="flex gap-2">
         <button
@@ -3688,7 +3820,6 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         manualPayments: [],
         levelHistory: [],
         scheduleHistory: [],
-        monthlySchedules: [],
         trainingDates: [],
         attendance: {},
         makeupSessions: [],
@@ -4562,14 +4693,52 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
   }, [role, accountName]);
 
-  const canEdit = myAccessLevel === "full"; // full access — delete, Accounts tab, settings
-  // Editor and full access can both add/edit swimmers, coaches, schedules,
-  // payments — everything short of deleting things or managing accounts.
-  const canEditContent = myAccessLevel === "full" || myAccessLevel === "editor";
-  // A technical director's whole job is assigning coaches to swimmers who
-  // already have a day/time booked — they get this one narrow permission
-  // regardless of their accessLevel, without unlocking full editing.
-  const canAssignCoaches = canEditContent || role === "technical_director";
+  const [myAccount, setMyAccount] = useState(null);
+  const [myPermissions, setMyPermissions] = useState(() => getAccountPermissions(null, role));
+  const [programAccess, setProgramAccess] = useState([]);
+  const [levelAccess, setLevelAccess] = useState([]);
+  const loadMyPermissions = useCallback(async () => {
+    if (role === "admin") {
+      setMyAccount(null); setMyPermissions(getAccountPermissions(null, role)); setProgramAccess([]); setLevelAccess([]); return;
+    }
+    if (!accountName) return;
+    try {
+      const items = await loadCollection(STORE_KEYS.accounts);
+      const mine = items.find((a) => a.name === accountName);
+      setMyAccount(mine || null);
+      setMyPermissions(getAccountPermissions(mine, role));
+      setProgramAccess(mine?.programAccess || []);
+      setLevelAccess(mine?.levelAccess || []);
+    } catch {
+      setMyPermissions(getAccountPermissions(null, role));
+    }
+  }, [role, accountName]);
+  useEffect(() => { loadMyPermissions(); }, [loadMyPermissions]);
+
+  const can = (permission) => !!myPermissions[permission];
+  const canEdit = myAccessLevel === "full" || can("manageAccounts");
+  const canEditContent = myAccessLevel === "full" || myAccessLevel === "editor" || can("manageSwimmers") || can("manageSchedule");
+  const canAssignCoaches = can("assignCoaches") || canEditContent || role === "technical_director";
+  const canManageSubstitute = can("manageSubstitute") || canEdit;
+  const canTakeSwimmerAttendance = can("takeSwimmerAttendance") || canEdit;
+  const canViewSwimmerAttendance = can("viewSwimmerAttendance") || canTakeSwimmerAttendance;
+  const canRecordPayments = can("recordPayments") || canEdit;
+  const canManageDiscounts = can("manageDiscounts") || canEdit;
+  const canViewPayments = can("viewPayments") || canRecordPayments;
+  const canViewFinancialReports = can("viewFinancialReports") || canEdit;
+  const canEditStaffAttendance = can("editStaffAttendance") || canEdit;
+  const canViewStaffAttendance = can("viewStaffAttendance") || canEditStaffAttendance;
+
+  const swimmerIsInProgramScope = useCallback((s) => {
+    if (role === "admin" || (!programAccess.length && !levelAccess.length)) {
+      // Preserve the old technical levelRestriction as a backwards-compatible scope.
+      if (role === "technical" && myAccount?.levelRestriction) return s.level === myAccount.levelRestriction;
+      return true;
+    }
+    if (levelAccess.length && levelAccess.includes(s.level)) return true;
+    if (programAccess.length) return programAccess.some((p) => levelBelongsToProgram(s.level, p));
+    return false;
+  }, [role, programAccess, levelAccess, myAccount]);
 
   const loadActivityLog = useCallback(async () => {
     if (!canEdit) return;
@@ -4592,9 +4761,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   // (everyone's net pay). True admin/branch_admin always can (canEdit).
   // Anyone else (branch_manager, technical) only if their own account
   // was explicitly given "canViewPayroll" — off by default.
-  const [canViewPayroll, setCanViewPayroll] = useState(canEdit);
+  const [canViewPayroll, setCanViewPayroll] = useState(canViewStaffAttendance);
   const loadMyPayrollAccess = useCallback(async () => {
-    if (canEdit) { setCanViewPayroll(true); return; }
+    if (canViewStaffAttendance) { setCanViewPayroll(true); return; }
     if (!accountName) { setCanViewPayroll(false); return; }
     try {
       const items = await loadCollection(STORE_KEYS.accounts);
@@ -4603,7 +4772,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     } catch (e) {
       setCanViewPayroll(false);
     }
-  }, [canEdit, accountName]);
+  }, [canViewStaffAttendance, accountName]);
 
   // payment requests
   const [requests, setRequests] = useState([]);
@@ -4804,13 +4973,21 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       // pending nextSchedule pre-booked for it.
       const inSession = [];
       all.forEach((s) => {
-        const ms = getMonthlySchedule(s, scheduleMonth);
-        if (!ms) return;
-        if (ms.day === scheduleDayFilter && (scheduleTimeFilter === "all" || ms.time === scheduleTimeFilter)) {
-          inSession.push({ swimmer: s, time: ms.time, coachId: ms.coachId, sessionType: ms.sessionType });
+        const hasMonthly = !!s.monthlySchedules?.[scheduleMonth];
+        if (!hasMonthly && (s.scheduleMonth || monthKey()) === scheduleMonth) {
+          if (s.day === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time === scheduleTimeFilter)) {
+            inSession.push({ swimmer: s, time: s.time, coachId: s.coachId, sessionType: s.sessionType });
+          }
+          if (s.day2 === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time2 === scheduleTimeFilter)) {
+            inSession.push({ swimmer: s, time: s.time2, coachId: s.coachId2, sessionType: s.sessionType2 });
+          }
         }
-        if (ms.day2 === scheduleDayFilter && (scheduleTimeFilter === "all" || ms.time2 === scheduleTimeFilter)) {
-          inSession.push({ swimmer: s, time: ms.time2, coachId: ms.coachId2, sessionType: ms.sessionType2 });
+        const ms = getMonthlySchedule(s, scheduleMonth);
+        if (ms && ms.day === scheduleDayFilter && (scheduleTimeFilter === "all" || ms.time === scheduleTimeFilter)) {
+          inSession.push({ swimmer: s, time: ms.time, coachId: ms.coachId, sessionType: ms.sessionType, classId: ms.classId, substituteCoachId: ms.substituteCoachId, substituteDate: ms.substituteDate });
+        }
+        if (ms && ms.day2 === scheduleDayFilter && (scheduleTimeFilter === "all" || ms.time2 === scheduleTimeFilter)) {
+          inSession.push({ swimmer: s, time: ms.time2, coachId: ms.coachId2, sessionType: ms.sessionType2, classId: ms.classId, substituteCoachId: ms.substituteCoachId, substituteDate: ms.substituteDate });
         }
       });
       const byCoach = {};
@@ -5020,6 +5197,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   };
 
   const [cashAmount, setCashAmount] = useState("");
+  const [cashDiscountPercent, setCashDiscountPercent] = useState("0");
+  const [cashDiscountReason, setCashDiscountReason] = useState("");
   const [cashNote, setCashNote] = useState("");
   const [cashReceiptNo, setCashReceiptNo] = useState("");
   const [cashMethod, setCashMethod] = useState("cash"); // "cash" | "card" — paid in person, either way
@@ -5125,7 +5304,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         resetCheckedForMonthRef.current = key;
       }
       const sorted = finalItems.sort((a, b) => a.name.localeCompare(b.name));
-      const scoped = branchRestriction ? sorted.filter((s) => s.branch === branchRestriction) : sorted;
+      const scoped = (branchRestriction ? sorted.filter((s) => s.branch === branchRestriction) : sorted).filter(swimmerIsInProgramScope);
       const json = JSON.stringify(scoped);
       if (json !== lastSwimmersJSONRef.current) {
         lastSwimmersJSONRef.current = json;
@@ -5136,7 +5315,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     } finally {
       setSwimmersLoading(false);
     }
-  }, [branchRestriction]);
+  }, [branchRestriction, swimmerIsInProgramScope]);
 
   const loadCoaches = useCallback(async () => {
     setCoachesLoading(true);
@@ -5303,9 +5482,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         const readyToMark = matches.filter((s) => s.day && s.time && !(s.paidMonths || []).includes(key));
         const needsSchedule = matches.filter((s) => (!s.day || !s.time) && !(s.paidMonths || []).includes(key));
         if (readyToMark.length > 0) {
-          const next = all.map((s) =>
-            readyToMark.some((m) => m.id === s.id) ? { ...s, paidMonths: [...(s.paidMonths || []), key] } : s
-          );
+          const next = all.map((s) => {
+            if (!readyToMark.some((m) => m.id === s.id)) return s;
+            const plan = PLANS.find((p) => p.id === inferPlanId(s)) || { id: inferPlanId(s), name: s.planName || "Plan", price: Number(s.planPrice) || Number(record.price) || 0 };
+            const amount = Number(record.price) || Number(plan.price) || 0;
+            const payment = { ...record, status: "confirmed", method: record.method || "instapay", receiptNo: receiptNo || record.receiptNo || "", paidMonth: key, price: amount };
+            const billing = { month: key, planId: plan.id, planName: plan.name, originalPrice: Number(plan.price) || amount, discountPercent: Number(record.discountPercent) || 0, discountAmount: Number(record.discountAmount) || 0, finalAmount: Number(record.finalAmount) || amount, paidAmount: amount, balance: Math.max(0, (Number(record.finalAmount) || amount) - amount), status: "paid" };
+            return { ...s, paidMonths: [...new Set([...(s.paidMonths || []), key])], paymentLedger: [...(s.paymentLedger || []), payment], billingByMonth: { ...(s.billingByMonth || {}), [key]: billing } };
+          });
           const res = await saveCollection(STORE_KEYS.swimmers, next);
           if (res) loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
         }
@@ -5745,59 +5929,55 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   // marks the swimmer paid for the month, in one step.
   const recordCashPayment = async () => {
     setCashError("");
+    if (!canRecordPayments) return setCashError("You do not have permission to record payments");
+    if (Number(cashDiscountPercent) > 0 && !canManageDiscounts) return setCashError("You do not have permission to apply discounts");
     const swimmer = cashModal;
-    const amount = Number(cashAmount);
-    if (!amount || amount <= 0) return setCashError("Enter a valid amount");
+    const baseAmount = Number(cashAmount);
+    const discountPercent = Math.max(0, Math.min(100, Number(cashDiscountPercent) || 0));
+    const planId = inferPlanId(swimmer);
+    const plan = PLANS.find((p) => p.id === planId) || { id: planId, name: swimmer.planName || planId, price: Number(swimmer.planPrice) || 0 };
+    const originalPrice = Number(plan.price) || baseAmount;
+    const discountAmount = Math.round(originalPrice * discountPercent / 100);
+    const finalAmount = Math.max(0, originalPrice - discountAmount);
+    const previousPaid = (swimmer.paymentLedger || [])
+      .filter((p) => p.paidMonth === paymentMonthFilter || p.month === paymentMonthFilter)
+      .reduce((sum, p) => sum + (Number(p.price ?? p.amount) || 0), 0);
+    const amount = baseAmount > 0 ? baseAmount : Math.max(0, finalAmount - previousPaid);
+    if (!amount || amount <= 0) return setCashError(previousPaid >= finalAmount ? "This month's plan is already fully paid" : "Enter a valid amount");
+    if (amount > Math.max(0, finalAmount - previousPaid)) return setCashError(`Maximum remaining balance is ${Math.max(0, finalAmount - previousPaid)} EGP`);
     setCashSaving(true);
     const now = new Date().toISOString();
     const methodLabel = cashMethod === "card" ? "Card (in person)" : "Cash";
     const paymentRecord = {
-      id: genId(),
-      name: swimmer.name,
-      phone: swimmer.phone,
-      swimmerId: swimmer.id,
-      planId: null,
-      planName: cashNote.trim() || `${methodLabel} payment`,
-      price: amount,
-      status: "confirmed",
-      method: cashMethod,
-      receiptNo: cashReceiptNo.trim(),
-      paidMonth: paymentMonthFilter,
-      createdAt: now,
-      confirmedAt: now,
+      id: genId(), name: swimmer.name, phone: swimmer.phone, swimmerId: swimmer.id, planId: plan.id, planName: plan.name,
+      price: amount, originalPrice, discountPercent, discountAmount, finalAmount, discountReason: cashDiscountReason.trim(),
+      status: "confirmed", method: cashMethod, receiptNo: cashReceiptNo.trim(), paidMonth: paymentMonthFilter, month: paymentMonthFilter, note: cashNote.trim(), createdAt: now, confirmedAt: now,
     };
+    const newPaidAmount = previousPaid + amount;
+    const newBalance = Math.max(0, finalAmount - newPaidAmount);
+    const billing = { month: paymentMonthFilter, planId: plan.id, planName: plan.name, originalPrice, discountPercent, discountAmount, finalAmount, paidAmount: newPaidAmount, balance: newBalance, status: newBalance === 0 ? "paid" : "partial", discountReason: cashDiscountReason.trim() };
     try {
       const nextRequests = [paymentRecord, ...requests];
       const res = await saveCollection(STORE_KEYS.subs, nextRequests);
       if (!res) throw new Error("Could not save the payment, please try again");
-      logActivity(accountName, role, `${methodLabel} payment`, `${swimmer.name} — ${amount} EGP`);
+      logActivity(accountName, role, `${methodLabel} payment`, `${swimmer.name} — ${amount} EGP — ${monthLabel(paymentMonthFilter)}`);
       setRequests(nextRequests);
-
-      const key = paymentMonthFilter;
-      if (!(swimmer.paidMonths || []).includes(key)) {
-        await updateSwimmerById(swimmer.id, (s) => ({ ...s, paidMonths: [...(s.paidMonths || []), key] }));
-        loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
-      }
-      printReceipt({
-        swimmerName: swimmer.name,
-        phone: swimmer.phone,
-        planName: paymentRecord.planName,
-        price: amount,
-        receiptNo: cashReceiptNo.trim(),
-        paymentMethod: methodLabel,
-        date: todayISO(),
-      });
-      setCashModal(null);
-      setCashAmount("");
-      setCashNote("");
-      setCashReceiptNo("");
+      await updateSwimmerById(swimmer.id, (s) => ({
+        ...s,
+        planId: plan.id, planName: plan.name, planPrice: originalPrice,
+        paidMonths: newBalance === 0 ? [...new Set([...(s.paidMonths || []), paymentMonthFilter])] : (s.paidMonths || []).filter((m) => m !== paymentMonthFilter),
+        paymentLedger: [...(s.paymentLedger || []), { ...paymentRecord, balanceAfter: newBalance }],
+        billingByMonth: { ...(s.billingByMonth || {}), [paymentMonthFilter]: billing },
+      }));
+      printReceipt({ swimmerName: swimmer.name, phone: swimmer.phone, planName: `${plan.name} — ${monthLabel(paymentMonthFilter)}`, price: amount, receiptNo: cashReceiptNo.trim(), paymentMethod: methodLabel, date: todayISO() });
+      setCashModal(null); setCashAmount(""); setCashNote(""); setCashReceiptNo(""); setCashDiscountPercent("0"); setCashDiscountReason("");
+      loadSwimmersPage({ offset: 0 });
     } catch (e) {
-      setCashError(e?.message || "Could not save the payment, please try again");
+      setCashError(e?.message || "Could not save the payment");
     } finally {
       setCashSaving(false);
     }
   };
-
 
   // Suggests the next receipt number by looking at the highest numeric
   // receipt number already logged — still fully editable, so it can be
@@ -5810,6 +5990,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   const confirmWithReceipt = async () => {
     setReceiptError("");
+    if (!canRecordPayments) return setReceiptError("You do not have permission to confirm payments");
     setReceiptSaving(true);
     try {
       await setRequestStatus(receiptModal, "confirmed", receiptNoInput.trim(), receiptTargetMonth);
@@ -6034,6 +6215,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         if (branchRestriction) query = query.eq("branch", branchRestriction);
         else if (branchFilter !== "all") query = query.eq("branch", branchFilter);
         if (levelFilter !== "all") query = query.eq("level", levelFilter);
+        // Program/level scope is a hard data boundary for staff accounts.
+        if (role !== "admin" && (programAccess.length || levelAccess.length)) {
+          const scopedLevels = [...new Set([
+            ...levelAccess,
+            ...programAccess.flatMap((program) => PROGRAM_LEVEL_SCOPE[program] || []),
+          ])];
+          if (scopedLevels.length) query = query.in("level", scopedLevels);
+          else query = query.eq("level", "__NO_ACCESS__");
+        } else if (role === "technical" && myAccount?.levelRestriction && levelFilter === "all") {
+          query = query.eq("level", myAccount.levelRestriction);
+        }
         if (dayFilter !== "all") query = query.filter("data->>day", "eq", dayFilter);
         if (timeFilter !== "all") query = query.filter("data->>time", "eq", timeFilter);
         if (sessionTypeFilter !== "all") query = query.filter("data->>sessionType", "eq", sessionTypeFilter);
@@ -6057,7 +6249,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         setSwimmersPageLoading(false);
       }
     },
-    [branchFilter, levelFilter, dayFilter, timeFilter, sessionTypeFilter, paymentStatusFilter, paymentMonthFilter, search, showUnscheduled, branchRestriction]
+    [branchFilter, levelFilter, dayFilter, timeFilter, sessionTypeFilter, paymentStatusFilter, paymentMonthFilter, search, showUnscheduled, branchRestriction, role, programAccess, levelAccess, myAccount]
   );
 
   useEffect(() => {
@@ -6118,10 +6310,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     // capacity) on this month's grid, and vice versa. A swimmer saved
     // before scheduleMonth existed is treated as "this month".
     swimmers.forEach((s) => {
-      const ms = getMonthlySchedule(s, scheduleMonth);
-      if (!ms) return;
-      addBooking(ms.coachId, ms.day, ms.time, ms.sessionType, s.level);
-      if (ms.day2 && ms.time2) addBooking(ms.coachId2, ms.day2, ms.time2, ms.sessionType2, s.level);
+      if ((s.scheduleMonth || monthKey()) === scheduleMonth) {
+        addBooking(s.coachId, s.day, s.time, s.sessionType, s.level);
+        // A swimmer with a second weekly session (different coach or slot)
+        // shows up under that booking too — same swimmer, two commitments.
+        if (s.day2 && s.time2) addBooking(s.coachId2, s.day2, s.time2, s.sessionType2, s.level);
+      }
+      if (s.nextSchedule && s.nextSchedule.scheduleMonth === scheduleMonth) {
+        addBooking(s.nextSchedule.coachId, s.nextSchedule.day, s.nextSchedule.time, s.nextSchedule.sessionType, s.level);
+        if (s.nextSchedule.day2 && s.nextSchedule.time2) {
+          addBooking(s.nextSchedule.coachId2, s.nextSchedule.day2, s.nextSchedule.time2, s.nextSchedule.sessionType2, s.level);
+        }
+      }
     });
     const bookingsById = {};
     Object.keys(bookingsMapById).forEach((coachId) => {
@@ -7124,6 +7324,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               onSave={saveSwimmer}
               onCancel={() => { setShowForm(false); setEditingSwimmer(null); setPendingActivationId(null); }}
               onJoinWaitlist={joinWaitlist}
+              canManageSubstitute={canManageSubstitute}
             />
           )}
 
@@ -7457,7 +7658,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                 {canEditContent ? (
                                   <div className="flex items-center gap-1">
                                     <button
-                                      onClick={() => markAttendance(s, d, "present")}
+                                      onClick={() => canTakeSwimmerAttendance && markAttendance(s, d, "present")}
+                                      disabled={!canTakeSwimmerAttendance}
                                       className={`px-2 py-0.5 rounded-full font-semibold ${
                                         status === "present" ? "bg-green-100 text-green-700" : "text-slate-400 hover:bg-green-50"
                                       }`}
@@ -7465,7 +7667,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                       <Check className="w-3 h-3" />
                                     </button>
                                     <button
-                                      onClick={() => markAttendance(s, d, "absent")}
+                                      onClick={() => canTakeSwimmerAttendance && markAttendance(s, d, "absent")}
+                                      disabled={!canTakeSwimmerAttendance}
                                       className={`px-2 py-0.5 rounded-full font-semibold ${
                                         status === "absent" ? "bg-red-100 text-red-600" : "text-slate-400 hover:bg-red-50"
                                       }`}
@@ -8704,7 +8907,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
             <h3 className="font-bold text-slate-900">Staff attendance</h3>
             <div className="flex items-center gap-2">
-              {canEdit && (
+              {canEditStaffAttendance && (
                 <button
                   onClick={() => setQrPosterOpen(true)}
                   className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
@@ -8712,7 +8915,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <QrCode className="w-3.5 h-3.5" /> Show check-in code to print
                 </button>
               )}
-              {canEdit && (
+              {canEditStaffAttendance && (
                 <button
                   onClick={() => setPayrollSettingsOpen((v) => !v)}
                   className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
@@ -8720,7 +8923,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <CalendarDays className="w-3.5 h-3.5" /> Payroll calendar
                 </button>
               )}
-              {canEdit && (
+              {canEditStaffAttendance && (
                 <button
                   onClick={() => {
                     setAttendanceEditModal({ id: null, accountName: accounts[0]?.name || "", date: todayISO(), checkInTime: "", checkOutTime: "", excused: false, overtimeHours: "" });
@@ -10482,20 +10685,27 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 </button>
               </div>
             </div>
+            {(() => {
+              const p = PLANS.find((x) => x.id === inferPlanId(cashModal)) || { name: cashModal.planName || "Plan", price: Number(cashModal.planPrice) || 0 };
+              const pct = Math.max(0, Math.min(100, Number(cashDiscountPercent) || 0));
+              const discount = Math.round((Number(p.price) || 0) * pct / 100);
+              const final = Math.max(0, (Number(p.price) || 0) - discount);
+              return <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 mb-3">
+                <div className="flex justify-between text-sm"><span>Plan</span><strong>{p.name}</strong></div>
+                <div className="flex justify-between text-sm"><span>Original price</span><strong>{p.price} EGP</strong></div>
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  <div><label className="text-xs text-slate-500 mb-1 block">Discount %</label><input type="number" min="0" max="100" value={cashDiscountPercent} onChange={(e) => setCashDiscountPercent(e.target.value)} disabled={!canManageDiscounts} className="w-full border border-slate-200 rounded-lg py-2 px-3 bg-white disabled:bg-slate-100" /></div>
+                  <div><label className="text-xs text-slate-500 mb-1 block">Final amount</label><input value={`${final} EGP`} readOnly className="w-full border border-slate-200 rounded-lg py-2 px-3 bg-slate-100" /></div>
+                </div>
+              </div>;
+            })()}
             <div className="mb-3">
-              <label className="text-xs text-slate-500 mb-1 block">Amount (EGP)</label>
-              <input
-                type="number"
-                min="0"
-                autoFocus
-                value={cashAmount}
-                onChange={(e) => setCashAmount(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") recordCashPayment();
-                }}
-                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
-                placeholder="e.g. 1600"
-              />
+              <label className="text-xs text-slate-500 mb-1 block">Amount actually paid (EGP)</label>
+              <input type="number" min="0" autoFocus value={cashAmount} onChange={(e) => setCashAmount(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") recordCashPayment(); }} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Leave blank to use final amount" />
+            </div>
+            <div className="mb-3">
+              <label className="text-xs text-slate-500 mb-1 block">Discount reason (optional)</label>
+              <input value={cashDiscountReason} onChange={(e) => setCashDiscountReason(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Sibling / Staff / Special discount" />
             </div>
             <div className="mb-3">
               <label className="text-xs text-slate-500 mb-1 block">Note (optional)</label>
@@ -11231,6 +11441,9 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
   const [overtimeHourlyRate, setOvertimeHourlyRate] = useState(initial?.overtimeHourlyRate || "");
   const [canViewPayroll, setCanViewPayroll] = useState(initial?.canViewPayroll || false);
   const [accessLevel, setAccessLevel] = useState(initial?.accessLevel || (initial?.role === "branch_manager" ? "viewer" : "full"));
+  const [permissions, setPermissions] = useState(() => ({ ...(ROLE_DEFAULT_PERMISSIONS[initial?.role || "technical"] || {}), ...(initial?.permissions || {}) }));
+  const [programAccess, setProgramAccess] = useState(initial?.programAccess || []);
+  const [levelAccess, setLevelAccess] = useState(initial?.levelAccess || []);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const recordIdRef = useRef(initial?.id || genId());
@@ -11274,6 +11487,9 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
         overtimeHourlyRate: overtimeHourlyRate ? Number(overtimeHourlyRate) : null,
         canViewPayroll: role === "admin" ? true : canViewPayroll,
         accessLevel: role === "admin" ? "full" : accessLevel,
+        permissions: role === "admin" ? Object.fromEntries(PERMISSION_DEFS.map(([k]) => [k, true])) : permissions,
+        programAccess: role === "admin" ? [] : programAccess,
+        levelAccess: role === "admin" ? [] : levelAccess,
         createdAt: initial?.createdAt || new Date().toISOString(),
       });
     } catch (e) {
@@ -11293,7 +11509,7 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
         </div>
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Role</label>
-          <select value={role} onChange={(e) => setRole(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
+          <select value={role} onChange={(e) => { const r=e.target.value; setRole(r); setPermissions(prev => ({ ...ROLE_DEFAULT_PERMISSIONS[r], ...prev })); }} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
             {ROLES.map((r) => (
               <option key={r.id} value={r.id}>{r.label}</option>
             ))}
@@ -12227,7 +12443,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
                   </button>
                 )}
                 <button
-                  onClick={() => markAttendance(s, "present")}
+                  onClick={() => canTakeSwimmerAttendance && markAttendance(s, "present")} disabled={!canTakeSwimmerAttendance}
                   className={`px-3 py-1.5 rounded-full text-xs font-semibold ${
                     status === "present" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500 hover:bg-green-50"
                   }`}
@@ -12235,7 +12451,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
                   Present
                 </button>
                 <button
-                  onClick={() => markAttendance(s, "absent")}
+                  onClick={() => canTakeSwimmerAttendance && markAttendance(s, "absent")} disabled={!canTakeSwimmerAttendance}
                   className={`px-3 py-1.5 rounded-full text-xs font-semibold ${
                     status === "absent" ? "bg-red-100 text-red-600" : "bg-slate-100 text-slate-500 hover:bg-red-50"
                   }`}
@@ -12778,6 +12994,10 @@ function CoachView({ onExit, preAuthedCoach = null }) {
   const [pin, setPin] = useState("");
   const [loginError, setLoginError] = useState("");
   const [authedCoach, setAuthedCoach] = useState(preAuthedCoach);
+  const [staffAccount, setStaffAccount] = useState(null);
+  const [coachPermissions, setCoachPermissions] = useState(() => getAccountPermissions(null, "coach"));
+  const [coachProgramAccess, setCoachProgramAccess] = useState([]);
+  const [coachLevelAccess, setCoachLevelAccess] = useState([]);
   const [myPayroll, setMyPayroll] = useState(null); // this coach's own net pay, this month — only computed if showOwnSalary is on
   const [workoutDate, setWorkoutDate] = useState(todayISO());
   const [warmUp, setWarmUp] = useState("");
@@ -12786,6 +13006,31 @@ function CoachView({ onExit, preAuthedCoach = null }) {
   const [workoutSaving, setWorkoutSaving] = useState(false);
   const [workoutSaved, setWorkoutSaved] = useState(false);
   const [pastWorkouts, setPastWorkouts] = useState([]);
+
+  useEffect(() => {
+    if (!authedCoach) return;
+    (async () => {
+      try {
+        const accounts = await loadCollection(STORE_KEYS.accounts);
+        const acct = accounts.find((a) => a.linkedCoachId === authedCoach.id || a.name === authedCoach.name);
+        setStaffAccount(acct || null);
+        setCoachPermissions(getAccountPermissions(acct, "coach"));
+        setCoachProgramAccess(acct?.programAccess || []);
+        setCoachLevelAccess(acct?.levelAccess || []);
+      } catch {
+        setCoachPermissions(getAccountPermissions(null, "coach"));
+      }
+    })();
+  }, [authedCoach]);
+
+  const canTakeSwimmerAttendance = !!coachPermissions.takeSwimmerAttendance;
+  const canViewSwimmerAttendance = !!coachPermissions.viewSwimmerAttendance || canTakeSwimmerAttendance;
+  const canFollowProgram = coachProgramAccess.length > 0 || coachLevelAccess.length > 0;
+  const coachSwimmerInScope = useCallback((s) => {
+    if (coachLevelAccess.length && coachLevelAccess.includes(s.level)) return true;
+    if (coachProgramAccess.length) return coachProgramAccess.some((program) => levelBelongsToProgram(s.level, program));
+    return false;
+  }, [coachProgramAccess, coachLevelAccess]);
 
   const loadWorkoutForDate = useCallback(
     async (date) => {
@@ -12928,15 +13173,16 @@ function CoachView({ onExit, preAuthedCoach = null }) {
     if (!authedCoach) return;
     setLoading(true);
     try {
-      // Only fetch swimmers assigned to THIS coach — a coach never needs
-      // to see the whole roster, so there is no reason to load everyone.
+      // Normal coach accounts see their own roster. A coach with explicit
+      // Program/Level access also sees those swimmers for technical follow-up,
+      // even when another coach owns the class.
       const { data, error } = await supabase
         .from("swimmers")
         .select("data")
-        .eq("academy_id", window.__academy?.id)
-        .filter("data->>coachId", "eq", authedCoach.id);
+        .eq("academy_id", window.__academy?.id);
       if (error) throw error;
-      setSwimmers((data || []).map((r) => r.data));
+      const all = (data || []).map((r) => r.data);
+      setSwimmers(all.filter((s) => s.coachId === authedCoach.id || (canFollowProgram && coachSwimmerInScope(s))));
     } catch (e) {
       console.warn("load swimmers failed", e);
     } finally {
@@ -13022,6 +13268,7 @@ function CoachView({ onExit, preAuthedCoach = null }) {
         <div>
           <h2 className="text-xl font-bold text-slate-900">Hi, {authedCoach.name}</h2>
           <div className="text-sm text-slate-400">Your weekly schedule</div>
+          {canFollowProgram && <div className="text-xs text-blue-700 mt-1">Technical access: {coachProgramAccess.concat(coachLevelAccess).join(" · ")}</div>}
         </div>
         <div className="flex items-center gap-1">
           <button onClick={loadSwimmers} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
