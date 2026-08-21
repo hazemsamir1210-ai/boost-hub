@@ -644,6 +644,13 @@ function downloadReportHTML(filename, bodyHtml) {
   .green { color: #16a34a; font-weight: 600; }
   .red { color: #ef4444; font-weight: 600; }
   .notes-cell { min-width: 90px; }
+  .plan-header { font-size: 12px; font-weight: 700; color: #0b1e3a; background: #eef2ff; padding: 5px 10px; margin-top: 10px; border: 1px solid #c7d2fe; border-bottom: none; }
+  .plan-count { font-weight: 400; color: #64748b; }
+  .roster-grid table { border: 1px solid #cbd5e1; }
+  .roster-grid th, .roster-grid td { border: 1px solid #cbd5e1; padding: 5px 8px; }
+  .roster-grid th { background: #f1f5f9; }
+  .roster-grid tr:nth-child(even) td { background: #fafbfc; }
+  .roster-grid .blank-row td { background: #ffffff; height: 22px; }
   @media print { body { padding: 0; } }
 </style></head><body>${bodyHtml}
 <script>window.onload = () => setTimeout(() => window.print(), 300);</script>
@@ -2179,6 +2186,17 @@ function levelInMonth(swimmer, key) {
 function todayISO() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Some swimmers' "age" field actually has their birth year typed in
+// instead (e.g. 2021) rather than years-old — a real age is always well
+// under 100, so anything that looks like a calendar year gets converted
+// to an actual age for display, without needing to fix the stored data.
+function displayAge(age) {
+  const n = Number(age);
+  if (!n) return "";
+  if (n >= 1900 && n <= new Date().getFullYear()) return new Date().getFullYear() - n;
+  return n;
 }
 
 /* Generic Date -> "YYYY-MM-DD" (todayISO above is just this applied to "now") */
@@ -4679,6 +4697,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         byCoach[key].push(entry);
       });
       const dateHeaderCells = sessionDates.map((d) => `<th>${d.slice(8)}</th>`).join("");
+      const attCellsFor = (s) =>
+        sessionDates
+          .map((d) => {
+            const att = s?.attendance?.[d];
+            const mark = att === "present" ? '<span class="green">P</span>' : att === "absent" ? '<span class="red">A</span>' : "—";
+            return `<td style="text-align:center">${mark}</td>`;
+          })
+          .join("");
+      const emptyAttCells = sessionDates.map(() => `<td>&nbsp;</td>`).join("");
+
       const coachSections = Object.keys(byCoach)
         .sort((a, b) => {
           const nameA = coaches.find((c) => c.id === a)?.name || "Unassigned";
@@ -4687,29 +4715,49 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         })
         .map((coachId) => {
           const coachName = coaches.find((c) => c.id === coachId)?.name || "Unassigned";
-          const rows = byCoach[coachId]
-            .slice()
-            .sort((a, b) => (a.time || "").localeCompare(b.time || "") || a.swimmer.name.localeCompare(b.swimmer.name))
-            .map(({ swimmer: s, time, sessionType }) => {
-              const attCells = sessionDates
-                .map((d) => {
-                  const att = s.attendance?.[d];
-                  const mark = att === "present" ? '<span class="green">P</span>' : att === "absent" ? '<span class="red">A</span>' : "—";
-                  return `<td style="text-align:center">${mark}</td>`;
-                })
+          const entries = byCoach[coachId];
+
+          // Group this coach's swimmers by exact slot (time + plan) — each
+          // group gets its own mini-table, headed by the plan name, with
+          // blank rows padded on to fill out the plan's real capacity so
+          // there's always room to pencil in a new swimmer by hand.
+          const bySlot = {};
+          entries.forEach((entry) => {
+            const key = `${entry.time || ""}__${entry.sessionType || "group"}`;
+            if (!bySlot[key]) bySlot[key] = [];
+            bySlot[key].push(entry);
+          });
+
+          const slotSections = Object.keys(bySlot)
+            .sort((a, b) => a.localeCompare(b))
+            .map((key) => {
+              const group = bySlot[key].sort((a, b) => a.swimmer.name.localeCompare(b.swimmer.name));
+              const { time, sessionType } = group[0];
+              const planLabel = sessionTypeInfo(sessionType).label;
+              const capacity = Math.max(...group.map((g) => sessionCapacity(sessionType, g.swimmer.level)));
+              const filledRows = group
+                .map(
+                  ({ swimmer: s }) =>
+                    `<tr><td>${escapeHtml(s.name)}</td><td style="text-align:center">${displayAge(s.age)}</td><td>${escapeHtml(s.level)}</td>${attCellsFor(s)}<td class="notes-cell">&nbsp;</td></tr>`
+                )
                 .join("");
-              // "Note" comes last in the HTML source on purpose — in an
-              // RTL table, that's what ends up read last (leftmost),
-              // right after the attendance columns.
-              return `<tr><td>${escapeHtml(s.name)}</td><td>${escapeHtml(time || "")}</td><td>${escapeHtml(s.level)}</td><td>${escapeHtml(sessionTypeInfo(sessionType).label)}</td>${attCells}<td class="notes-cell">&nbsp;</td></tr>`;
+              const blanksNeeded = Math.max(0, capacity - group.length);
+              const blankRows = Array.from({ length: blanksNeeded })
+                .map(() => `<tr class="blank-row"><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td>${emptyAttCells}<td>&nbsp;</td></tr>`)
+                .join("");
+              return `
+                <div class="plan-header">${escapeHtml(planLabel)} — ${escapeHtml(time || "")} <span class="plan-count">(${group.length}/${capacity})</span></div>
+                <table>
+                  <tr><th>Name</th><th>Age</th><th>Level</th>${dateHeaderCells}<th>Note</th></tr>
+                  ${filledRows}
+                  ${blankRows}
+                </table>`;
             })
             .join("");
+
           return `
-            <h3>${escapeHtml(coachName)} (${byCoach[coachId].length})</h3>
-            <table>
-              <tr><th>Name</th><th>Time</th><th>Level</th><th>Plan</th>${dateHeaderCells}<th>Note</th></tr>
-              ${rows}
-            </table>`;
+            <h3>${escapeHtml(coachName)} (${entries.length})</h3>
+            ${slotSections}`;
         })
         .join("");
 
@@ -4721,7 +4769,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <div class="sub">Session roster & attendance — ${escapeHtml(dayLabel)}${scheduleTimeFilter !== "all" ? ` · ${escapeHtml(scheduleTimeFilter)}` : ""} · ${escapeHtml(monthLabel(scheduleMonth))}</div>
           </div>
         </div>
-        <div dir="rtl">
+        <div dir="rtl" class="roster-grid">
           ${coachSections || "<p>No swimmers scheduled for this selection.</p>"}
         </div>
       `;
@@ -6141,7 +6189,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <Users className="w-4 h-4" /> Coach Assignments
           </button>
         )}
-        {canEditContent && (
+        {canEditContent && role !== "technical_director" && (
           <button
             onClick={() => setTab("registrations")}
             className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6156,6 +6204,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             )}
           </button>
         )}
+        {role !== "technical_director" && (
         <button
           onClick={() => setTab("requests")}
           className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6164,6 +6213,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         >
           <Bell className="w-4 h-4" /> Payment requests
         </button>
+        )}
         <button
           onClick={() => setTab("swimmers")}
           className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6172,6 +6222,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         >
           <Users className="w-4 h-4" /> Swimmers
         </button>
+        {role !== "technical_director" && (
         <button
           onClick={() => setTab("coaches")}
           className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6180,6 +6231,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         >
           <Award className="w-4 h-4" /> Coaches
         </button>
+        )}
         <button
           onClick={() => setTab("schedule")}
           className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6188,6 +6240,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         >
           <CalendarDays className="w-4 h-4" /> Schedule
         </button>
+        {role !== "technical_director" && (
         <button
           onClick={() => setTab("reports")}
           className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6196,7 +6249,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         >
           <CalendarCheck className="w-4 h-4" /> Reports
         </button>
-        {canEditContent && (
+        )}
+        {canEditContent && role !== "technical_director" && (
           <button
             onClick={() => setTab("achievements")}
             className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6206,7 +6260,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <Star className="w-4 h-4" /> Achievements
           </button>
         )}
-        {canEdit && (
+        {canEdit && role !== "technical_director" && (
           <button
             onClick={() => setTab("skills")}
             className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6216,7 +6270,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <Award className="w-4 h-4" /> Skills
           </button>
         )}
-        {canViewPayroll && (
+        {canViewPayroll && role !== "technical_director" && (
           <button
             onClick={() => setTab("attendance")}
             className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6226,7 +6280,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <Clock className="w-4 h-4" /> Attendance
           </button>
         )}
-        {canEdit && (
+        {canEdit && role !== "technical_director" && (
           <button
             onClick={() => setTab("accounts")}
             className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6236,7 +6290,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <Lock className="w-4 h-4" /> Accounts
           </button>
         )}
-        {canEdit && (
+        {canEdit && role !== "technical_director" && (
           <button
             onClick={() => setTab("activity")}
             className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6256,7 +6310,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <Lock className="w-4 h-4" /> Password
           </button>
         )}
-        {canEdit && (
+        {canEdit && role !== "technical_director" && (
           <button
             onClick={() => setTab("settings")}
             className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6266,7 +6320,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <ShieldCheck className="w-4 h-4" /> Settings
           </button>
         )}
-        {canEditContent && (
+        {canEditContent && role !== "technical_director" && (
           <button
             onClick={() => setTab("incidents")}
             className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6276,7 +6330,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <ShieldCheck className="w-4 h-4" /> Incidents
           </button>
         )}
-        {canEditContent && (
+        {canEditContent && role !== "technical_director" && (
           <button
             onClick={() => setTab("feedback")}
             className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6286,7 +6340,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <Star className="w-4 h-4" /> Feedback
           </button>
         )}
-        {canEditContent && (
+        {(canEditContent || role === "technical_director") && (
           <button
             onClick={() => setTab("courses")}
             className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -6296,7 +6350,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <GraduationCap className="w-4 h-4" /> Courses
           </button>
         )}
-        {canEditContent && (
+        {canEditContent && role !== "technical_director" && (
           <button
             onClick={() => setTab("waitlist")}
             className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
@@ -8800,7 +8854,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "courses" && canEditContent && (
+      {tab === "courses" && (canEditContent || role === "technical_director") && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -8959,13 +9013,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         </div>
                         <div>
                           <label className="text-xs text-slate-400 mb-1 block">Written notes (optional)</label>
-                          <textarea
-                            value={m.text}
-                            onChange={(e) => updateModule(m.id, { text: e.target.value })}
-                            rows={3}
-                            placeholder="Any text for this module"
-                            className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
-                          />
+                          <RichTextEditor value={m.text} onChange={(html) => updateModule(m.id, { text: html })} />
                         </div>
                         <div>
                           <label className="text-xs text-slate-400 mb-1 block">External link (optional)</label>
@@ -12185,6 +12233,76 @@ function courseEmbedUrl(url) {
    link, and an attached file can appear together in the same module.
    Shared by every place a paid-for course gets watched (coach dashboard
    and the public courses portal). */
+/* A small Word-style toolbar (bold, italic, underline, font size, bullet
+   list, alignment) over a contentEditable area — enough formatting for a
+   course's written notes without pulling in a whole editor library.
+   Stores its content as HTML, which ModuleContent below renders as-is. */
+function RichTextEditor({ value, onChange }) {
+  const ref = useRef(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (ref.current && !ready) {
+      ref.current.innerHTML = value || "";
+      setReady(true);
+    }
+  }, [value, ready]);
+
+  const exec = (cmd, arg) => {
+    document.execCommand(cmd, false, arg);
+    ref.current?.focus();
+    onChange(ref.current?.innerHTML || "");
+  };
+
+  const btn = (label, cmd, arg, title) => (
+    <button
+      type="button"
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => exec(cmd, arg)}
+      title={title}
+      className="px-2 py-1 text-xs rounded hover:bg-slate-200 text-slate-600 font-medium"
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="border border-slate-200 rounded-lg overflow-hidden">
+      <div className="flex items-center gap-0.5 flex-wrap bg-slate-100 px-1.5 py-1 border-b border-slate-200">
+        {btn(<strong>B</strong>, "bold", null, "Bold")}
+        {btn(<em>I</em>, "italic", null, "Italic")}
+        {btn(<span className="underline">U</span>, "underline", null, "Underline")}
+        <span className="w-px h-4 bg-slate-300 mx-1" />
+        <select
+          onMouseDown={(e) => e.stopPropagation()}
+          onChange={(e) => exec("fontSize", e.target.value)}
+          defaultValue=""
+          className="text-xs border border-slate-200 rounded px-1 py-0.5 bg-white"
+          title="Font size"
+        >
+          <option value="" disabled>Size</option>
+          <option value="2">Small</option>
+          <option value="3">Normal</option>
+          <option value="5">Large</option>
+          <option value="7">Huge</option>
+        </select>
+        <span className="w-px h-4 bg-slate-300 mx-1" />
+        {btn("•", "insertUnorderedList", null, "Bullet list")}
+        {btn("1.", "insertOrderedList", null, "Numbered list")}
+        <span className="w-px h-4 bg-slate-300 mx-1" />
+        {btn("⟲", "removeFormat", null, "Clear formatting")}
+      </div>
+      <div
+        ref={ref}
+        contentEditable
+        onInput={(e) => onChange(e.currentTarget.innerHTML)}
+        className="min-h-[100px] px-3 py-2 text-sm outline-none"
+        style={{ direction: "ltr" }}
+      />
+    </div>
+  );
+}
+
 function ModuleContent({ module: m, protect = false }) {
   const embed = m.videoUrl ? courseEmbedUrl(m.videoUrl) : null;
   const hasAnything = m.videoUrl || m.text || m.linkUrl || m.fileUrl;
@@ -12199,7 +12317,7 @@ function ModuleContent({ module: m, protect = false }) {
         ) : (
           <div className="text-sm text-slate-500">Video not available right now — please contact the academy.</div>
         ))}
-      {m.text && <div className="text-sm text-slate-600 whitespace-pre-wrap select-none">{m.text}</div>}
+      {m.text && <div className="text-sm text-slate-600 select-none" dangerouslySetInnerHTML={{ __html: m.text }} />}
       {m.linkUrl && (
         <a href={m.linkUrl} target="_blank" rel="noreferrer" className="text-sm text-blue-900 hover:underline block">
           Open resource ↗
