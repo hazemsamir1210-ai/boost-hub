@@ -5,6 +5,7 @@ import jsQR from "jsqr";
 import QRCode from "qrcode";
 import {
   Waves, Upload, CheckCircle2, Lock, RefreshCw, Phone, User,
+  Facebook, Instagram, MessageCircle,
   ImageIcon, X, LogOut, Clock, Check, XCircle, Send, ChevronLeft,
   ShieldCheck, Copy, Bell, Users, Plus, Pencil, Trash2, Search,
   CalendarDays, Baby, Award, CalendarCheck, FileDown, Wallet, Star,
@@ -77,13 +78,13 @@ async function resolveAcademy() {
     if (slug) {
       result = await supabase
         .from("academies")
-        .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone, hero_data_uri, subscription_paid_until, primary_color")
+        .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone, hero_data_uri, subscription_paid_until, primary_color, contact_phone, whatsapp, facebook_url, instagram_url")
         .eq("slug", slug)
         .maybeSingle();
     } else {
       result = await supabase
         .from("academies")
-        .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone, hero_data_uri, subscription_paid_until, primary_color")
+        .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone, hero_data_uri, subscription_paid_until, primary_color, contact_phone, whatsapp, facebook_url, instagram_url")
         .eq("id", "354f7151-03f6-4511-b40a-19db46f28e29")
         .maybeSingle();
     }
@@ -111,6 +112,10 @@ async function resolveAcademy() {
     // database-side RLS check that actually enforces this on writes.
     subscriptionExpired: !!(data.subscription_paid_until && data.subscription_paid_until < todayISO()),
     primaryColor: data.primary_color || "#0c1e3e",
+    contactPhone: data.contact_phone || "",
+    whatsapp: data.whatsapp || "",
+    facebookUrl: data.facebook_url || "",
+    instagramUrl: data.instagram_url || "",
   };
   CONFIG.primaryColor = window.__academy.primaryColor;
   // Every place in the app that reads CONFIG.academyName / logoDataUri /
@@ -4012,6 +4017,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [settingsName, setSettingsName] = useState("");
   const [settingsLogo, setSettingsLogo] = useState("");
   const [settingsPrimaryColor, setSettingsPrimaryColor] = useState(CONFIG.primaryColor || "#0c1e3e");
+  const [showContactModal, setShowContactModal] = useState(false);
+  const [settingsWhatsapp, setSettingsWhatsapp] = useState("");
+  const [settingsContactPhone, setSettingsContactPhone] = useState("");
+  const [settingsFacebook, setSettingsFacebook] = useState("");
+  const [settingsInstagram, setSettingsInstagram] = useState("");
+  const [contactSaving, setContactSaving] = useState(false);
+  const [contactError, setContactError] = useState("");
+  const [contactSaved, setContactSaved] = useState(false);
+  const [showPricesModal, setShowPricesModal] = useState(false);
   const [settingsSignature, setSettingsSignature] = useState("");
   const [settingsInstapayHandle, setSettingsInstapayHandle] = useState("");
   const [settingsInstapayPhone, setSettingsInstapayPhone] = useState("");
@@ -4507,6 +4521,50 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       setSettingsError(e?.message || "Could not save, please try again");
     } finally {
       setSettingsSaving(false);
+    }
+  };
+
+  // Opens the Contact info panel, seeded with whatever's already saved
+  // for this academy (window.__academy is kept fresh by resolveAcademy,
+  // which already ran once before this dashboard could even render).
+  const openContactModal = () => {
+    setSettingsWhatsapp(window.__academy?.whatsapp || "");
+    setSettingsContactPhone(window.__academy?.contactPhone || "");
+    setSettingsFacebook(window.__academy?.facebookUrl || "");
+    setSettingsInstagram(window.__academy?.instagramUrl || "");
+    setContactError("");
+    setContactSaved(false);
+    setShowContactModal(true);
+  };
+
+  const saveContactInfo = async () => {
+    setContactError("");
+    setContactSaving(true);
+    try {
+      const { error } = await supabase
+        .from("academies")
+        .update({
+          whatsapp: settingsWhatsapp.trim() || null,
+          contact_phone: settingsContactPhone.trim() || null,
+          facebook_url: settingsFacebook.trim() || null,
+          instagram_url: settingsInstagram.trim() || null,
+        })
+        .eq("id", window.__academy.id);
+      if (error) throw error;
+      window.__academy = {
+        ...window.__academy,
+        whatsapp: settingsWhatsapp.trim(),
+        contactPhone: settingsContactPhone.trim(),
+        facebookUrl: settingsFacebook.trim(),
+        instagramUrl: settingsInstagram.trim(),
+      };
+      logActivity(accountName, role, "Updated contact info", "");
+      setContactSaved(true);
+      setTimeout(() => setContactSaved(false), 2000);
+    } catch (e) {
+      setContactError(e?.message || "Could not save, please try again");
+    } finally {
+      setContactSaving(false);
     }
   };
 
@@ -7083,16 +7141,6 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <Award className="w-4 h-4" /> Skills
           </button>
         )}
-        {(canManagePlans) && role !== "technical_director" && (
-          <button
-            onClick={() => setTab("plans")}
-            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-              tab === "plans" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-            }`}
-          >
-            <Wallet className="w-4 h-4" /> Plans & Pricing
-          </button>
-        )}
         {canViewPayroll && role !== "technical_director" && (
           <button
             onClick={() => setTab("attendance")}
@@ -9439,9 +9487,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "plans" && canManagePlans && (
-        <div className="max-w-2xl" key={plansRefreshKey}>
-          <h3 className="font-bold text-slate-900 mb-1">Plans & pricing</h3>
+      {showPricesModal && canManagePlans && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 px-4 py-6" onClick={() => setShowPricesModal(false)}>
+          <div
+            className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-full overflow-auto p-6"
+            key={plansRefreshKey}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="font-bold text-slate-900">Plans & pricing</h3>
+              <button onClick={() => setShowPricesModal(false)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           <p className="text-sm text-slate-500 mb-5">
             Edit the name and monthly price of each plan. Changes apply to new payments right away — amounts already recorded for past months aren't affected.
           </p>
@@ -9495,6 +9553,68 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           >
             {plansSaving ? "Saving..." : "Save"}
           </button>
+          </div>
+        </div>
+      )}
+
+      {showContactModal && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 px-4 py-6" onClick={() => setShowContactModal(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="font-bold text-slate-900">Contact info</h3>
+              <button onClick={() => setShowContactModal(false)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-sm text-slate-500 mb-4">Shown on this academy's public homepage.</p>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">WhatsApp number</label>
+                <input
+                  value={settingsWhatsapp}
+                  onChange={(e) => setSettingsWhatsapp(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  placeholder="e.g. 01012345678"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Phone number</label>
+                <input
+                  value={settingsContactPhone}
+                  onChange={(e) => setSettingsContactPhone(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  placeholder="e.g. 0223456789"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Facebook page link</label>
+                <input
+                  value={settingsFacebook}
+                  onChange={(e) => setSettingsFacebook(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  placeholder="https://facebook.com/..."
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Instagram link</label>
+                <input
+                  value={settingsInstagram}
+                  onChange={(e) => setSettingsInstagram(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  placeholder="https://instagram.com/..."
+                />
+              </div>
+            </div>
+            {contactError && <div className="text-red-500 text-sm mt-3">{contactError}</div>}
+            {contactSaved && <div className="text-green-700 text-sm mt-3 bg-green-50 rounded-lg px-3 py-2">Saved.</div>}
+            <button
+              onClick={saveContactInfo}
+              disabled={contactSaving}
+              className="w-full mt-4 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+            >
+              {contactSaving ? "Saving..." : "Save"}
+            </button>
+          </div>
         </div>
       )}
 
@@ -10424,6 +10544,35 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
       {tab === "settings" && canEdit && (
         <div className="max-w-2xl space-y-8">
+          <div className="grid sm:grid-cols-2 gap-3">
+            <button
+              onClick={openContactModal}
+              className="bg-white rounded-2xl border border-slate-200 p-4 flex items-center gap-3 hover:border-blue-200 hover:bg-blue-50/40 transition text-left"
+            >
+              <div className="w-10 h-10 rounded-xl bg-green-50 flex items-center justify-center shrink-0">
+                <MessageSquare className="w-5 h-5 text-green-700" />
+              </div>
+              <div>
+                <div className="font-semibold text-slate-900 text-sm">Contact info</div>
+                <div className="text-xs text-slate-400">WhatsApp, phone, Facebook, Instagram</div>
+              </div>
+            </button>
+            {canManagePlans && (
+              <button
+                onClick={() => setShowPricesModal(true)}
+                className="bg-white rounded-2xl border border-slate-200 p-4 flex items-center gap-3 hover:border-blue-200 hover:bg-blue-50/40 transition text-left"
+              >
+                <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center shrink-0">
+                  <Wallet className="w-5 h-5 text-indigo-700" />
+                </div>
+                <div>
+                  <div className="font-semibold text-slate-900 text-sm">Prices & Plans</div>
+                  <div className="text-xs text-slate-400">Edit each plan's name and monthly price</div>
+                </div>
+              </button>
+            )}
+          </div>
+
           <div>
             <h3 className="font-bold text-slate-900 mb-1">Academy details</h3>
             <p className="text-sm text-slate-500 mb-4">Shows up on receipts, reminders, and the login screen.</p>
@@ -15393,6 +15542,52 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
       <footer className="py-8 text-center text-slate-400 text-sm flex flex-col items-center gap-2">
         <img src={CONFIG.logoDataUri} alt={CONFIG.academyName} className="w-8 h-8 object-contain opacity-80" />
         <span>{CONFIG.academyName} © {new Date().getFullYear()}</span>
+        {(window.__academy?.whatsapp || window.__academy?.contactPhone || window.__academy?.facebookUrl || window.__academy?.instagramUrl) && (
+          <div className="flex items-center gap-3 mt-1">
+            {window.__academy?.whatsapp && (
+              <a
+                href={`https://wa.me/${window.__academy.whatsapp.replace(/\D/g, "")}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-green-50 flex items-center justify-center text-slate-500 hover:text-green-600 transition"
+                title="WhatsApp"
+              >
+                <MessageCircle className="w-4 h-4" />
+              </a>
+            )}
+            {window.__academy?.contactPhone && (
+              <a
+                href={`tel:${window.__academy.contactPhone}`}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-blue-50 flex items-center justify-center text-slate-500 hover:text-blue-700 transition"
+                title="Call"
+              >
+                <Phone className="w-4 h-4" />
+              </a>
+            )}
+            {window.__academy?.facebookUrl && (
+              <a
+                href={window.__academy.facebookUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-blue-50 flex items-center justify-center text-slate-500 hover:text-blue-700 transition"
+                title="Facebook"
+              >
+                <Facebook className="w-4 h-4" />
+              </a>
+            )}
+            {window.__academy?.instagramUrl && (
+              <a
+                href={window.__academy.instagramUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-pink-50 flex items-center justify-center text-slate-500 hover:text-pink-600 transition"
+                title="Instagram"
+              >
+                <Instagram className="w-4 h-4" />
+              </a>
+            )}
+          </div>
+        )}
         <a href="/_signup" className="text-xs text-slate-300 hover:text-slate-400 underline">
           Own a swim academy? Register yours here
         </a>
@@ -16001,15 +16196,24 @@ function AcademyNameGateView() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [heroImage, setHeroImage] = useState("");
+  const [contact, setContact] = useState(null);
 
   useEffect(() => {
     supabase
       .from("platform_settings")
-      .select("gate_hero_data_uri")
+      .select("gate_hero_data_uri, whatsapp, contact_phone, facebook_url, instagram_url")
       .eq("id", true)
       .maybeSingle()
       .then(({ data }) => {
         if (data?.gate_hero_data_uri) setHeroImage(data.gate_hero_data_uri);
+        if (data) {
+          setContact({
+            whatsapp: data.whatsapp || "",
+            phone: data.contact_phone || "",
+            facebook: data.facebook_url || "",
+            instagram: data.instagram_url || "",
+          });
+        }
       });
   }, []);
 
@@ -16077,6 +16281,52 @@ function AcademyNameGateView() {
             Register a new academy
           </a>
         </div>
+        {contact && (contact.whatsapp || contact.phone || contact.facebook || contact.instagram) && (
+          <div className="flex items-center justify-center gap-3 mt-5 pt-5 border-t border-slate-100">
+            {contact.whatsapp && (
+              <a
+                href={`https://wa.me/${contact.whatsapp.replace(/\D/g, "")}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-green-50 flex items-center justify-center text-slate-500 hover:text-green-600 transition"
+                title="WhatsApp"
+              >
+                <MessageCircle className="w-4 h-4" />
+              </a>
+            )}
+            {contact.phone && (
+              <a
+                href={`tel:${contact.phone}`}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-blue-50 flex items-center justify-center text-slate-500 hover:text-blue-700 transition"
+                title="Call"
+              >
+                <Phone className="w-4 h-4" />
+              </a>
+            )}
+            {contact.facebook && (
+              <a
+                href={contact.facebook}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-blue-50 flex items-center justify-center text-slate-500 hover:text-blue-700 transition"
+                title="Facebook"
+              >
+                <Facebook className="w-4 h-4" />
+              </a>
+            )}
+            {contact.instagram && (
+              <a
+                href={contact.instagram}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-pink-50 flex items-center justify-center text-slate-500 hover:text-pink-600 transition"
+                title="Instagram"
+              >
+                <Instagram className="w-4 h-4" />
+              </a>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -16300,9 +16550,24 @@ function SuperAdminView() {
   const [gateHeroSaving, setGateHeroSaving] = useState(false);
   const [gateHeroSaved, setGateHeroSaved] = useState(false);
 
+  const [platformWhatsapp, setPlatformWhatsapp] = useState("");
+  const [platformPhone, setPlatformPhone] = useState("");
+  const [platformFacebook, setPlatformFacebook] = useState("");
+  const [platformInstagram, setPlatformInstagram] = useState("");
+  const [platformContactSaving, setPlatformContactSaving] = useState(false);
+  const [platformContactSaved, setPlatformContactSaved] = useState(false);
+
   const loadGateHero = async () => {
-    const { data } = await supabase.from("platform_settings").select("gate_hero_data_uri").eq("id", true).maybeSingle();
+    const { data } = await supabase
+      .from("platform_settings")
+      .select("gate_hero_data_uri, whatsapp, contact_phone, facebook_url, instagram_url")
+      .eq("id", true)
+      .maybeSingle();
     setGateHeroPreview(data?.gate_hero_data_uri || "");
+    setPlatformWhatsapp(data?.whatsapp || "");
+    setPlatformPhone(data?.contact_phone || "");
+    setPlatformFacebook(data?.facebook_url || "");
+    setPlatformInstagram(data?.instagram_url || "");
   };
 
   const saveGateHero = async () => {
@@ -16319,6 +16584,28 @@ function SuperAdminView() {
       }
     } finally {
       setGateHeroSaving(false);
+    }
+  };
+
+  const savePlatformContact = async () => {
+    setPlatformContactSaving(true);
+    setPlatformContactSaved(false);
+    try {
+      const { error } = await supabase
+        .from("platform_settings")
+        .update({
+          whatsapp: platformWhatsapp.trim() || null,
+          contact_phone: platformPhone.trim() || null,
+          facebook_url: platformFacebook.trim() || null,
+          instagram_url: platformInstagram.trim() || null,
+        })
+        .eq("id", true);
+      if (!error) {
+        setPlatformContactSaved(true);
+        setTimeout(() => setPlatformContactSaved(false), 2000);
+      }
+    } finally {
+      setPlatformContactSaving(false);
     }
   };
 
@@ -16670,6 +16957,59 @@ function SuperAdminView() {
           </button>
           {gateHeroSaved && <span className="text-sm text-green-700">Saved.</span>}
         </div>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+        <h3 className="font-bold text-slate-900 mb-1">Platform contact info</h3>
+        <p className="text-sm text-slate-500 mb-3">
+          Shown on the "type your academy's name" landing page — for the platform itself, not tied to any one academy.
+        </p>
+        <div className="grid sm:grid-cols-2 gap-3 mb-3">
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">WhatsApp number</label>
+            <input
+              value={platformWhatsapp}
+              onChange={(e) => setPlatformWhatsapp(e.target.value)}
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+              placeholder="e.g. 01012345678"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Phone number</label>
+            <input
+              value={platformPhone}
+              onChange={(e) => setPlatformPhone(e.target.value)}
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+              placeholder="e.g. 0223456789"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Facebook page link</label>
+            <input
+              value={platformFacebook}
+              onChange={(e) => setPlatformFacebook(e.target.value)}
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+              placeholder="https://facebook.com/..."
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Instagram link</label>
+            <input
+              value={platformInstagram}
+              onChange={(e) => setPlatformInstagram(e.target.value)}
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+              placeholder="https://instagram.com/..."
+            />
+          </div>
+        </div>
+        <button
+          onClick={savePlatformContact}
+          disabled={platformContactSaving}
+          className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+        >
+          {platformContactSaving ? "Saving..." : "Save"}
+        </button>
+        {platformContactSaved && <span className="ml-2 text-sm text-green-700">Saved.</span>}
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200 p-5">
