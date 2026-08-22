@@ -32,6 +32,22 @@ const supabase = createClient(
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
 
+// Creates a brand-new Auth user (email + password) WITHOUT touching the
+// current admin's own signed-in session — used when an admin sets up a
+// colleague's email login from the dashboard. A normal supabase.auth.signUp()
+// call on the shared client would sign the admin themselves out and switch
+// to the new account instead, since a client only ever holds one session at
+// a time. This uses a separate, throwaway client (same project, its own
+// isolated session that's never persisted) purely to create the user, so
+// the admin's own session is completely unaffected.
+async function createAuthUserWithoutSession(email, password) {
+  const tempClient = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data, error } = await tempClient.auth.signUp({ email, password });
+  return { data, error };
+}
+
 /* ============================================================
    Multi-academy support — which academy is this visitor/admin on?
    Determined once, from the URL path (e.g. yoursite.com/boost-hub ->
@@ -5460,6 +5476,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [showAccountForm, setShowAccountForm] = useState(false);
   const [editingAccount, setEditingAccount] = useState(null);
+  const [emailLoginModal, setEmailLoginModal] = useState(null); // account, or null
+  const [emailLoginEmail, setEmailLoginEmail] = useState("");
+  const [emailLoginPassword, setEmailLoginPassword] = useState("");
+  const [emailLoginError, setEmailLoginError] = useState("");
+  const [emailLoginSaving, setEmailLoginSaving] = useState(false);
+  const [emailLoginSuccess, setEmailLoginSuccess] = useState(false);
 
   // achievement photos shown on the public homepage
   const [achievements, setAchievements] = useState([]);
@@ -6355,6 +6377,46 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     setAccounts(nextAccounts);
     setShowAccountForm(false);
     setEditingAccount(null);
+  };
+
+  // Sets up a real email + password login for an existing staff account,
+  // entirely from the admin's side — the staff member never has to prove
+  // an old password or do anything themselves. Uses a throwaway, separate
+  // Supabase client to create the Auth user so it never disturbs the
+  // admin's own signed-in session, then links it using the admin's own
+  // session (allowed because the admin already belongs to this academy).
+  const createEmailLoginForAccount = async () => {
+    setEmailLoginError("");
+    const acct = emailLoginModal;
+    if (!emailLoginEmail.trim() || !emailLoginPassword) return setEmailLoginError("Enter an email and password");
+    if (emailLoginPassword.length < 6) return setEmailLoginError("Password should be at least 6 characters");
+    setEmailLoginSaving(true);
+    try {
+      const { data, error } = await createAuthUserWithoutSession(emailLoginEmail.trim(), emailLoginPassword);
+      if (error) throw new Error(error.message || "Could not create the login");
+      if (!data?.user) throw new Error("Could not create the login, please try again");
+
+      const { error: profileError } = await supabase
+        .from("profiles")
+        .insert({ id: data.user.id, academy_id: window.__academy.id, is_super_admin: false });
+      if (profileError) throw new Error(profileError.message || "Could not link the login to this academy");
+
+      const allAccounts = await loadCollection(STORE_KEYS.accounts);
+      const idx = allAccounts.findIndex((a) => a.id === acct.id);
+      const next = idx !== -1 ? [...allAccounts] : [...allAccounts, acct];
+      const targetIdx = idx !== -1 ? idx : next.length - 1;
+      next[targetIdx] = { ...next[targetIdx], authUserId: data.user.id, email: emailLoginEmail.trim() };
+      const res = await saveCollection(STORE_KEYS.accounts, next);
+      if (!res) throw new Error("Could not save, please try again");
+      setAccounts(next);
+
+      logActivity(accountName, role, "Set up email login for account", `${acct.name} — ${emailLoginEmail.trim()}`);
+      setEmailLoginSuccess(true);
+    } catch (e) {
+      setEmailLoginError(e?.message || "Could not create the login, please try again");
+    } finally {
+      setEmailLoginSaving(false);
+    }
   };
 
   const deleteAccount = (account) => {
@@ -11040,6 +11102,20 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   >
                     {a.authUserId ? "Email login ✓" : "Old login only"}
                   </div>
+                  {!a.authUserId && (
+                    <button
+                      onClick={() => {
+                        setEmailLoginModal(a);
+                        setEmailLoginEmail("");
+                        setEmailLoginPassword("");
+                        setEmailLoginError("");
+                        setEmailLoginSuccess(false);
+                      }}
+                      className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-800 font-medium hover:bg-blue-100"
+                    >
+                      Create email login
+                    </button>
+                  )}
                   <div className="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 font-medium">
                     {ROLES.find((r) => r.id === a.role)?.label || a.role}
                   </div>
@@ -11094,6 +11170,74 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 Cancel
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {emailLoginModal && (
+        <div
+          className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 px-4"
+          onClick={() => !emailLoginSaving && setEmailLoginModal(null)}
+        >
+          <div className="bg-white rounded-2xl p-5 max-w-sm w-full shadow-xl" onClick={(e) => e.stopPropagation()}>
+            {emailLoginSuccess ? (
+              <div className="text-center">
+                <CheckCircle2 className="w-10 h-10 text-green-500 mx-auto mb-3" />
+                <h3 className="font-bold text-slate-900 mb-1">Email login created</h3>
+                <p className="text-sm text-slate-500 mb-4">
+                  Share these with {emailLoginModal.name} — they can log in with "Log in with email" from now on.
+                </p>
+                <div className="bg-slate-50 rounded-xl p-3 text-sm text-left mb-4 space-y-1">
+                  <div><span className="text-slate-400">Email:</span> {emailLoginEmail}</div>
+                  <div><span className="text-slate-400">Password:</span> {emailLoginPassword}</div>
+                </div>
+                <button
+                  onClick={() => setEmailLoginModal(null)}
+                  className="w-full py-2.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition"
+                >
+                  Done
+                </button>
+              </div>
+            ) : (
+              <>
+                <h3 className="font-bold text-slate-900 mb-1">Create email login</h3>
+                <p className="text-sm text-slate-500 mb-4">
+                  For {emailLoginModal.name}. Their old username/password keeps working too — this just adds a second way in.
+                </p>
+                <input
+                  type="email"
+                  value={emailLoginEmail}
+                  onChange={(e) => setEmailLoginEmail(e.target.value)}
+                  className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+                  placeholder="Their email"
+                />
+                <input
+                  type="text"
+                  value={emailLoginPassword}
+                  onChange={(e) => setEmailLoginPassword(e.target.value)}
+                  className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+                  placeholder="Choose a password for them (6+ characters)"
+                />
+                {emailLoginError && <div className="text-red-500 text-sm mb-3">{emailLoginError}</div>}
+                <div className="flex gap-2">
+                  <button
+                    onClick={createEmailLoginForAccount}
+                    disabled={emailLoginSaving}
+                    className="flex-1 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60 flex items-center justify-center gap-2"
+                  >
+                    {emailLoginSaving && <RefreshCw className="w-4 h-4 animate-spin" />}
+                    {emailLoginSaving ? "Creating..." : "Create"}
+                  </button>
+                  <button
+                    onClick={() => setEmailLoginModal(null)}
+                    disabled={emailLoginSaving}
+                    className="px-4 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200 disabled:opacity-60"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -14153,25 +14297,10 @@ function TechnicalView({ accountName, onExit }) {
 function StaffPortal({ onExit }) {
   const [accounts, setAccounts] = useState([]);
   const [coaches, setCoaches] = useState([]);
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [loginError, setLoginError] = useState("");
-  // "old" = the existing username/password login everyone's used so far.
-  // "email" = real Supabase Auth login, for staff who've already set one up.
-  // "claim" = one-time self-serve setup: prove who you are with your
-  // current username/password, then create a real email login.
-  const [mode, setMode] = useState("old");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
-  const [claimUsername, setClaimUsername] = useState("");
-  const [claimOldPassword, setClaimOldPassword] = useState("");
-  const [claimEmail, setClaimEmail] = useState("");
-  const [claimNewPassword, setClaimNewPassword] = useState("");
-  const [claimError, setClaimError] = useState("");
-  const [claimSaving, setClaimSaving] = useState(false);
-  const [claimSuccess, setClaimSuccess] = useState(false);
   // Restored from localStorage on load, if a previous login left one there —
   // this is what keeps someone logged in after their browser tab gets
   // suspended/reloaded (switching apps on mobile, etc.), instead of having
@@ -14209,10 +14338,9 @@ function StaffPortal({ onExit }) {
     onExit();
   };
 
-  // Shared by every login path (old password, real email, freshly claimed
-  // account) — turns a staff account record into the session shape the
-  // rest of this component routes on. Throws if something's not set up
-  // right (e.g. a coach account with no linked coach profile).
+  // Turns a staff account record into the session shape the rest of this
+  // component routes on. Throws if something's not set up right (e.g. a
+  // coach account with no linked coach profile).
   const sessionFromAccount = (acct) => {
     if (acct.role === "coach") {
       const coach = coaches.find((c) => c.id === acct.linkedCoachId);
@@ -14223,53 +14351,22 @@ function StaffPortal({ onExit }) {
   };
 
   const login = async () => {
-    setLoginError("");
-    const u = username.trim();
-    if (!u || !password) return setLoginError("Enter your username and password");
-
-    // Bootstrap: the original admin password always logs in as full admin,
-    // so you're never locked out before creating proper staff accounts.
-    const realAdminPassword = await getEffectiveAdminPassword();
-    if (u.toLowerCase() === "admin" && password === realAdminPassword) {
-      setSessionAndPersist({ role: "admin", name: "Admin" });
-      return;
-    }
-    const acct = accounts.find((a) => a.username.toLowerCase() === u.toLowerCase() && a.password === password);
-    if (!acct) return setLoginError("Wrong username or password");
-    try {
-      setSessionAndPersist(sessionFromAccount(acct));
-    } catch (e) {
-      setLoginError(e.message);
-    }
-  };
-
-  // Real Supabase Auth login, for staff who've already set one up.
-  const emailLogin = async () => {
     setAuthError("");
     if (!authEmail.trim() || !authPassword) return setAuthError("Enter your email and password");
     setAuthLoading(true);
     try {
       const { data, error } = await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword });
       if (error) throw new Error(error.message || "Wrong email or password");
-      // First successful sign-in after signing up (or after confirming
-      // the email, if this project requires that) — makes sure the
-      // profile exists now if it couldn't be created at setup time.
       await ensureStaffProfileAndLink(data.user, null);
       const ok = await verifyProfileForThisAcademy(data.user.id);
       if (!ok) {
         await supabase.auth.signOut();
-        throw new Error("This account isn't linked to this academy's link");
+        throw new Error("This account isn't linked to this academy");
       }
-      let acct = await findAccountByAuthUserId(data.user.id);
-      if (!acct) {
-        // This may be finishing a "Set up email login" that had to wait
-        // on confirming the email first — pick up where that left off if
-        // there's a matching pending claim saved on this device.
-        acct = await finishPendingClaim(data.user, authEmail.trim());
-      }
+      const acct = await findAccountByAuthUserId(data.user.id);
       if (!acct) {
         await supabase.auth.signOut();
-        throw new Error("This login isn't linked to a staff account yet — set it up from \"Set up email login\" first");
+        throw new Error("This login isn't set up for a staff account yet — ask an admin to create one for you");
       }
       setSessionAndPersist(sessionFromAccount(acct));
     } catch (e) {
@@ -14279,278 +14376,41 @@ function StaffPortal({ onExit }) {
     }
   };
 
-  // Finishes a "Set up email login" that couldn't complete right away
-  // because the project needed the email confirmed first — picks up the
-  // intent that was saved on this device at that time (which account to
-  // link, or whether to materialize the "admin" bootstrap account) and
-  // completes it now that there's a real, confirmed session. Returns the
-  // linked account, or null if there's no matching pending claim.
-  const finishPendingClaim = async (user, email) => {
-    let pending;
-    try {
-      const raw = localStorage.getItem("swim_pending_claim");
-      if (!raw) return null;
-      pending = JSON.parse(raw);
-    } catch {
-      return null;
-    }
-    if (!pending || pending.email !== email.trim().toLowerCase()) return null;
-    try {
-      if (pending.isBootstrapAdmin) {
-        const allAccounts = await loadCollection(STORE_KEYS.accounts);
-        if (!allAccounts.some((a) => a.username.toLowerCase() === "admin")) {
-          const newAcct = {
-            id: genId(),
-            username: "admin",
-            password: pending.password || "",
-            name: "Admin",
-            role: "admin",
-            authUserId: user.id,
-            email: user.email,
-          };
-          await saveCollection(STORE_KEYS.accounts, [...allAccounts, newAcct]);
-          setAccounts([...allAccounts, newAcct]);
-        }
-      }
-      await ensureStaffProfileAndLink(user, pending.username);
-      localStorage.removeItem("swim_pending_claim");
-      return await findAccountByAuthUserId(user.id);
-    } catch {
-      return null;
-    }
-  };
-
-  // One-time setup: proves identity with the current username/password
-  // (or the original shared "admin" password, if there's no individual
-  // account yet), then creates a real email+password login and links it
-  // to that same account — from then on, this person can (and should)
-  // use "Log in with email" instead of the old password.
-  const claimAccount = async () => {
-    setClaimError("");
-    const u = claimUsername.trim();
-    if (!u || !claimOldPassword) return setClaimError("Enter your current username and password");
-    if (!claimEmail.trim() || !claimNewPassword) return setClaimError("Enter an email and choose a password");
-    if (claimNewPassword.length < 6) return setClaimError("Password should be at least 6 characters");
-
-    let acct = accounts.find((a) => a.username.toLowerCase() === u.toLowerCase() && a.password === claimOldPassword);
-    let isBootstrapAdmin = false;
-    if (!acct) {
-      const realAdminPassword = await getEffectiveAdminPassword();
-      if (u.toLowerCase() === "admin" && claimOldPassword === realAdminPassword) {
-        isBootstrapAdmin = true;
-      } else {
-        return setClaimError("Wrong username or password — this has to match your current login");
-      }
-    }
-
-    setClaimSaving(true);
-    try {
-      const { data, error } = await supabase.auth.signUp({ email: claimEmail.trim(), password: claimNewPassword });
-      if (error) throw new Error(error.message || "Could not create your login");
-
-      if (!data.session || !data.user) {
-        // Needs email confirmation first — save what to do once that's
-        // done, since nothing else can happen until there's a real
-        // session (finishPendingClaim, above, picks this up on that
-        // first successful sign-in).
-        try {
-          localStorage.setItem(
-            "swim_pending_claim",
-            JSON.stringify({
-              email: claimEmail.trim().toLowerCase(),
-              isBootstrapAdmin,
-              username: isBootstrapAdmin ? "admin" : acct.username,
-              password: isBootstrapAdmin ? claimOldPassword : undefined,
-            })
-          );
-        } catch {
-          // localStorage can fail (private browsing, storage full) — if
-          // so, the person will need to redo "Set up email login" after
-          // confirming instead of it finishing automatically.
-        }
-        setClaimSuccess(true);
-        return;
-      }
-
-      // There's a real session now — create the profile FIRST (this only
-      // needs the session itself, nothing else). Only after that exists
-      // is it safe to write to the shared accounts list below, since
-      // that write is only allowed for staff already linked to this
-      // academy via a profile.
-      await ensureStaffProfileAndLink(data.user, isBootstrapAdmin ? null : acct.username);
-
-      if (isBootstrapAdmin) {
-        // The original "admin" login isn't a real account record — create
-        // one now (if it doesn't already exist) so it can be linked just
-        // like any other staff account from here on.
-        const allAccounts = await loadCollection(STORE_KEYS.accounts);
-        if (!allAccounts.some((a) => a.username.toLowerCase() === "admin")) {
-          const newAcct = {
-            id: genId(),
-            username: "admin",
-            password: claimOldPassword,
-            name: "Admin",
-            role: "admin",
-            authUserId: data.user.id,
-            email: data.user.email,
-          };
-          await saveCollection(STORE_KEYS.accounts, [...allAccounts, newAcct]);
-          setAccounts([...allAccounts, newAcct]);
-        }
-      }
-
-      const fresh = await findAccountByAuthUserId(data.user.id);
-      if (fresh) setSessionAndPersist(sessionFromAccount(fresh));
-    } catch (e) {
-      setClaimError(e?.message || "Could not set up your login, please try again");
-    } finally {
-      setClaimSaving(false);
-    }
-  };
-
   if (!session) {
     return (
       <div className="min-h-[70vh] flex items-center justify-center px-4">
         <div className="max-w-sm w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
           <img src={CONFIG.logoDataUri} alt={CONFIG.academyName} className="w-14 h-14 mx-auto mb-4 object-contain" />
           <h2 className="text-xl font-bold text-slate-900 mb-4 text-center">Staff login</h2>
-
-          {mode === "old" && (
-            <>
-              <input
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
-                placeholder="Username"
-              />
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") login();
-                }}
-                className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
-                placeholder="Password"
-              />
-              {loginError && <div className="text-red-500 text-sm mb-3">{loginError}</div>}
-              <button
-                onClick={login}
-                className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition mb-2"
-              >
-                Log in
-              </button>
-              <div className="flex items-center justify-between mt-2 mb-1">
-                <button onClick={() => { setMode("email"); setAuthError(""); }} className="text-xs text-slate-400 hover:text-slate-600 underline">
-                  Log in with email
-                </button>
-                <button onClick={() => { setMode("claim"); setClaimError(""); setClaimSuccess(false); }} className="text-xs text-slate-400 hover:text-slate-600 underline">
-                  Set up email login
-                </button>
-              </div>
-            </>
-          )}
-
-          {mode === "email" && (
-            <>
-              <input
-                type="email"
-                value={authEmail}
-                onChange={(e) => setAuthEmail(e.target.value)}
-                className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
-                placeholder="Email"
-                autoComplete="username"
-              />
-              <input
-                type="password"
-                value={authPassword}
-                onChange={(e) => setAuthPassword(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") emailLogin();
-                }}
-                className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
-                placeholder="Password"
-                autoComplete="current-password"
-              />
-              {authError && <div className="text-red-500 text-sm mb-3">{authError}</div>}
-              <button
-                onClick={emailLogin}
-                disabled={authLoading}
-                className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition mb-2 disabled:opacity-60 flex items-center justify-center gap-2"
-              >
-                {authLoading && <RefreshCw className="w-4 h-4 animate-spin" />}
-                {authLoading ? "Signing in..." : "Log in"}
-              </button>
-              <button onClick={() => { setMode("old"); setLoginError(""); }} className="w-full text-center text-xs text-slate-400 hover:text-slate-600 underline mt-1">
-                Use the old username/password login instead
-              </button>
-            </>
-          )}
-
-          {mode === "claim" && (
-            claimSuccess ? (
-              <div className="text-center">
-                <CheckCircle2 className="w-10 h-10 text-green-500 mx-auto mb-3" />
-                <p className="text-sm text-slate-600 mb-4">Almost done — check your email to confirm it, then come back and log in with your new email and password.</p>
-                <button onClick={() => { setMode("email"); setClaimSuccess(false); }} className="w-full py-2.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition">
-                  Go to email login
-                </button>
-              </div>
-            ) : (
-              <>
-                <p className="text-xs text-slate-400 mb-3">
-                  Confirm your current login, then set up a real email + password you'll use from now on. If you use the
-                  original admin password, enter "admin" as the username below.
-                </p>
-                <input
-                  value={claimUsername}
-                  onChange={(e) => setClaimUsername(e.target.value)}
-                  className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
-                  placeholder="Current username"
-                />
-                <input
-                  type="password"
-                  value={claimOldPassword}
-                  onChange={(e) => setClaimOldPassword(e.target.value)}
-                  className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
-                  placeholder="Current password"
-                />
-                <div className="border-t border-slate-100 pt-3 mb-1">
-                  <input
-                    type="email"
-                    value={claimEmail}
-                    onChange={(e) => setClaimEmail(e.target.value)}
-                    className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
-                    placeholder="Your email"
-                  />
-                  <input
-                    type="password"
-                    value={claimNewPassword}
-                    onChange={(e) => setClaimNewPassword(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") claimAccount();
-                    }}
-                    className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
-                    placeholder="Choose a new password"
-                  />
-                </div>
-                {claimError && <div className="text-red-500 text-sm mb-3">{claimError}</div>}
-                <button
-                  onClick={claimAccount}
-                  disabled={claimSaving}
-                  className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition mb-2 disabled:opacity-60 flex items-center justify-center gap-2"
-                >
-                  {claimSaving && <RefreshCw className="w-4 h-4 animate-spin" />}
-                  {claimSaving ? "Setting up..." : "Set up email login"}
-                </button>
-                <button onClick={() => { setMode("old"); setClaimError(""); }} className="w-full text-center text-xs text-slate-400 hover:text-slate-600 underline mt-1">
-                  Back
-                </button>
-              </>
-            )
-          )}
-
-          <button onClick={onExit} className="w-full py-2 text-slate-400 text-sm hover:text-slate-600 mt-2">
+          <input
+            type="email"
+            value={authEmail}
+            onChange={(e) => setAuthEmail(e.target.value)}
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+            placeholder="Email"
+            autoComplete="username"
+          />
+          <input
+            type="password"
+            value={authPassword}
+            onChange={(e) => setAuthPassword(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") login();
+            }}
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+            placeholder="Password"
+            autoComplete="current-password"
+          />
+          {authError && <div className="text-red-500 text-sm mb-3">{authError}</div>}
+          <button
+            onClick={login}
+            disabled={authLoading}
+            className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition mb-2 disabled:opacity-60 flex items-center justify-center gap-2"
+          >
+            {authLoading && <RefreshCw className="w-4 h-4 animate-spin" />}
+            {authLoading ? "Signing in..." : "Log in"}
+          </button>
+          <button onClick={onExit} className="w-full py-2 text-slate-400 text-sm hover:text-slate-600 mt-1">
             Back
           </button>
         </div>
