@@ -16402,6 +16402,40 @@ function SuperAdminView() {
         .from("profiles")
         .upsert({ id: linkUserId.trim(), academy_id: linkAcademyId, is_super_admin: false });
       if (error) throw new Error(error.message);
+
+      // Also create a staff "account" record for this academy, linked to
+      // this login — a profile alone only proves academy membership;
+      // without a matching account record the app has no role/permissions
+      // to sign them in with, and would turn them away at login.
+      const { data: existingRow } = await supabase
+        .from("app_storage")
+        .select("value")
+        .eq("key", "accounts-all")
+        .eq("academy_id", linkAcademyId)
+        .maybeSingle();
+      let accounts = [];
+      if (existingRow?.value) {
+        try {
+          accounts = JSON.parse(existingRow.value);
+        } catch {
+          accounts = [];
+        }
+      }
+      if (!accounts.some((a) => a.authUserId === linkUserId.trim())) {
+        accounts.push({
+          id: genId(),
+          username: "admin-" + linkUserId.trim().slice(0, 8),
+          password: "",
+          name: "Admin",
+          role: "admin",
+          authUserId: linkUserId.trim(),
+        });
+      }
+      const { error: acctError } = await supabase
+        .from("app_storage")
+        .upsert({ key: "accounts-all", academy_id: linkAcademyId, value: JSON.stringify(accounts), updated_at: new Date().toISOString() });
+      if (acctError) throw new Error(acctError.message);
+
       setLinkSuccess(true);
       setLinkUserId("");
     } catch (e) {
