@@ -3628,6 +3628,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [authPassword, setAuthPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
+  const [authMode, setAuthMode] = useState("login"); // "login" | "signup"
+  const [signupSuccess, setSignupSuccess] = useState(false);
 
   // verifyProfileForThisAcademy is a module-level function (shared with
   // the staff login screens) — no local copy needed here anymore.
@@ -3678,6 +3680,34 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       setAuthed(true);
     } catch (e) {
       setAuthError(e?.message || "Could not sign in, please try again");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // Creates a brand-new real email login for this academy — for when
+  // there's no admin account yet (or you're moving off the old shared
+  // password). Links it to this academy right away via "profiles", with
+  // full admin access, same as the old password login gave.
+  const accountSignup = async () => {
+    setAuthError("");
+    setSignupSuccess(false);
+    if (!authEmail.trim() || !authPassword) return setAuthError("Enter an email and a password");
+    if (authPassword.length < 6) return setAuthError("Password should be at least 6 characters");
+    setAuthLoading(true);
+    try {
+      const { data, error } = await supabase.auth.signUp({ email: authEmail.trim(), password: authPassword });
+      if (error) throw new Error(error.message || "Could not create the account");
+      if (data.user) {
+        await ensureStaffProfileAndLink(data.user, null);
+      }
+      if (data.session) {
+        setAuthed(true);
+      } else {
+        setSignupSuccess(true);
+      }
+    } catch (e) {
+      setAuthError(e?.message || "Could not create the account, please try again");
     } finally {
       setAuthLoading(false);
     }
@@ -6588,44 +6618,76 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       <div className="min-h-[70vh] flex items-center justify-center px-4">
         <div className="max-w-sm w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
           <img src={CONFIG.logoDataUri} alt={CONFIG.academyName} className="w-14 h-14 mx-auto mb-4 object-contain" />
-          <h2 className="text-xl font-bold text-slate-900 mb-4 text-center">Admin login</h2>
+          <h2 className="text-xl font-bold text-slate-900 mb-4 text-center">{authMode === "signup" ? "Create admin account" : "Admin login"}</h2>
 
-          <input
-            type="email"
-            value={authEmail}
-            onChange={(e) => setAuthEmail(e.target.value)}
-            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
-            placeholder="Email"
-            autoComplete="username"
-          />
-          <input
-            type="password"
-            value={authPassword}
-            onChange={(e) => setAuthPassword(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") accountLogin();
-            }}
-            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
-            placeholder="Password"
-            autoComplete="current-password"
-          />
-          {authError && <div className="text-red-500 text-sm mb-3">{authError}</div>}
-          <button
-            onClick={accountLogin}
-            disabled={authLoading}
-            className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition mb-2 disabled:opacity-60 flex items-center justify-center gap-2"
-          >
-            {authLoading && <RefreshCw className="w-4 h-4 animate-spin" />}
-            {authLoading ? "Signing in..." : "Log in"}
-          </button>
+          {authMode === "signup" && signupSuccess ? (
+            <div className="text-center">
+              <CheckCircle2 className="w-10 h-10 text-green-500 mx-auto mb-3" />
+              <p className="text-sm text-slate-600 mb-4">Almost done — check your email to confirm it, then come back and log in.</p>
+              <button
+                onClick={() => {
+                  setAuthMode("login");
+                  setSignupSuccess(false);
+                }}
+                className="w-full py-2.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition"
+              >
+                Go to login
+              </button>
+            </div>
+          ) : (
+            <>
+              <input
+                type="email"
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
+                className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+                placeholder="Email"
+                autoComplete="username"
+              />
+              <input
+                type="password"
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") (authMode === "signup" ? accountSignup() : accountLogin());
+                }}
+                className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+                placeholder={authMode === "signup" ? "Choose a password (6+ characters)" : "Password"}
+                autoComplete={authMode === "signup" ? "new-password" : "current-password"}
+              />
+              {authError && <div className="text-red-500 text-sm mb-3">{authError}</div>}
+              <button
+                onClick={authMode === "signup" ? accountSignup : accountLogin}
+                disabled={authLoading}
+                className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition mb-2 disabled:opacity-60 flex items-center justify-center gap-2"
+              >
+                {authLoading && <RefreshCw className="w-4 h-4 animate-spin" />}
+                {authLoading ? (authMode === "signup" ? "Creating..." : "Signing in...") : (authMode === "signup" ? "Create account" : "Log in")}
+              </button>
 
+              <div className="text-center mb-1">
+                <button
+                  onClick={() => {
+                    setAuthMode(authMode === "signup" ? "login" : "signup");
+                    setAuthError("");
+                  }}
+                  className="text-xs text-slate-400 hover:text-slate-600 underline"
+                >
+                  {authMode === "signup" ? "Already have an account? Log in" : "Don't have an account yet? Create one"}
+                </button>
+              </div>
+            </>
+          )}
+
+          {authMode === "login" && !signupSuccess && (
           <div className="text-center my-3">
             <button onClick={() => setShowLegacyLogin((v) => !v)} className="text-xs text-slate-400 hover:text-slate-600 underline">
               {showLegacyLogin ? "Hide old password login" : "Having trouble? Use the old password login"}
             </button>
           </div>
+          )}
 
-          {showLegacyLogin && (
+          {authMode === "login" && !signupSuccess && showLegacyLogin && (
             <div className="border-t border-slate-100 pt-3 mb-2">
               <input
                 type="password"
