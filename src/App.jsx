@@ -5196,7 +5196,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
     const { startDate, endDate, cap } = trainingWindow;
     const filtered = dates.filter((d) => (!startDate || d >= startDate) && (!endDate || d <= endDate));
-    return filtered.slice(0, cap || 8);
+    // If a training window was set for a different month and never
+    // cleared, it can end up excluding every date this month — rather
+    // than silently export a roster with zero attendance columns, fall
+    // back to the full month so there's always something usable.
+    const safe = filtered.length > 0 ? filtered : dates;
+    return safe.slice(0, cap || 8);
   };
 
   // Prints/saves a PDF of who's in the pool for a specific day (and
@@ -15931,6 +15936,18 @@ function AcademyNameGateView() {
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [heroImage, setHeroImage] = useState("");
+
+  useEffect(() => {
+    supabase
+      .from("platform_settings")
+      .select("gate_hero_data_uri")
+      .eq("id", true)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data?.gate_hero_data_uri) setHeroImage(data.gate_hero_data_uri);
+      });
+  }, []);
 
   const go = async () => {
     setError("");
@@ -15954,14 +15971,20 @@ function AcademyNameGateView() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4 bg-slate-50 relative">
+    <div className="min-h-screen flex items-center justify-center px-4 bg-slate-50 relative overflow-hidden">
+      {heroImage && (
+        <>
+          <img src={heroImage} alt="" className="absolute inset-0 w-full h-full object-cover" />
+          <div className="absolute inset-0 bg-slate-900/60" />
+        </>
+      )}
       <a
         href="/_admin"
-        className="absolute top-4 left-4 text-xs px-3 py-2 rounded-lg bg-white border border-slate-200 text-slate-500 font-medium hover:bg-slate-100 shadow-sm"
+        className="absolute top-4 left-4 text-xs px-3 py-2 rounded-lg bg-white border border-slate-200 text-slate-500 font-medium hover:bg-slate-100 shadow-sm z-10"
       >
         Super Admin login
       </a>
-      <div className="max-w-sm w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
+      <div className="max-w-sm w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100 relative z-10">
         <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-blue-950 flex items-center justify-center">
           <Waves className="w-7 h-7 text-white" />
         </div>
@@ -16209,6 +16232,32 @@ function SuperAdminView() {
   const [academies, setAcademies] = useState([]);
   const [loadingAcademies, setLoadingAcademies] = useState(false);
 
+  const [gateHeroPreview, setGateHeroPreview] = useState("");
+  const [gateHeroSaving, setGateHeroSaving] = useState(false);
+  const [gateHeroSaved, setGateHeroSaved] = useState(false);
+
+  const loadGateHero = async () => {
+    const { data } = await supabase.from("platform_settings").select("gate_hero_data_uri").eq("id", true).maybeSingle();
+    setGateHeroPreview(data?.gate_hero_data_uri || "");
+  };
+
+  const saveGateHero = async () => {
+    setGateHeroSaving(true);
+    setGateHeroSaved(false);
+    try {
+      const { error } = await supabase
+        .from("platform_settings")
+        .update({ gate_hero_data_uri: gateHeroPreview || null })
+        .eq("id", true);
+      if (!error) {
+        setGateHeroSaved(true);
+        setTimeout(() => setGateHeroSaved(false), 2000);
+      }
+    } finally {
+      setGateHeroSaving(false);
+    }
+  };
+
   const loadAcademies = async () => {
     setLoadingAcademies(true);
     const { data } = await supabase.from("academies").select("id, name, slug, created_at, subscription_paid_until").order("created_at", { ascending: false });
@@ -16239,8 +16288,33 @@ function SuperAdminView() {
     if (!error) loadAcademies();
   };
 
+  const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
+  // Permanently removes an academy that's not being used — its profiles
+  // and app_storage data are cleaned up first, then the academy row
+  // itself. There's no undo, so this is gated behind typing the
+  // academy's exact name to confirm (see the confirm row in the list).
+  const deleteAcademy = async (academyId) => {
+    setDeleting(true);
+    try {
+      await supabase.from("profiles").delete().eq("academy_id", academyId);
+      await supabase.from("app_storage").delete().eq("academy_id", academyId);
+      await supabase.from("academies").delete().eq("id", academyId);
+      setDeleteConfirmId(null);
+      loadAcademies();
+    } catch (e) {
+      // leave the confirm row open so they can see something went wrong and retry
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   useEffect(() => {
-    if (session) loadAcademies();
+    if (session) {
+      loadAcademies();
+      loadGateHero();
+    }
   }, [session]);
 
   const login = async () => {
@@ -16461,6 +16535,45 @@ function SuperAdminView() {
         </button>
       </div>
 
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+        <h3 className="font-bold text-slate-900 mb-1">Landing page background</h3>
+        <p className="text-sm text-slate-500 mb-3">
+          The photo shown behind the "type your academy's name" page — one image for the whole platform, not tied to any academy.
+        </p>
+        {gateHeroPreview && (
+          <img src={gateHeroPreview} alt="" className="w-full max-w-md h-40 object-cover rounded-xl mb-3 border border-slate-200" />
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="px-4 py-2 rounded-lg bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200 cursor-pointer">
+            Choose photo
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const dataUri = await compressImage(file, 1600, 0.75);
+                setGateHeroPreview(dataUri);
+              }}
+            />
+          </label>
+          {gateHeroPreview && (
+            <button onClick={() => setGateHeroPreview("")} className="px-3 py-2 rounded-lg text-sm text-red-600 hover:bg-red-50">
+              Remove
+            </button>
+          )}
+          <button
+            onClick={saveGateHero}
+            disabled={gateHeroSaving}
+            className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+          >
+            {gateHeroSaving ? "Saving..." : "Save"}
+          </button>
+          {gateHeroSaved && <span className="text-sm text-green-700">Saved.</span>}
+        </div>
+      </div>
+
       <div className="bg-white rounded-2xl border border-slate-200 p-5">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-bold text-slate-900">All academies ({academies.length})</h3>
@@ -16505,13 +16618,62 @@ function SuperAdminView() {
                   >
                     <Pencil className="w-3.5 h-3.5" />
                   </button>
+                  <button
+                    onClick={() => setDeleteConfirmId(deleteConfirmId === a.id ? null : a.id)}
+                    className="p-1.5 rounded-lg hover:bg-red-50 text-red-500"
+                    title="Delete this academy"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
               {editingAcademyId === a.id && <AcademyEditRow academy={a} onSaved={loadAcademies} onClose={() => setEditingAcademyId(null)} />}
+              {deleteConfirmId === a.id && (
+                <DeleteAcademyConfirmRow
+                  academy={a}
+                  deleting={deleting}
+                  onConfirm={() => deleteAcademy(a.id)}
+                  onCancel={() => setDeleteConfirmId(null)}
+                />
+              )}
             </div>
             );
           })}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* Type-to-confirm row for deleting an academy — shown inline under the
+   academy in the list. Requires typing the exact name so this can't
+   happen from an accidental tap; there's no undo once confirmed. */
+function DeleteAcademyConfirmRow({ academy, deleting, onConfirm, onCancel }) {
+  const [typed, setTyped] = useState("");
+  const matches = typed.trim() === academy.name;
+  return (
+    <div className="mt-2 mb-2 p-3 bg-red-50 border border-red-200 rounded-xl">
+      <p className="text-sm text-red-700 mb-2">
+        This permanently deletes <strong>{academy.name}</strong> and all its data (swimmers, payments, staff logins — everything). There's no undo.
+        Type the academy's name to confirm: <strong>{academy.name}</strong>
+      </p>
+      <div className="flex gap-2">
+        <input
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          className="flex-1 border border-red-200 rounded-lg py-2 px-3 outline-none focus:border-red-400 text-sm"
+          placeholder={academy.name}
+        />
+        <button
+          onClick={onConfirm}
+          disabled={!matches || deleting}
+          className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-semibold hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+        >
+          {deleting ? "Deleting..." : "Delete forever"}
+        </button>
+        <button onClick={onCancel} disabled={deleting} className="px-4 py-2 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200">
+          Cancel
+        </button>
       </div>
     </div>
   );
