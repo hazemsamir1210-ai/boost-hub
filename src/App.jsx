@@ -14301,31 +14301,43 @@ function StaffPortal({ onExit }) {
       const { data, error } = await supabase.auth.signUp({ email: claimEmail.trim(), password: claimNewPassword });
       if (error) throw new Error(error.message || "Could not create your login");
 
+      if (!data.session || !data.user) {
+        // Needs email confirmation first — nothing else can happen until
+        // there's a real session (the first sign-in after confirming
+        // finishes this up — see emailLogin above).
+        setClaimSuccess(true);
+        return;
+      }
+
+      // There's a real session now — create the profile FIRST (this only
+      // needs the session itself, nothing else). Only after that exists
+      // is it safe to write to the shared accounts list below, since
+      // that write is only allowed for staff already linked to this
+      // academy via a profile.
+      await ensureStaffProfileAndLink(data.user, isBootstrapAdmin ? null : acct.username);
+
       if (isBootstrapAdmin) {
         // The original "admin" login isn't a real account record — create
         // one now (if it doesn't already exist) so it can be linked just
         // like any other staff account from here on.
         const allAccounts = await loadCollection(STORE_KEYS.accounts);
         if (!allAccounts.some((a) => a.username.toLowerCase() === "admin")) {
-          const newAcct = { id: genId(), username: "admin", password: claimOldPassword, name: "Admin", role: "admin" };
+          const newAcct = {
+            id: genId(),
+            username: "admin",
+            password: claimOldPassword,
+            name: "Admin",
+            role: "admin",
+            authUserId: data.user.id,
+            email: data.user.email,
+          };
           await saveCollection(STORE_KEYS.accounts, [...allAccounts, newAcct]);
           setAccounts([...allAccounts, newAcct]);
         }
       }
 
-      if (data.session && data.user) {
-        // Signed in immediately (this project doesn't require confirming
-        // the email first) — there's a real session now, safe to create
-        // the profile and link the account right away.
-        await ensureStaffProfileAndLink(data.user, isBootstrapAdmin ? "admin" : acct.username);
-        const fresh = await findAccountByAuthUserId(data.user.id);
-        if (fresh) setSessionAndPersist(sessionFromAccount(fresh));
-      } else {
-        // Needs email confirmation first — the profile/link happen on
-        // the first real sign-in after confirming (see emailLogin above).
-        // We can't create them yet: there's no session to do it with.
-        setClaimSuccess(true);
-      }
+      const fresh = await findAccountByAuthUserId(data.user.id);
+      if (fresh) setSessionAndPersist(sessionFromAccount(fresh));
     } catch (e) {
       setClaimError(e?.message || "Could not set up your login, please try again");
     } finally {
