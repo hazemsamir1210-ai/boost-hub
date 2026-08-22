@@ -727,7 +727,7 @@ let TIME_SLOTS = {
   elalsson: {
     "sun-tue": ["3:30 PM", "4:30 PM", "5:30 PM", "6:30 PM", "7:30 PM", "8:30 PM", "9:30 PM"],
     "mon-wed": ["3:30 PM", "4:30 PM", "5:30 PM", "6:30 PM", "7:30 PM", "8:30 PM", "9:30 PM"],
-    "fri-sat": ["10:00 AM", "11:00 AM", "12:00 PM", "1:00 PM", "2:00 PM", "3:00 PM", "4:00 PM", "5:00 PM", "6:00 PM"],
+    "fri-sat": ["10:00 AM", "11:00 AM", "12:00 PM", "1:00 PM", "2:00 PM", "3:00 PM", "4:00 PM", "5:00 PM", "6:00 PM", "8:30 PM"],
   },
 };
 const DEFAULT_TIME_SLOTS = JSON.parse(JSON.stringify(TIME_SLOTS));
@@ -2155,10 +2155,11 @@ const IMPORT_DAY_MAP = {
 // Matches a bare hour/time from the sheet (e.g. "3", "3:30", or a real
 // Excel time) against this day group's actual valid time slots — those
 // are the only values the app's Time dropdown can show as selected, and
-// they carry the AM/PM the sheet's bare numbers don't specify. Matches
-// by hour number; falls back to a plain "H:MM" guess if nothing in the
-// day's slot list has that hour (so it's still visible, just won't
-// pre-select a dropdown option until someone confirms it by hand).
+// they carry the AM/PM the sheet's bare numbers don't specify. A bare
+// hour on its own (just "3", no minutes) always means that hour and a
+// half in this academy's real schedule (e.g. "3" -> 3:30) — that's the
+// house convention the sheet was built around, confirmed against the
+// real Star schedule (sheet says "4", the actual session is 4:30).
 function importMapTime(raw, day) {
   if (raw == null || String(raw).trim() === "") return null;
   let hour, minute;
@@ -2173,7 +2174,11 @@ function importMapTime(raw, day) {
       minute = Number(m);
     } else if (/^\d{1,2}$/.test(s)) {
       hour = Number(s);
-      minute = 0;
+      // A bare hour's real minute depends on the day group: Sunday/Tuesday
+      // and Monday/Wednesday sessions are always on the half hour (e.g.
+      // sheet's "3" -> 3:30); Friday/Saturday sessions are always right
+      // on the hour (sheet's "4" -> 4:00, not 4:30).
+      minute = day === "fri-sat" ? 0 : 30;
     } else {
       return null;
     }
@@ -2181,11 +2186,20 @@ function importMapTime(raw, day) {
   const validSlots = (TIME_SLOTS[BRANCHES[0].id] && TIME_SLOTS[BRANCHES[0].id][day]) || [];
   const matched = validSlots.find((slot) => {
     const slotHour = parseInt(slot, 10);
+    const slotMinuteMatch = slot.match(/:(\d{2})/);
+    const slotMinute = slotMinuteMatch ? Number(slotMinuteMatch[1]) : 0;
     const is12h = /PM/i.test(slot) && slotHour !== 12 ? slotHour + 12 : /AM/i.test(slot) && slotHour === 12 ? 0 : slotHour;
-    return is12h === hour || slotHour === hour; // match either 24h or plain hour number
+    const hourMatches = is12h === hour || slotHour === hour;
+    return hourMatches && slotMinute === minute;
   });
-  if (matched) return matched;
-  return `${hour}:${String(minute).padStart(2, "0")}`;
+  // Only ever return one of the academy's real time slots — a bare
+  // "H:MM" guess doesn't match anything in the Time dropdown, so it used
+  // to save silently as a value the swimmer's edit form couldn't display,
+  // making a swimmer LOOK unscheduled even though something was saved.
+  // Returning null here instead lets the caller correctly treat this as
+  // "couldn't determine a real time" (falls through to the Star/Team
+  // category schedule, or shows the normal "left unscheduled" warning).
+  return matched || null;
 }
 
 function parseFullHistorySheet(sheet) {
@@ -2252,19 +2266,25 @@ function parseFullHistorySheet(sheet) {
         // fallback schedule rules used for the offline migration.
         const blob = `${lvlRaw} ${dayRaw} ${timeRaw} ${payRaw}`.toLowerCase();
         if (blob.includes("star") || blob.includes("team") || blob.includes("بر تيم")) {
-          scheduleHistory.push({ day: "mon-wed", time: "7:30", date: monthDate });
-          scheduleHistory.push({ day: "fri-sat", time: "3:00", date: monthDate });
+          scheduleHistory.push({ day: "mon-wed", time: "7:30 PM", date: monthDate });
+          scheduleHistory.push({ day: "fri-sat", time: "4:00 PM", date: monthDate });
         } else if (blob.includes("ladies")) {
-          scheduleHistory.push({ day: "fri-sat", time: "8:30", date: monthDate });
+          scheduleHistory.push({ day: "fri-sat", time: "8:30 PM", date: monthDate });
         } else if (blob.includes("adult")) {
-          scheduleHistory.push({ day: "sun-tue", time: "7:30", date: monthDate });
+          scheduleHistory.push({ day: "sun-tue", time: "7:30 PM", date: monthDate });
         }
       }
     });
 
     const currentLevelEntry = [...levelHistory].sort((a, b) => a.date.localeCompare(b.date)).pop();
     const currentLevel = currentLevelEntry ? currentLevelEntry.level : "";
-    const latestEntries = scheduleHistory.filter((h) => h.date.startsWith(latestKey));
+    // Use this swimmer's own most recent month that actually has a
+    // day/time filled in — not strictly the file's overall latest month,
+    // since that column can be blank for a given swimmer (not updated
+    // yet) even though an earlier month has their real current schedule.
+    const sortedHistory = [...scheduleHistory].sort((a, b) => a.date.localeCompare(b.date));
+    const mostRecentDate = sortedHistory.length ? sortedHistory[sortedHistory.length - 1].date : null;
+    const latestEntries = mostRecentDate ? sortedHistory.filter((h) => h.date === mostRecentDate) : [];
 
     const age = birthYear && /^\d{4}$/.test(birthYear) ? new Date().getFullYear() - Number(birthYear) : "";
 
@@ -5161,6 +5181,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [rosterPreview, setRosterPreview] = useState(null); // { bodyHtml, filename } once built, or null
   const [rosterFontSize, setRosterFontSize] = useState(13);
   const [rosterAlign, setRosterAlign] = useState("left");
+  const [rosterHeaderAlign, setRosterHeaderAlign] = useState("left"); // academy name/logo — separate from the table content, since it's a flex row that ignores text-align
   const [trainingWindow, setTrainingWindow] = useState({ startDate: "", endDate: "", cap: 8 });
   const [trainingWindowOpen, setTrainingWindowOpen] = useState(false);
 
@@ -5310,7 +5331,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         })
         .join("");
 
-      const bodyHtml = `
+      const headerHtml = `
         <div class="header" dir="ltr">
           <img src="${CONFIG.logoDataUri}" />
           <div>
@@ -5318,14 +5339,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <div class="sub">Session roster & attendance — ${escapeHtml(dayLabel)}${scheduleTimeFilter !== "all" ? ` · ${escapeHtml(scheduleTimeFilter)}` : ""} · ${escapeHtml(monthLabel(scheduleMonth))}</div>
           </div>
         </div>
+      `;
+      const gridHtml = `
         <div dir="rtl" class="roster-grid">
           ${coachSections || "<p>No swimmers scheduled for this selection.</p>"}
         </div>
       `;
       setRosterFontSize(13);
       setRosterAlign("left");
+      setRosterHeaderAlign("left");
       setRosterPreview({
-        bodyHtml,
+        headerHtml,
+        gridHtml,
         filename: `roster-${scheduleDayFilter}-${scheduleMonth}${scheduleTimeFilter !== "all" ? "-" + scheduleTimeFilter.replace(/[: ]/g, "") : ""}`,
       });
     } catch (e) {
@@ -5335,12 +5360,24 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
   };
 
+  // Turns "left"/"center"/"right" into the CSS values needed for the
+  // header's flex row — plain text-align doesn't affect flex items, so
+  // this needs justify-content (item position) and text-align (text
+  // inside them) set together to actually move as one unit.
+  const headerAlignStyles = (align) => {
+    const justify = align === "center" ? "center" : align === "right" ? "flex-end" : "flex-start";
+    return `justify-content:${justify}; text-align:${align};`;
+  };
+
   // Wraps the previewed roster with whatever font size/alignment was
   // chosen in the preview, so the downloaded PDF looks exactly like what
-  // was shown — then triggers the actual download.
+  // was shown — then triggers the actual download. Header (logo + academy
+  // name) and the roster table each have their own alignment, since the
+  // header is a flex row that plain text-align can't move on its own.
   const downloadRosterPdf = () => {
     if (!rosterPreview) return;
-    const styledHtml = `<div style="font-size:${rosterFontSize}px; text-align:${rosterAlign};">${rosterPreview.bodyHtml}</div>`;
+    const headerAlignCss = `<style>.header { ${headerAlignStyles(rosterHeaderAlign)} }</style>`;
+    const styledHtml = `${headerAlignCss}${rosterPreview.headerHtml}<div style="font-size:${rosterFontSize}px; text-align:${rosterAlign};">${rosterPreview.gridHtml}</div>`;
     downloadReportHTML(rosterPreview.filename, styledHtml);
     setRosterPreview(null);
   };
@@ -11679,6 +11716,26 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 </button>
               </div>
               <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1">
+                <span className="text-xs text-slate-500 px-1">Header:</span>
+                {[
+                  { id: "left", icon: AlignLeft, label: "Header align left" },
+                  { id: "center", icon: AlignCenter, label: "Header align center" },
+                  { id: "right", icon: AlignRight, label: "Header align right" },
+                ].map((opt) => (
+                  <button
+                    key={opt.id}
+                    onClick={() => setRosterHeaderAlign(opt.id)}
+                    title={opt.label}
+                    className={`w-8 h-8 rounded-md flex items-center justify-center ${
+                      rosterHeaderAlign === opt.id ? "bg-white text-blue-950 shadow-sm" : "text-slate-500 hover:bg-white"
+                    }`}
+                  >
+                    <opt.icon className="w-4 h-4" />
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1">
+                <span className="text-xs text-slate-500 px-1">Table:</span>
                 {[
                   { id: "left", icon: AlignLeft, label: "Align left" },
                   { id: "center", icon: AlignCenter, label: "Align center" },
@@ -11698,29 +11755,36 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </div>
             </div>
             <div className="flex-1 overflow-auto bg-slate-50 p-6">
-              <div
-                className="bg-white mx-auto shadow-sm rounded-lg p-6"
-                style={{ fontSize: `${rosterFontSize}px`, textAlign: rosterAlign, maxWidth: 800 }}
-                dangerouslySetInnerHTML={{
-                  __html: `<style>
-                    h1 { font-size: 1.4em; margin: 0 0 4px; }
-                    .sub { color: #64748b; font-size: 0.9em; margin-bottom: 24px; }
-                    .header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
-                    .header img { width: 40px; height: 40px; object-fit: contain; }
-                    h3 { font-size: 1em; margin: 24px 0 8px; }
-                    table { width: 100%; border-collapse: collapse; font-size: 0.95em; margin-bottom: 16px; }
-                    th, td { padding: 6px 10px; border-bottom: 1px solid #f1f5f9; }
-                    th { color: #64748b; font-size: 0.85em; background: #f8fafc; }
-                    .green { color: #16a34a; font-weight: 600; }
-                    .red { color: #ef4444; font-weight: 600; }
-                    .plan-header { font-size: 0.9em; font-weight: 700; color: #0b1e3a; background: #eef2ff; padding: 5px 10px; margin-top: 10px; border: 1px solid #c7d2fe; }
-                    .plan-count { font-weight: 400; color: #64748b; }
-                    .roster-grid table { border: 1px solid #cbd5e1; }
-                    .roster-grid th, .roster-grid td { border: 1px solid #cbd5e1; padding: 5px 8px; }
-                    .roster-grid th { background: #f1f5f9; }
-                  </style>${rosterPreview.bodyHtml}`,
-                }}
-              />
+              <div className="bg-white mx-auto shadow-sm rounded-lg p-6" style={{ maxWidth: 800 }}>
+                <div
+                  dangerouslySetInnerHTML={{
+                    __html: `<style>
+                      h1 { font-size: 1.4em; margin: 0 0 4px; }
+                      .sub { color: #64748b; font-size: 0.9em; margin-bottom: 24px; }
+                      .header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; ${headerAlignStyles(rosterHeaderAlign)} }
+                      .header img { width: 40px; height: 40px; object-fit: contain; }
+                    </style>${rosterPreview.headerHtml}`,
+                  }}
+                />
+                <div
+                  style={{ fontSize: `${rosterFontSize}px`, textAlign: rosterAlign }}
+                  dangerouslySetInnerHTML={{
+                    __html: `<style>
+                      h3 { font-size: 1em; margin: 24px 0 8px; }
+                      table { width: 100%; border-collapse: collapse; font-size: 0.95em; margin-bottom: 16px; }
+                      th, td { padding: 6px 10px; border-bottom: 1px solid #f1f5f9; }
+                      th { color: #64748b; font-size: 0.85em; background: #f8fafc; }
+                      .green { color: #16a34a; font-weight: 600; }
+                      .red { color: #ef4444; font-weight: 600; }
+                      .plan-header { font-size: 0.9em; font-weight: 700; color: #0b1e3a; background: #eef2ff; padding: 5px 10px; margin-top: 10px; border: 1px solid #c7d2fe; }
+                      .plan-count { font-weight: 400; color: #64748b; }
+                      .roster-grid table { border: 1px solid #cbd5e1; }
+                      .roster-grid th, .roster-grid td { border: 1px solid #cbd5e1; padding: 5px 8px; }
+                      .roster-grid th { background: #f1f5f9; }
+                    </style>${rosterPreview.gridHtml}`,
+                  }}
+                />
+              </div>
             </div>
             <div className="p-4 border-t border-slate-100 flex gap-2">
               <button
