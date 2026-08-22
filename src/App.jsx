@@ -3671,7 +3671,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         email: authEmail.trim(),
         password: authPassword,
       });
-      if (signInError) throw new Error("Wrong email or password");
+      if (signInError) throw new Error(signInError.message || "Wrong email or password");
       // First successful sign-in after signing up (or after confirming
       // the email, if this project requires that) — this is also where
       // the profile actually gets created if it couldn't be at signup
@@ -14250,7 +14250,7 @@ function StaffPortal({ onExit }) {
     setAuthLoading(true);
     try {
       const { data, error } = await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword });
-      if (error) throw new Error("Wrong email or password");
+      if (error) throw new Error(error.message || "Wrong email or password");
       // First successful sign-in after signing up (or after confirming
       // the email, if this project requires that) — makes sure the
       // profile exists now if it couldn't be created at setup time.
@@ -15679,7 +15679,7 @@ function AdminGatewayLogin({ onBack }) {
         email: email.trim(),
         password,
       });
-      if (signInError) throw new Error("Wrong email or password");
+      if (signInError) throw new Error(signInError.message || "Wrong email or password");
       const { data: profile, error: profileError } = await supabase
         .from("profiles")
         .select("academy_id, is_super_admin")
@@ -16047,7 +16047,7 @@ function SuperAdminView() {
     setLoginLoading(true);
     try {
       const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-      if (error) throw new Error("Wrong email or password");
+      if (error) throw new Error(error.message || "Wrong email or password");
       const { data: profile } = await supabase.from("profiles").select("is_super_admin").eq("id", data.user.id).maybeSingle();
       if (!profile?.is_super_admin) {
         await supabase.auth.signOut();
