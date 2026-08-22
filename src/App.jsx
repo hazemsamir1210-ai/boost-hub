@@ -3672,6 +3672,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         password: authPassword,
       });
       if (signInError) throw new Error("Wrong email or password");
+      // First successful sign-in after signing up (or after confirming
+      // the email, if this project requires that) — this is also where
+      // the profile actually gets created if it couldn't be at signup
+      // time (no session existed yet to create it with).
+      await ensureStaffProfileAndLink(signInData.user, null);
       const ok = await verifyProfileForThisAcademy(signInData.user.id);
       if (!ok) {
         await supabase.auth.signOut();
@@ -3698,12 +3703,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     try {
       const { data, error } = await supabase.auth.signUp({ email: authEmail.trim(), password: authPassword });
       if (error) throw new Error(error.message || "Could not create the account");
-      if (data.user) {
+      if (data.session && data.user) {
+        // Signed in immediately (this project doesn't require confirming
+        // the email first) — there's a real session now, safe to create
+        // the profile right away.
         await ensureStaffProfileAndLink(data.user, null);
-      }
-      if (data.session) {
         setAuthed(true);
       } else {
+        // Needs email confirmation first — there's no session yet, so
+        // the profile can't be created until the first real sign-in
+        // after confirming (handled in accountLogin above).
         setSignupSuccess(true);
       }
     } catch (e) {
@@ -14242,6 +14251,10 @@ function StaffPortal({ onExit }) {
     try {
       const { data, error } = await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword });
       if (error) throw new Error("Wrong email or password");
+      // First successful sign-in after signing up (or after confirming
+      // the email, if this project requires that) — makes sure the
+      // profile exists now if it couldn't be created at setup time.
+      await ensureStaffProfileAndLink(data.user, null);
       const ok = await verifyProfileForThisAcademy(data.user.id);
       if (!ok) {
         await supabase.auth.signOut();
@@ -14276,15 +14289,17 @@ function StaffPortal({ onExit }) {
     try {
       const { data, error } = await supabase.auth.signUp({ email: claimEmail.trim(), password: claimNewPassword });
       if (error) throw new Error(error.message || "Could not create your login");
-      if (data.user) {
-        await ensureStaffProfileAndLink(data.user, acct.username);
-      }
-      if (data.session) {
+      if (data.session && data.user) {
         // Signed in immediately (this project doesn't require confirming
-        // the email first) — log them straight into their dashboard.
+        // the email first) — there's a real session now, safe to create
+        // the profile and link the account right away.
+        await ensureStaffProfileAndLink(data.user, acct.username);
         const fresh = await findAccountByAuthUserId(data.user.id);
         if (fresh) setSessionAndPersist(sessionFromAccount(fresh));
       } else {
+        // Needs email confirmation first — the profile/link happen on
+        // the first real sign-in after confirming (see emailLogin above).
+        // We can't create them yet: there's no session to do it with.
         setClaimSuccess(true);
       }
     } catch (e) {
