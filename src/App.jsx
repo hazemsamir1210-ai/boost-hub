@@ -15833,12 +15833,14 @@ function AcademyNameGateView() {
     if (!q) return setError("Enter your academy's name");
     setLoading(true);
     try {
-      const { data } = await supabase.from("academies").select("slug").ilike("name", q).maybeSingle();
-      if (!data?.slug) {
+      const { data, error: qErr } = await supabase.from("academies").select("name, slug");
+      if (qErr) throw qErr;
+      const match = (data || []).find((a) => (a.name || "").trim().toLowerCase() === q.toLowerCase());
+      if (!match) {
         setError("This academy doesn't exist");
         return;
       }
-      window.location.href = "/" + data.slug;
+      window.location.href = "/" + match.slug;
     } catch {
       setError("This academy doesn't exist");
     } finally {
