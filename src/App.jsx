@@ -9,7 +9,7 @@ import {
   ShieldCheck, Copy, Bell, Users, Plus, Pencil, Trash2, Search,
   CalendarDays, Baby, Award, CalendarCheck, FileDown, Wallet, Star,
   FileUp, Menu, Camera, QrCode, LayoutGrid, TrendingUp, AlertCircle,
-  UserPlus, GraduationCap, MessageSquare
+  UserPlus, GraduationCap, MessageSquare, AlignLeft, AlignCenter, AlignRight
 } from "lucide-react";
 
 // The single fixed code printed and hung at the pool entrance — every
@@ -5158,6 +5158,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   }, [tab, loadUpcomingMakeups]);
 
   const [exportingRoster, setExportingRoster] = useState(false);
+  const [rosterPreview, setRosterPreview] = useState(null); // { bodyHtml, filename } once built, or null
+  const [rosterFontSize, setRosterFontSize] = useState(13);
+  const [rosterAlign, setRosterAlign] = useState("left");
   const [trainingWindow, setTrainingWindow] = useState({ startDate: "", endDate: "", cap: 8 });
   const [trainingWindowOpen, setTrainingWindowOpen] = useState(false);
 
@@ -5314,12 +5317,27 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           ${coachSections || "<p>No swimmers scheduled for this selection.</p>"}
         </div>
       `;
-      downloadReportHTML(`roster-${scheduleDayFilter}-${scheduleMonth}${scheduleTimeFilter !== "all" ? "-" + scheduleTimeFilter.replace(/[: ]/g, "") : ""}`, bodyHtml);
+      setRosterFontSize(13);
+      setRosterAlign("left");
+      setRosterPreview({
+        bodyHtml,
+        filename: `roster-${scheduleDayFilter}-${scheduleMonth}${scheduleTimeFilter !== "all" ? "-" + scheduleTimeFilter.replace(/[: ]/g, "") : ""}`,
+      });
     } catch (e) {
       console.warn("Export roster failed", e);
     } finally {
       setExportingRoster(false);
     }
+  };
+
+  // Wraps the previewed roster with whatever font size/alignment was
+  // chosen in the preview, so the downloaded PDF looks exactly like what
+  // was shown — then triggers the actual download.
+  const downloadRosterPdf = () => {
+    if (!rosterPreview) return;
+    const styledHtml = `<div style="font-size:${rosterFontSize}px; text-align:${rosterAlign};">${rosterPreview.bodyHtml}</div>`;
+    downloadReportHTML(rosterPreview.filename, styledHtml);
+    setRosterPreview(null);
   };
 
   const [importError, setImportError] = useState("");
@@ -8466,7 +8484,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
               >
                 {exportingRoster ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
-                {exportingRoster ? "Exporting..." : "Export PDF"}
+                {exportingRoster ? "Loading..." : "Preview & Export"}
               </button>
               {canEditContent && (
                 <button
@@ -8969,7 +8987,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
                 >
                   {exportingRoster ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
-                  {exportingRoster ? "Exporting..." : "Export PDF"}
+                  {exportingRoster ? "Loading..." : "Preview & Export"}
                 </button>
               </div>
             </div>
@@ -11622,6 +11640,93 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 onClick={() => setAttendanceEditModal(null)}
                 disabled={attendanceEditSaving}
                 className="px-4 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {rosterPreview && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 px-4 py-6" onClick={() => setRosterPreview(null)}>
+          <div
+            className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-full flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 border-b border-slate-100 flex flex-wrap items-center gap-3">
+              <h3 className="font-bold text-slate-900 mr-auto">Preview</h3>
+              <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1">
+                <button
+                  onClick={() => setRosterFontSize((s) => Math.max(9, s - 1))}
+                  className="w-8 h-8 rounded-md hover:bg-white flex items-center justify-center text-slate-600 font-bold"
+                  title="Smaller text"
+                >
+                  A-
+                </button>
+                <span className="text-xs text-slate-500 w-8 text-center">{rosterFontSize}px</span>
+                <button
+                  onClick={() => setRosterFontSize((s) => Math.min(24, s + 1))}
+                  className="w-8 h-8 rounded-md hover:bg-white flex items-center justify-center text-slate-600 font-bold"
+                  title="Bigger text"
+                >
+                  A+
+                </button>
+              </div>
+              <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1">
+                {[
+                  { id: "left", icon: AlignLeft, label: "Align left" },
+                  { id: "center", icon: AlignCenter, label: "Align center" },
+                  { id: "right", icon: AlignRight, label: "Align right" },
+                ].map((opt) => (
+                  <button
+                    key={opt.id}
+                    onClick={() => setRosterAlign(opt.id)}
+                    title={opt.label}
+                    className={`w-8 h-8 rounded-md flex items-center justify-center ${
+                      rosterAlign === opt.id ? "bg-white text-blue-950 shadow-sm" : "text-slate-500 hover:bg-white"
+                    }`}
+                  >
+                    <opt.icon className="w-4 h-4" />
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto bg-slate-50 p-6">
+              <div
+                className="bg-white mx-auto shadow-sm rounded-lg p-6"
+                style={{ fontSize: `${rosterFontSize}px`, textAlign: rosterAlign, maxWidth: 800 }}
+                dangerouslySetInnerHTML={{
+                  __html: `<style>
+                    h1 { font-size: 1.4em; margin: 0 0 4px; }
+                    .sub { color: #64748b; font-size: 0.9em; margin-bottom: 24px; }
+                    .header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+                    .header img { width: 40px; height: 40px; object-fit: contain; }
+                    h3 { font-size: 1em; margin: 24px 0 8px; }
+                    table { width: 100%; border-collapse: collapse; font-size: 0.95em; margin-bottom: 16px; }
+                    th, td { padding: 6px 10px; border-bottom: 1px solid #f1f5f9; }
+                    th { color: #64748b; font-size: 0.85em; background: #f8fafc; }
+                    .green { color: #16a34a; font-weight: 600; }
+                    .red { color: #ef4444; font-weight: 600; }
+                    .plan-header { font-size: 0.9em; font-weight: 700; color: #0b1e3a; background: #eef2ff; padding: 5px 10px; margin-top: 10px; border: 1px solid #c7d2fe; }
+                    .plan-count { font-weight: 400; color: #64748b; }
+                    .roster-grid table { border: 1px solid #cbd5e1; }
+                    .roster-grid th, .roster-grid td { border: 1px solid #cbd5e1; padding: 5px 8px; }
+                    .roster-grid th { background: #f1f5f9; }
+                  </style>${rosterPreview.bodyHtml}`,
+                }}
+              />
+            </div>
+            <div className="p-4 border-t border-slate-100 flex gap-2">
+              <button
+                onClick={downloadRosterPdf}
+                className="flex-1 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 flex items-center justify-center gap-2"
+              >
+                <FileDown className="w-4 h-4" /> Download PDF
+              </button>
+              <button
+                onClick={() => setRosterPreview(null)}
+                className="px-4 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200"
               >
                 Cancel
               </button>
@@ -15849,7 +15954,13 @@ function AcademyNameGateView() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4 bg-slate-50">
+    <div className="min-h-screen flex items-center justify-center px-4 bg-slate-50 relative">
+      <a
+        href="/_admin"
+        className="absolute top-4 left-4 text-xs px-3 py-2 rounded-lg bg-white border border-slate-200 text-slate-500 font-medium hover:bg-slate-100 shadow-sm"
+      >
+        Super Admin login
+      </a>
       <div className="max-w-sm w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
         <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-blue-950 flex items-center justify-center">
           <Waves className="w-7 h-7 text-white" />
