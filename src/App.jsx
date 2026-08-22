@@ -14273,27 +14273,51 @@ function StaffPortal({ onExit }) {
     }
   };
 
-  // One-time setup: proves identity with the current username/password,
-  // then creates a real email+password login and links it to that same
-  // account — from then on, this staff member can (and should) use the
-  // "Log in with email" option instead of the old shared password.
+  // One-time setup: proves identity with the current username/password
+  // (or the original shared "admin" password, if there's no individual
+  // account yet), then creates a real email+password login and links it
+  // to that same account — from then on, this person can (and should)
+  // use "Log in with email" instead of the old password.
   const claimAccount = async () => {
     setClaimError("");
     const u = claimUsername.trim();
     if (!u || !claimOldPassword) return setClaimError("Enter your current username and password");
     if (!claimEmail.trim() || !claimNewPassword) return setClaimError("Enter an email and choose a password");
     if (claimNewPassword.length < 6) return setClaimError("Password should be at least 6 characters");
-    const acct = accounts.find((a) => a.username.toLowerCase() === u.toLowerCase() && a.password === claimOldPassword);
-    if (!acct) return setClaimError("Wrong username or password — this has to match your current login");
+
+    let acct = accounts.find((a) => a.username.toLowerCase() === u.toLowerCase() && a.password === claimOldPassword);
+    let isBootstrapAdmin = false;
+    if (!acct) {
+      const realAdminPassword = await getEffectiveAdminPassword();
+      if (u.toLowerCase() === "admin" && claimOldPassword === realAdminPassword) {
+        isBootstrapAdmin = true;
+      } else {
+        return setClaimError("Wrong username or password — this has to match your current login");
+      }
+    }
+
     setClaimSaving(true);
     try {
       const { data, error } = await supabase.auth.signUp({ email: claimEmail.trim(), password: claimNewPassword });
       if (error) throw new Error(error.message || "Could not create your login");
+
+      if (isBootstrapAdmin) {
+        // The original "admin" login isn't a real account record — create
+        // one now (if it doesn't already exist) so it can be linked just
+        // like any other staff account from here on.
+        const allAccounts = await loadCollection(STORE_KEYS.accounts);
+        if (!allAccounts.some((a) => a.username.toLowerCase() === "admin")) {
+          const newAcct = { id: genId(), username: "admin", password: claimOldPassword, name: "Admin", role: "admin" };
+          await saveCollection(STORE_KEYS.accounts, [...allAccounts, newAcct]);
+          setAccounts([...allAccounts, newAcct]);
+        }
+      }
+
       if (data.session && data.user) {
         // Signed in immediately (this project doesn't require confirming
         // the email first) — there's a real session now, safe to create
         // the profile and link the account right away.
-        await ensureStaffProfileAndLink(data.user, acct.username);
+        await ensureStaffProfileAndLink(data.user, isBootstrapAdmin ? "admin" : acct.username);
         const fresh = await findAccountByAuthUserId(data.user.id);
         if (fresh) setSessionAndPersist(sessionFromAccount(fresh));
       } else {
@@ -14399,7 +14423,10 @@ function StaffPortal({ onExit }) {
               </div>
             ) : (
               <>
-                <p className="text-xs text-slate-400 mb-3">Confirm your current login, then set up a real email + password you'll use from now on.</p>
+                <p className="text-xs text-slate-400 mb-3">
+                  Confirm your current login, then set up a real email + password you'll use from now on. If you use the
+                  original admin password, enter "admin" as the username below.
+                </p>
                 <input
                   value={claimUsername}
                   onChange={(e) => setClaimUsername(e.target.value)}
