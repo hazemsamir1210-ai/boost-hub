@@ -77,13 +77,13 @@ async function resolveAcademy() {
     if (slug) {
       result = await supabase
         .from("academies")
-        .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone, hero_data_uri")
+        .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone, hero_data_uri, subscription_paid_until, primary_color")
         .eq("slug", slug)
         .maybeSingle();
     } else {
       result = await supabase
         .from("academies")
-        .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone, hero_data_uri")
+        .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone, hero_data_uri, subscription_paid_until, primary_color")
         .eq("id", "354f7151-03f6-4511-b40a-19db46f28e29")
         .maybeSingle();
     }
@@ -107,7 +107,12 @@ async function resolveAcademy() {
     logoDataUri: data.logo_data_uri,
     instapayHandle: data.instapay_handle,
     instapayPhone: data.instapay_phone,
+    // A null date means "no expiry set" (unrestricted) — matches the
+    // database-side RLS check that actually enforces this on writes.
+    subscriptionExpired: !!(data.subscription_paid_until && data.subscription_paid_until < todayISO()),
+    primaryColor: data.primary_color || "#0c1e3e",
   };
+  CONFIG.primaryColor = window.__academy.primaryColor;
   // Every place in the app that reads CONFIG.academyName / logoDataUri /
   // instapayHandle / instapayPhone now shows THIS academy's own values —
   // falls back to the built-in defaults for anything the academy hasn't
@@ -127,7 +132,7 @@ async function resolveAcademy() {
 // name, logo, and Instapay details from their own dashboard — writes
 // straight to this academy's row, and updates CONFIG + window.__academy
 // immediately so the change shows everywhere without needing a refresh.
-async function saveAcademySettings({ name, logoDataUri, instapayHandle, instapayPhone }) {
+async function saveAcademySettings({ name, logoDataUri, instapayHandle, instapayPhone, primaryColor }) {
   if (!window.__academy) throw new Error("No academy selected");
   const { error } = await supabase
     .from("academies")
@@ -136,6 +141,7 @@ async function saveAcademySettings({ name, logoDataUri, instapayHandle, instapay
       logo_data_uri: logoDataUri,
       instapay_handle: instapayHandle,
       instapay_phone: instapayPhone,
+      ...(primaryColor ? { primary_color: primaryColor } : {}),
     })
     .eq("id", window.__academy.id);
   if (error) throw error;
@@ -143,7 +149,8 @@ async function saveAcademySettings({ name, logoDataUri, instapayHandle, instapay
   CONFIG.logoDataUri = logoDataUri;
   CONFIG.instapayHandle = instapayHandle;
   CONFIG.instapayPhone = instapayPhone;
-  window.__academy = { ...window.__academy, name, logoDataUri, instapayHandle, instapayPhone };
+  if (primaryColor) CONFIG.primaryColor = primaryColor;
+  window.__academy = { ...window.__academy, name, logoDataUri, instapayHandle, instapayPhone, ...(primaryColor ? { primaryColor } : {}) };
 }
 
 /* ============================================================
@@ -251,6 +258,7 @@ window.storage = {
    ============================================================ */
 const CONFIG = {
   academyName: "Swim Junior",
+  primaryColor: "#0c1e3e", // this academy's brand color for the public homepage — overridden per-academy by resolveAcademy()
   logoDataUri: "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%22200%22%20height%3D%22200%22%3E%3Crect%20width%3D%22200%22%20height%3D%22200%22%20fill%3D%22%230b1e4a%22/%3E%3Ctext%20x%3D%22100%22%20y%3D%22115%22%20font-family%3D%22sans-serif%22%20font-size%3D%2260%22%20text-anchor%3D%22middle%22%3E%F0%9F%8F%8A%3C/text%3E%3C/svg%3E", // academy logo
   signatureDataUri: "", // optional — printed on receipts/reports if set, from the Settings tab
   instapayHandle: "mahfathy.aaib@instapay", // your Instapay handle
@@ -2461,6 +2469,17 @@ function levelInMonth(swimmer, key) {
   return found ? found.level : swimmer.level;
 }
 
+// Turns the academy's brand color (a "#rrggbb" hex string) into an
+// rgba(...) string at the given opacity — used for the homepage hero's
+// darkening overlays, which need partial transparency over a photo.
+function academyColorRgba(alpha = 1) {
+  const hex = (CONFIG.primaryColor || "#0c1e3e").replace("#", "");
+  const r = parseInt(hex.slice(0, 2), 16) || 0;
+  const g = parseInt(hex.slice(2, 4), 16) || 0;
+  const b = parseInt(hex.slice(4, 6), 16) || 0;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 function todayISO() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -3972,6 +3991,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   // ---- Settings tab: academy details + time slots ----
   const [settingsName, setSettingsName] = useState("");
   const [settingsLogo, setSettingsLogo] = useState("");
+  const [settingsPrimaryColor, setSettingsPrimaryColor] = useState(CONFIG.primaryColor || "#0c1e3e");
   const [settingsSignature, setSettingsSignature] = useState("");
   const [settingsInstapayHandle, setSettingsInstapayHandle] = useState("");
   const [settingsInstapayPhone, setSettingsInstapayPhone] = useState("");
@@ -3990,6 +4010,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     setSettingsInstapayHandle(CONFIG.instapayHandle);
     setSettingsInstapayPhone(CONFIG.instapayPhone);
     setSettingsSignature(CONFIG.signatureDataUri || "");
+    setSettingsPrimaryColor(CONFIG.primaryColor || "#0c1e3e");
     loadCustomTimeSlots().then((custom) => setCustomTimeSlots(custom?.[BRANCHES[0].id] || {}));
   }, [tab]);
 
@@ -4457,6 +4478,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         logoDataUri: settingsLogo,
         instapayHandle: settingsInstapayHandle.trim(),
         instapayPhone: settingsInstapayPhone.trim(),
+        primaryColor: settingsPrimaryColor,
       });
       logActivity(accountName, role, "Updated academy settings", "");
       setSettingsSaved(true);
@@ -5475,6 +5497,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [accounts, setAccounts] = useState([]);
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [showAccountForm, setShowAccountForm] = useState(false);
+  const [accountDeleteError, setAccountDeleteError] = useState("");
   const [editingAccount, setEditingAccount] = useState(null);
   const [emailLoginModal, setEmailLoginModal] = useState(null); // account, or null
   const [emailLoginEmail, setEmailLoginEmail] = useState("");
@@ -6367,7 +6390,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   // Staff accounts — only admins manage these. Each account gets a role
   // that controls what it can see and do once it logs in.
-  const saveAccount = async (record) => {
+  const saveAccount = async (record, emailLogin) => {
     const existingAccount = accounts.find((a) => a.id === record.id);
     const exists = !!existingAccount;
     const nextAccounts = exists ? accounts.map((a) => (a.id === record.id ? record : a)) : [...accounts, record];
@@ -6375,16 +6398,45 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     if (!res) throw new Error("Could not save the account, please try again");
     logActivity(accountName, role, exists ? "Edited account" : "Added account", `${record.name} — ${describeAccountChange(existingAccount, record)}`);
     setAccounts(nextAccounts);
+    if (emailLogin) {
+      // If this fails, the account itself is already saved — the admin
+      // can still retry just the email login part from the accounts list
+      // via "Create email login", so we let this error surface normally.
+      await linkEmailLoginToAccount(record, emailLogin.email, emailLogin.password);
+    }
     setShowAccountForm(false);
     setEditingAccount(null);
   };
 
-  // Sets up a real email + password login for an existing staff account,
-  // entirely from the admin's side — the staff member never has to prove
-  // an old password or do anything themselves. Uses a throwaway, separate
-  // Supabase client to create the Auth user so it never disturbs the
-  // admin's own signed-in session, then links it using the admin's own
-  // session (allowed because the admin already belongs to this academy).
+  // Creates a real email+password Auth login and links it to the given
+  // account record — shared by the inline fields on "Add a staff account"
+  // and the separate "Create email login" action for existing accounts.
+  // Uses a throwaway, separate Supabase client to create the Auth user so
+  // it never disturbs the admin's own signed-in session, then links it
+  // using the admin's own session (allowed because the admin already
+  // belongs to this academy).
+  const linkEmailLoginToAccount = async (acct, email, password) => {
+    const { data, error } = await createAuthUserWithoutSession(email, password);
+    if (error) throw new Error(error.message || "Could not create the login");
+    if (!data?.user) throw new Error("Could not create the login, please try again");
+
+    const { error: profileError } = await supabase
+      .from("profiles")
+      .insert({ id: data.user.id, academy_id: window.__academy.id, is_super_admin: false });
+    if (profileError) throw new Error(profileError.message || "Could not link the login to this academy");
+
+    const allAccounts = await loadCollection(STORE_KEYS.accounts);
+    const idx = allAccounts.findIndex((a) => a.id === acct.id);
+    const next = idx !== -1 ? [...allAccounts] : [...allAccounts, acct];
+    const targetIdx = idx !== -1 ? idx : next.length - 1;
+    next[targetIdx] = { ...next[targetIdx], authUserId: data.user.id, email };
+    const res = await saveCollection(STORE_KEYS.accounts, next);
+    if (!res) throw new Error("Could not save, please try again");
+    setAccounts(next);
+    logActivity(accountName, role, "Set up email login for account", `${acct.name} — ${email}`);
+    return next;
+  };
+
   const createEmailLoginForAccount = async () => {
     setEmailLoginError("");
     const acct = emailLoginModal;
@@ -6392,25 +6444,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     if (emailLoginPassword.length < 6) return setEmailLoginError("Password should be at least 6 characters");
     setEmailLoginSaving(true);
     try {
-      const { data, error } = await createAuthUserWithoutSession(emailLoginEmail.trim(), emailLoginPassword);
-      if (error) throw new Error(error.message || "Could not create the login");
-      if (!data?.user) throw new Error("Could not create the login, please try again");
-
-      const { error: profileError } = await supabase
-        .from("profiles")
-        .insert({ id: data.user.id, academy_id: window.__academy.id, is_super_admin: false });
-      if (profileError) throw new Error(profileError.message || "Could not link the login to this academy");
-
-      const allAccounts = await loadCollection(STORE_KEYS.accounts);
-      const idx = allAccounts.findIndex((a) => a.id === acct.id);
-      const next = idx !== -1 ? [...allAccounts] : [...allAccounts, acct];
-      const targetIdx = idx !== -1 ? idx : next.length - 1;
-      next[targetIdx] = { ...next[targetIdx], authUserId: data.user.id, email: emailLoginEmail.trim() };
-      const res = await saveCollection(STORE_KEYS.accounts, next);
-      if (!res) throw new Error("Could not save, please try again");
-      setAccounts(next);
-
-      logActivity(accountName, role, "Set up email login for account", `${acct.name} — ${emailLoginEmail.trim()}`);
+      await linkEmailLoginToAccount(acct, emailLoginEmail.trim(), emailLoginPassword);
       setEmailLoginSuccess(true);
     } catch (e) {
       setEmailLoginError(e?.message || "Could not create the login, please try again");
@@ -6419,7 +6453,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
   };
 
-  const deleteAccount = (account) => {
+  const deleteAccount = async (account) => {
+    setAccountDeleteError("");
+    // Never let someone delete the very account they're currently signed
+    // in as — that would lock them out with no way back in except the
+    // hidden emergency admin password.
+    const { data: authData } = await supabase.auth.getUser();
+    if (authData?.user?.id && account.authUserId === authData.user.id) {
+      return setAccountDeleteError("You can't delete the account you're currently signed in as. Set up a second admin account first, or ask another admin to remove it.");
+    }
     setConfirmAction({
       message: `Remove the account for ${account.name}? They won't be able to log in anymore.`,
       onConfirm: async () => {
@@ -6870,6 +6912,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       </div>
 
+      {window.__academy?.subscriptionExpired && (
+        <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-6 flex items-center gap-2 text-sm text-red-700">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          Your subscription has ended. You can still view everything, but saving any changes is turned off until it's renewed — contact support to renew.
+        </div>
+      )}
+
       {/* main tabs — vertical sidebar on the left, content on the right (stacks on narrow/mobile screens) */}
       <div className="flex flex-col sm:flex-row gap-6 items-start">
       <div className="w-full sm:w-52 shrink-0 flex flex-row sm:flex-col gap-0.5 overflow-x-auto sm:overflow-visible pb-1 sm:pb-0">
@@ -7012,16 +7061,6 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             }`}
           >
             <Clock className="w-4 h-4" /> Activity Log
-          </button>
-        )}
-        {role === "admin" && (
-          <button
-            onClick={() => setTab("password")}
-            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-              tab === "password" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-            }`}
-          >
-            <Lock className="w-4 h-4" /> Password
           </button>
         )}
         {canEdit && role !== "technical_director" && (
@@ -10357,6 +10396,23 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   />
                 </div>
                 <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Brand color (homepage)</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={settingsPrimaryColor}
+                      onChange={(e) => setSettingsPrimaryColor(e.target.value)}
+                      className="w-11 h-10 rounded-lg border border-slate-200 cursor-pointer shrink-0"
+                    />
+                    <input
+                      value={settingsPrimaryColor}
+                      onChange={(e) => setSettingsPrimaryColor(e.target.value)}
+                      className="flex-1 border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 font-mono text-sm"
+                      placeholder="#0c1e3e"
+                    />
+                  </div>
+                </div>
+                <div>
                   <label className="text-xs text-slate-500 mb-1 block">Instapay handle</label>
                   <input
                     value={settingsInstapayHandle}
@@ -10962,8 +11018,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "password" && role === "admin" && (
-        <div className="max-w-sm">
+      {tab === "settings" && role === "admin" && (
+        <div className="max-w-sm mt-8 pt-8 border-t border-slate-200">
           <h3 className="font-bold text-slate-900 mb-1">Change admin password</h3>
           <p className="text-sm text-slate-500 mb-4">
             This is the master password used for the "admin" bootstrap login — not a staff account. Keep it somewhere safe once you change it.
@@ -11071,6 +11127,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </button>
             </div>
           </div>
+
+          {accountDeleteError && (
+            <div className="text-red-500 text-sm bg-red-50 rounded-lg px-3 py-2 mb-3">{accountDeleteError}</div>
+          )}
 
           {showAccountForm && (
             <AccountForm
@@ -12078,6 +12138,8 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
   const [name, setName] = useState(initial?.name || "");
   const [username, setUsername] = useState(initial?.username || "");
   const [password, setPassword] = useState(initial?.password || "");
+  const [email, setEmail] = useState("");
+  const [emailPassword, setEmailPassword] = useState("");
   const [role, setRole] = useState(initial?.role || "technical");
   const [levelRestriction, setLevelRestriction] = useState(initial?.levelRestriction || "");
   const [branchRestriction, setBranchRestriction] = useState(initial?.branchRestriction || "");
@@ -12103,6 +12165,12 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
     if (!name.trim()) return setError("Please enter a name");
     if (!username.trim()) return setError("Please enter a username");
     if (!password.trim()) return setError("Please enter a password");
+    if ((email.trim() || emailPassword.trim()) && (!email.trim() || !emailPassword.trim())) {
+      return setError("Enter both an email and a password for the real login, or leave both blank");
+    }
+    if (emailPassword.trim() && emailPassword.trim().length < 6) {
+      return setError("The email login password should be at least 6 characters");
+    }
     setSaving(true);
     try {
       // If this is a coach account with no existing coach picked, create
@@ -12123,25 +12191,28 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
         if (!res) throw new Error("Could not create the coach profile — please try again");
         finalCoachId = newCoach.id;
       }
-      await onSave({
-        id: recordIdRef.current,
-        name: name.trim(),
-        username: username.trim(),
-        password: password.trim(),
-        role,
-        levelRestriction: role === "technical" ? levelRestriction || null : null,
-        branchRestriction: role === "admin" ? null : branchRestriction || null,
-        linkedCoachId: role === "coach" ? finalCoachId : null,
-        expectedStartTime: expectedStartTime || null,
-        monthlySalary: monthlySalary ? Number(monthlySalary) : null,
-        overtimeHourlyRate: overtimeHourlyRate ? Number(overtimeHourlyRate) : null,
-        canViewPayroll: role === "admin" ? true : canViewPayroll,
-        accessLevel: role === "admin" ? "full" : accessLevel,
-        permissions: role === "admin" ? Object.fromEntries(PERMISSION_DEFS.map(([k]) => [k, true])) : permissions,
-        programAccess: role === "admin" ? [] : programAccess,
-        levelAccess: role === "admin" ? [] : levelAccess,
-        createdAt: initial?.createdAt || new Date().toISOString(),
-      });
+      await onSave(
+        {
+          id: recordIdRef.current,
+          name: name.trim(),
+          username: username.trim(),
+          password: password.trim(),
+          role,
+          levelRestriction: role === "technical" ? levelRestriction || null : null,
+          branchRestriction: role === "admin" ? null : branchRestriction || null,
+          linkedCoachId: role === "coach" ? finalCoachId : null,
+          expectedStartTime: expectedStartTime || null,
+          monthlySalary: monthlySalary ? Number(monthlySalary) : null,
+          overtimeHourlyRate: overtimeHourlyRate ? Number(overtimeHourlyRate) : null,
+          canViewPayroll: role === "admin" ? true : canViewPayroll,
+          accessLevel: role === "admin" ? "full" : accessLevel,
+          permissions: role === "admin" ? Object.fromEntries(PERMISSION_DEFS.map(([k]) => [k, true])) : permissions,
+          programAccess: role === "admin" ? [] : programAccess,
+          levelAccess: role === "admin" ? [] : levelAccess,
+          createdAt: initial?.createdAt || new Date().toISOString(),
+        },
+        email.trim() ? { email: email.trim(), password: emailPassword.trim() } : null
+      );
     } catch (e) {
       setError(e?.message || "Something went wrong while saving, please try again");
     } finally {
@@ -12183,6 +12254,29 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
           <label className="text-xs text-slate-500 mb-1 block">Password</label>
           <input value={password} onChange={(e) => setPassword(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Choose a password" />
         </div>
+        {!initial?.authUserId && (
+          <>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Email (for real login — optional)</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                placeholder="their.name@gmail.com"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Email login password (optional)</label>
+              <input
+                value={emailPassword}
+                onChange={(e) => setEmailPassword(e.target.value)}
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                placeholder="6+ characters"
+              />
+            </div>
+          </>
+        )}
         {role === "technical" && (
           <div className="sm:col-span-2">
             <label className="text-xs text-slate-500 mb-1 block">Only show swimmers at this level (optional)</label>
@@ -14994,7 +15088,7 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
         </div>
       )}
 
-      <section className="relative bg-blue-950 text-white overflow-hidden">
+      <section className="relative text-white overflow-hidden" style={{ backgroundColor: CONFIG.primaryColor }}>
         {hasPhotos && (
           <>
             <img
@@ -15002,7 +15096,7 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
               alt=""
               className="absolute inset-0 w-full h-full object-cover"
             />
-            <div className="absolute inset-0 bg-blue-950/70" />
+            <div className="absolute inset-0" style={{ backgroundColor: academyColorRgba(0.7) }} />
           </>
         )}
         <div className="max-w-5xl mx-auto px-4 py-20 text-center relative z-10">
@@ -15016,7 +15110,8 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
           </p>
           <button
             onClick={() => onChoosePlan(null)}
-            className="bg-white hover:bg-blue-50 text-blue-950 font-bold px-8 py-3.5 rounded-full transition"
+            className="bg-white hover:bg-blue-50 font-bold px-8 py-3.5 rounded-full transition"
+            style={{ color: CONFIG.primaryColor }}
           >
             Subscribe now
           </button>
@@ -15054,7 +15149,12 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
               p.photo ? (
                 <div key={p.title} className="relative rounded-2xl overflow-hidden flex flex-col min-h-[420px]">
                   <img src={p.photo} alt={p.title} className="absolute inset-0 w-full h-full object-cover" />
-                  <div className="absolute inset-0 bg-gradient-to-b from-blue-950/40 via-blue-950/80 to-blue-950/95" />
+                  <div
+                    className="absolute inset-0 bg-gradient-to-b"
+                    style={{
+                      backgroundImage: `linear-gradient(to bottom, ${academyColorRgba(0.4)}, ${academyColorRgba(0.8)}, ${academyColorRgba(0.95)})`,
+                    }}
+                  />
                   <div className="relative z-10 p-6 flex flex-col flex-1 mt-auto">
                     <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center mb-4">
                       <p.icon className="w-6 h-6 text-white" />
@@ -15716,6 +15816,72 @@ function AcademyScopedGatewayLogin({ role, onBack }) {
    academy registers itself (name, link, admin password) and gets an
    automatic free trial, no manual setup needed on your end. You still
    track/extend paid subscriptions from the super admin panel afterward. */
+/* The bare root domain (no academy slug at all) — asks which academy to
+   open by exact name (no autocomplete/dropdown of other registered
+   academies, so typing here never reveals who else is on the platform),
+   then sends them straight to that academy's own link. Academy-specific
+   links (yoursite.com/blue-waves) skip this entirely and resolve straight
+   through resolveAcademy() as before — this only guards the bare root. */
+function AcademyNameGateView() {
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const go = async () => {
+    setError("");
+    const q = name.trim();
+    if (!q) return setError("Enter your academy's name");
+    setLoading(true);
+    try {
+      const { data } = await supabase.from("academies").select("slug").ilike("name", q).maybeSingle();
+      if (!data?.slug) {
+        setError("This academy doesn't exist");
+        return;
+      }
+      window.location.href = "/" + data.slug;
+    } catch {
+      setError("This academy doesn't exist");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4 bg-slate-50">
+      <div className="max-w-sm w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
+        <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-blue-950 flex items-center justify-center">
+          <Waves className="w-7 h-7 text-white" />
+        </div>
+        <h2 className="text-xl font-bold text-slate-900 mb-1 text-center">Swimming Academy Management</h2>
+        <p className="text-sm text-slate-400 mb-6 text-center">Enter your academy's name to continue</p>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") go();
+          }}
+          className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+          placeholder="Your academy's name"
+          autoFocus
+        />
+        {error && <div className="text-red-500 text-sm mb-3">{error}</div>}
+        <button
+          onClick={go}
+          disabled={loading}
+          className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60"
+        >
+          {loading ? "Looking..." : "Continue"}
+        </button>
+        <div className="text-center mt-5">
+          <a href="/_signup" className="text-sm text-blue-900 underline font-medium">
+            Register a new academy
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SignupView() {
   const TRIAL_DAYS = 14;
   const [name, setName] = useState("");
@@ -16389,9 +16555,12 @@ export default function App() {
   // academy resolution entirely.
   const isLoginGatewayRoute = academySlugFromPath() === "_login";
   const isSignupRoute = academySlugFromPath() === "_signup";
+  // The bare root domain — no slug at all in the URL. Shows the "type your
+  // academy's name" gate instead of resolving straight to any one academy.
+  const isRootGateRoute = !academySlugFromPath();
 
   useEffect(() => {
-    if (isSuperAdminRoute || isLoginGatewayRoute || isSignupRoute) return;
+    if (isSuperAdminRoute || isLoginGatewayRoute || isSignupRoute || isRootGateRoute) return;
     resolveAcademy().then((academy) => {
       if (!academy) {
         setAcademyStatus("not-found");
@@ -16417,7 +16586,15 @@ export default function App() {
         setAcademyStatus("ready");
       });
     });
-  }, [isSuperAdminRoute, isLoginGatewayRoute, isSignupRoute]);
+  }, [isSuperAdminRoute, isLoginGatewayRoute, isSignupRoute, isRootGateRoute]);
+
+  if (isRootGateRoute) {
+    return (
+      <ErrorBoundary>
+        <AcademyNameGateView />
+      </ErrorBoundary>
+    );
+  }
 
   if (isSuperAdminRoute) {
     return (
