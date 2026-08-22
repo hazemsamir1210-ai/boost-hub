@@ -14260,7 +14260,13 @@ function StaffPortal({ onExit }) {
         await supabase.auth.signOut();
         throw new Error("This account isn't linked to this academy's link");
       }
-      const acct = await findAccountByAuthUserId(data.user.id);
+      let acct = await findAccountByAuthUserId(data.user.id);
+      if (!acct) {
+        // This may be finishing a "Set up email login" that had to wait
+        // on confirming the email first — pick up where that left off if
+        // there's a matching pending claim saved on this device.
+        acct = await finishPendingClaim(data.user, authEmail.trim());
+      }
       if (!acct) {
         await supabase.auth.signOut();
         throw new Error("This login isn't linked to a staff account yet — set it up from \"Set up email login\" first");
@@ -14270,6 +14276,47 @@ function StaffPortal({ onExit }) {
       setAuthError(e?.message || "Could not sign in, please try again");
     } finally {
       setAuthLoading(false);
+    }
+  };
+
+  // Finishes a "Set up email login" that couldn't complete right away
+  // because the project needed the email confirmed first — picks up the
+  // intent that was saved on this device at that time (which account to
+  // link, or whether to materialize the "admin" bootstrap account) and
+  // completes it now that there's a real, confirmed session. Returns the
+  // linked account, or null if there's no matching pending claim.
+  const finishPendingClaim = async (user, email) => {
+    let pending;
+    try {
+      const raw = localStorage.getItem("swim_pending_claim");
+      if (!raw) return null;
+      pending = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    if (!pending || pending.email !== email.trim().toLowerCase()) return null;
+    try {
+      if (pending.isBootstrapAdmin) {
+        const allAccounts = await loadCollection(STORE_KEYS.accounts);
+        if (!allAccounts.some((a) => a.username.toLowerCase() === "admin")) {
+          const newAcct = {
+            id: genId(),
+            username: "admin",
+            password: pending.password || "",
+            name: "Admin",
+            role: "admin",
+            authUserId: user.id,
+            email: user.email,
+          };
+          await saveCollection(STORE_KEYS.accounts, [...allAccounts, newAcct]);
+          setAccounts([...allAccounts, newAcct]);
+        }
+      }
+      await ensureStaffProfileAndLink(user, pending.username);
+      localStorage.removeItem("swim_pending_claim");
+      return await findAccountByAuthUserId(user.id);
+    } catch {
+      return null;
     }
   };
 
@@ -14302,9 +14349,25 @@ function StaffPortal({ onExit }) {
       if (error) throw new Error(error.message || "Could not create your login");
 
       if (!data.session || !data.user) {
-        // Needs email confirmation first — nothing else can happen until
-        // there's a real session (the first sign-in after confirming
-        // finishes this up — see emailLogin above).
+        // Needs email confirmation first — save what to do once that's
+        // done, since nothing else can happen until there's a real
+        // session (finishPendingClaim, above, picks this up on that
+        // first successful sign-in).
+        try {
+          localStorage.setItem(
+            "swim_pending_claim",
+            JSON.stringify({
+              email: claimEmail.trim().toLowerCase(),
+              isBootstrapAdmin,
+              username: isBootstrapAdmin ? "admin" : acct.username,
+              password: isBootstrapAdmin ? claimOldPassword : undefined,
+            })
+          );
+        } catch {
+          // localStorage can fail (private browsing, storage full) — if
+          // so, the person will need to redo "Set up email login" after
+          // confirming instead of it finishing automatically.
+        }
         setClaimSuccess(true);
         return;
       }
