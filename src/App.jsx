@@ -373,7 +373,7 @@ function classIdForSchedule({ branch, level, day, time, sessionType, month }) {
   return [month, branch || "", level || "", sessionType || "", day || "", time || ""].join("|");
 }
 
-const LEVELS = [
+let LEVELS = [
   "Baby", "Exp", "Exp 2", "Exp 3",
   "Level 1", "Level 2", "Level 3", "Level 4",
   "Level 5", "Level 6", "Level 7", "Level 8",
@@ -1424,6 +1424,32 @@ async function saveCustomLevelSkills(customSkills) {
 // already reads from it sees the change immediately.
 function applyCustomLevelSkills(customSkills) {
   LEVEL_SKILLS = { ...DEFAULT_LEVEL_SKILLS, ...customSkills };
+}
+
+// The academy's own list of levels — some academies run more or fewer
+// than the built-in default set. Editable from the Skills tab; mutates
+// the shared LEVELS array in place so every dropdown/filter across the
+// app that reads it (swimmer forms, reports, schedule) sees the change.
+const LEVELS_KEY = "levels-custom";
+const DEFAULT_LEVELS = [...LEVELS]; // frozen snapshot for "Reset to default"
+
+async function loadCustomLevels() {
+  const res = await window.storage.get(LEVELS_KEY);
+  if (!res) return null;
+  try {
+    const parsed = JSON.parse(res.value);
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function saveCustomLevels(list) {
+  return storageSet(LEVELS_KEY, JSON.stringify(list));
+}
+
+function applyCustomLevels(list) {
+  LEVELS = list && list.length > 0 ? list : [...DEFAULT_LEVELS];
 }
 
 const TIME_SLOTS_KEY = "time-slots-custom";
@@ -3914,6 +3940,65 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [skillsRefreshKey, setSkillsRefreshKey] = useState(0); // bumped after saving, to force re-render of anything reading LEVEL_SKILLS
   const [newSkillText, setNewSkillText] = useState({}); // level -> draft text for the "add skill" input
   const [skillsSaving, setSkillsSaving] = useState(false);
+
+  // ---- Manage the academy's own level list (add/remove/reorder) ----
+  const [newLevelName, setNewLevelName] = useState("");
+  const [levelsSaving, setLevelsSaving] = useState(false);
+  const [levelsError, setLevelsError] = useState("");
+
+  const addLevel = async () => {
+    setLevelsError("");
+    const name = newLevelName.trim();
+    if (!name) return;
+    if (LEVELS.includes(name)) return setLevelsError("That level already exists");
+    setLevelsSaving(true);
+    try {
+      const next = [...LEVELS, name];
+      const res = await saveCustomLevels(next);
+      if (!res) throw new Error("Could not save — please try again");
+      applyCustomLevels(next);
+      setNewLevelName("");
+      setSkillsRefreshKey((k) => k + 1);
+      logActivity(accountName, role, "Added level", name);
+    } catch (e) {
+      setLevelsError(e?.message || "Could not save — please try again");
+    } finally {
+      setLevelsSaving(false);
+    }
+  };
+
+  const removeLevel = (level) => {
+    const inUse = swimmers.some((s) => s.level === level);
+    setConfirmAction({
+      message: inUse
+        ? `${level} is still set on at least one swimmer — remove it from the level list anyway? Their profile will keep showing "${level}" until you change it, but it won't be selectable for anyone else.`
+        : `Remove "${level}" from the level list?`,
+      onConfirm: async () => {
+        setLevelsSaving(true);
+        try {
+          const next = LEVELS.filter((l) => l !== level);
+          const res = await saveCustomLevels(next);
+          if (!res) throw new Error("Could not save — please try again");
+          applyCustomLevels(next);
+          setSkillsRefreshKey((k) => k + 1);
+          logActivity(accountName, role, "Removed level", level);
+        } finally {
+          setLevelsSaving(false);
+        }
+      },
+    });
+  };
+
+  const resetLevelsToDefault = async () => {
+    setLevelsSaving(true);
+    try {
+      await saveCustomLevels(DEFAULT_LEVELS);
+      applyCustomLevels(DEFAULT_LEVELS);
+      setSkillsRefreshKey((k) => k + 1);
+    } finally {
+      setLevelsSaving(false);
+    }
+  };
 
   const [customPlanPrices, setCustomPlanPrices] = useState({}); // planId -> { name?, price? } override
   const [plansRefreshKey, setPlansRefreshKey] = useState(0); // bumped after saving, to force re-render of anything reading PLANS
@@ -9531,6 +9616,48 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <p className="text-sm text-slate-500 mb-5">
             These are the skills shown (and starred) on each swimmer's progress card, per level. Add, remove, or reset to the built-in defaults — changes apply everywhere immediately.
           </p>
+
+          <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4 mb-5">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="font-semibold text-slate-800 text-sm">Levels</h4>
+              <button onClick={resetLevelsToDefault} className="text-xs text-slate-400 hover:text-slate-600 underline">
+                Reset to default list
+              </button>
+            </div>
+            <p className="text-xs text-slate-400 mb-3">
+              Add or remove whichever levels this academy actually uses — everywhere a level is picked (swimmers, reports, schedule) updates to match.
+            </p>
+            <div className="flex flex-wrap gap-2 mb-3">
+              {LEVELS.map((level) => (
+                <span key={level} className="flex items-center gap-1.5 text-xs pl-3 pr-1.5 py-1.5 rounded-full bg-white border border-slate-200 text-slate-600">
+                  {level}
+                  <button onClick={() => removeLevel(level)} className="text-slate-300 hover:text-red-500">
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <input
+                value={newLevelName}
+                onChange={(e) => setNewLevelName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") addLevel();
+                }}
+                placeholder="New level name, e.g. Level 9"
+                className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+              />
+              <button
+                onClick={addLevel}
+                disabled={levelsSaving || !newLevelName.trim()}
+                className="px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+              >
+                Add
+              </button>
+            </div>
+            {levelsError && <div className="text-xs text-red-500 mt-2">{levelsError}</div>}
+          </div>
+
           <div className="space-y-4">
             {LEVELS.map((level) => {
               const skills = LEVEL_SKILLS[level] || [];
@@ -13175,6 +13302,17 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   const [scanMessage, setScanMessage] = useState("");
   const [chatOpen, setChatOpen] = useState(false);
   const [staffAccounts, setStaffAccounts] = useState([]);
+
+  // This view exists specifically for the "Technical" role — search and
+  // check-in duties, which includes marking swimmer attendance — so both
+  // permissions are simply granted outright here, unlike AdminView/CoachView
+  // where they depend on a specific account's configured permissions.
+  const canTakeSwimmerAttendance = true;
+  const canViewSwimmerAttendance = true;
+  // Skills/assessments are informational for this role — viewing is fine,
+  // but editing them isn't part of "search & check-in only" duties.
+  const canViewAssessments = true;
+  const canEditAssessments = false;
 
   useEffect(() => {
     if (chatOpen) loadCollection(STORE_KEYS.accounts).then(setStaffAccounts);
@@ -17443,6 +17581,7 @@ export default function App() {
       // used to cause a visible flash (default photo, then the real one).
       Promise.all([
         loadCustomLevelSkills().then(applyCustomLevelSkills),
+        loadCustomLevels().then(applyCustomLevels),
         loadCustomTimeSlots().then(applyCustomTimeSlots),
         loadHomepageContent().then(applyHomepageContent),
         loadCustomPrograms().then(applyCustomPrograms),
