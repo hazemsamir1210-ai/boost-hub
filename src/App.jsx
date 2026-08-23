@@ -2313,7 +2313,16 @@ function parseFullHistorySheet(sheet, coaches = []) {
 
       // Accepts whatever this app's own export writes ("Yes") as well as
       // the original academy spreadsheet's convention ("تم" / "done").
-      if (["تم", "done", "yes", "paid"].includes(payRaw)) paidMonths.push(monthKeyStr);
+      const isPaidThisMonth = ["تم", "done", "yes", "paid"].includes(payRaw);
+      if (isPaidThisMonth) paidMonths.push(monthKeyStr);
+
+      // A month with no payment marked means the swimmer wasn't actually
+      // enrolled that month — any level/day/time text still sitting in
+      // those cells is leftover from a previous month's entry, not a
+      // real one, and must not be read as if it were. Skipping it here
+      // stops stale data from a skipped/unpaid month from being picked
+      // up as the swimmer's "latest" level or schedule.
+      if (!isPaidThisMonth) return;
 
       const lvlKey = lvlRaw.trim().toLowerCase();
       const level = IMPORT_LEVEL_MAP[lvlKey];
