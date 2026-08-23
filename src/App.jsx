@@ -2222,24 +2222,61 @@ function importMapTime(raw, day) {
   return matched || null;
 }
 
-function parseFullHistorySheet(sheet) {
+function parseFullHistorySheet(sheet, coaches = []) {
   const blocks = findMonthBlocks(sheet);
   if (blocks.length === 0) return null; // not this kind of sheet
 
   const range = XLSX.utils.decode_range(sheet["!ref"]);
-  // Find the name / phone / notes columns by their header text, rather
-  // than assuming fixed positions — more forgiving of small layout
-  // differences between exports.
-  let nameCol = null, birthCol = null, phoneCol = null, notesCol = null;
+  // Find the name / phone / notes / coach / session-type columns by their
+  // header text, rather than assuming fixed positions — more forgiving
+  // of small layout differences between exports (e.g. this app's own
+  // "Export full history" button vs. an academy's original spreadsheet).
+  let nameCol = null, birthCol = null, phoneCol = null, notesCol = null, coachCol = null, sessionTypeCol = null;
   for (let c = range.s.c; c <= range.e.c; c++) {
     const header = cellStr(sheet, 0, c) || cellStr(sheet, 1, c);
     if (!header) continue;
     if (nameCol == null && header.includes("اسم")) nameCol = c;
     if (birthCol == null && header.includes("مواليد")) birthCol = c;
     if (phoneCol == null && (header.includes("موبايل") || header.includes("تليفون") || header.includes("هاتف"))) phoneCol = c;
-    if (header.includes("ملاحظ")) notesCol = c;
+    if (notesCol == null && header.includes("ملاحظ")) notesCol = c;
+    if (coachCol == null && (header.toLowerCase().includes("coach") || header.includes("كوتش") || header.includes("مدرب"))) coachCol = c;
+    if (sessionTypeCol == null && (header.toLowerCase().includes("session") || header.includes("نوع الحصة") || header.includes("نوع الحصه"))) sessionTypeCol = c;
   }
   if (nameCol == null || phoneCol == null) return null; // doesn't look like this format after all
+
+  // Each month block always has the same 4 sub-columns (payment, level,
+  // day, time) but not always in the same left-to-right order — this
+  // app's own "Export full history" writes Day/Time/Level/Payment, while
+  // an academy's original spreadsheet migrated into the system might use
+  // Payment/Level/Day/Time instead. Reading the actual sub-header text
+  // for each block (rather than assuming a fixed order) makes the
+  // importer work with either — and with anything exported later too.
+  const detectSubColumns = (startCol) => {
+    const offsets = { pay: 0, level: 1, day: 2, time: 3 }; // fallback: this app's historical default
+    let found = 0;
+    for (let i = 0; i < 4; i++) {
+      const label = cellStr(sheet, 1, startCol + i);
+      if (!label) continue;
+      if (label.includes("دفع") || label.toLowerCase().includes("pay")) {
+        offsets.pay = i;
+        found++;
+      } else if (label.includes("مستو") || label.toLowerCase().includes("level")) {
+        offsets.level = i;
+        found++;
+      } else if (label.includes("يوم") || label.toLowerCase().includes("day")) {
+        offsets.day = i;
+        found++;
+      } else if (label.includes("ساع") || label.toLowerCase().includes("time") || label.includes("وقت")) {
+        offsets.time = i;
+        found++;
+      }
+    }
+    // If we couldn't confidently read at least 3 of the 4 sub-headers
+    // (e.g. a sheet with no sub-header row at all), fall back to the
+    // original fixed order rather than guessing from partial matches.
+    return found >= 3 ? offsets : { pay: 0, level: 1, day: 2, time: 3 };
+  };
+  const blockOffsets = blocks.map((b) => detectSubColumns(b.startCol));
 
   const latestBlock = blocks[blocks.length - 1];
   const latestKey = `${latestBlock.year}-${String(latestBlock.month).padStart(2, "0")}`;
@@ -2252,6 +2289,8 @@ function parseFullHistorySheet(sheet) {
     const birthYear = cellStr(sheet, r, birthCol);
     const phoneRaw = cellStr(sheet, r, phoneCol);
     const notes = notesCol != null ? cellStr(sheet, r, notesCol) : "";
+    const coachName = coachCol != null ? cellStr(sheet, r, coachCol) : "";
+    const sessionTypeLabel = sessionTypeCol != null ? cellStr(sheet, r, sessionTypeCol) : "";
 
     const phoneParts = phoneRaw.split(/[-/]/).map((p) => p.replace(/\D/g, "")).filter(Boolean);
     const fixPhone = (p) => (p.length === 10 ? "0" + p : p);
@@ -2263,15 +2302,18 @@ function parseFullHistorySheet(sheet) {
     const scheduleHistory = [];
     const paidMonths = [];
 
-    blocks.forEach((b) => {
+    blocks.forEach((b, bi) => {
+      const off = blockOffsets[bi];
       const monthKeyStr = `${b.year}-${String(b.month).padStart(2, "0")}`;
       const monthDate = `${monthKeyStr}-01T00:00:00.000Z`;
-      const payRaw = cellStr(sheet, r, b.startCol).toLowerCase();
-      const lvlRaw = cellStr(sheet, r, b.startCol + 1);
-      const dayRaw = cellStr(sheet, r, b.startCol + 2);
-      const timeRaw = cellRaw(sheet, r, b.startCol + 3);
+      const payRaw = cellStr(sheet, r, b.startCol + off.pay).toLowerCase();
+      const lvlRaw = cellStr(sheet, r, b.startCol + off.level);
+      const dayRaw = cellStr(sheet, r, b.startCol + off.day);
+      const timeRaw = cellRaw(sheet, r, b.startCol + off.time);
 
-      if (payRaw === "تم" || payRaw === "done") paidMonths.push(monthKeyStr);
+      // Accepts whatever this app's own export writes ("Yes") as well as
+      // the original academy spreadsheet's convention ("تم" / "done").
+      if (["تم", "done", "yes", "paid"].includes(payRaw)) paidMonths.push(monthKeyStr);
 
       const lvlKey = lvlRaw.trim().toLowerCase();
       const level = IMPORT_LEVEL_MAP[lvlKey];
@@ -2308,6 +2350,15 @@ function parseFullHistorySheet(sheet) {
 
     const age = birthYear && /^\d{4}$/.test(birthYear) ? new Date().getFullYear() - Number(birthYear) : "";
 
+    // Matches the sheet's coach/session-type text back to real records —
+    // only if those columns exist (e.g. a file this app exported itself);
+    // an academy's original spreadsheet without them just leaves these
+    // as null/default, same as before.
+    const matchedCoach = coachName ? coaches.find((c) => c.name.trim().toLowerCase() === coachName.trim().toLowerCase()) : null;
+    const matchedSessionType = sessionTypeLabel
+      ? SESSION_TYPES.find((t) => t.label.toLowerCase() === sessionTypeLabel.trim().toLowerCase())?.id
+      : null;
+
     swimmers.push({
       id: genId(),
       name,
@@ -2320,9 +2371,9 @@ function parseFullHistorySheet(sheet) {
       time: latestEntries[0]?.time || "",
       day2: latestEntries[1]?.day || "",
       time2: latestEntries[1]?.time || "",
-      sessionType: "group",
-      sessionType2: latestEntries[1] ? "group" : "",
-      coachId: null,
+      sessionType: matchedSessionType || "group",
+      sessionType2: latestEntries[1] ? matchedSessionType || "group" : "",
+      coachId: matchedCoach?.id || null,
       coachId2: null,
       notes,
       parentPin: genParentPin(),
@@ -6183,7 +6234,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       // single-row importer below handles the first sheet instead.
       let fullHistory = null;
       for (const sheetName of wb.SheetNames) {
-        const candidate = parseFullHistorySheet(wb.Sheets[sheetName]);
+        const candidate = parseFullHistorySheet(wb.Sheets[sheetName], coaches);
         if (candidate && (!fullHistory || candidate.monthsFound > fullHistory.monthsFound)) {
           fullHistory = candidate;
         }
