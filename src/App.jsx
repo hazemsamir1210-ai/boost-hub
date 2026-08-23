@@ -2300,7 +2300,18 @@ function parseFullHistorySheet(sheet, coaches = []) {
 
     const levelHistory = [];
     const scheduleHistory = [];
+    const monthlySchedules = {}; // "YYYY-MM" -> { day, time, day2, time2, ... } — the same shape the rest of the app already reads per month via getMonthlySchedule()
     const paidMonths = [];
+
+    // Matches the sheet's coach/session-type text back to real records —
+    // only if those columns exist (e.g. a file this app exported itself);
+    // an academy's original spreadsheet without them just leaves these
+    // as null/default. These are per-swimmer metadata columns (not
+    // repeated per month), so they're resolved once up front.
+    const matchedCoach = coachName ? coaches.find((c) => c.name.trim().toLowerCase() === coachName.trim().toLowerCase()) : null;
+    const matchedSessionType = sessionTypeLabel
+      ? SESSION_TYPES.find((t) => t.label.toLowerCase() === sessionTypeLabel.trim().toLowerCase())?.id
+      : null;
 
     blocks.forEach((b, bi) => {
       const off = blockOffsets[bi];
@@ -2316,13 +2327,16 @@ function parseFullHistorySheet(sheet, coaches = []) {
       const isPaidThisMonth = ["تم", "done", "yes", "paid"].includes(payRaw);
       if (isPaidThisMonth) paidMonths.push(monthKeyStr);
 
-      // A month with no payment marked means the swimmer wasn't actually
-      // enrolled that month — any level/day/time text still sitting in
-      // those cells is leftover from a previous month's entry, not a
-      // real one, and must not be read as if it were. Skipping it here
-      // stops stale data from a skipped/unpaid month from being picked
-      // up as the swimmer's "latest" level or schedule.
-      if (!isPaidThisMonth) return;
+      // A month is only skipped if it's genuinely blank across the
+      // board — payment status on its own does NOT mean "not
+      // registered". A swimmer can have a real level/day/time for a
+      // month they haven't paid yet (attending with a balance due,
+      // tracked separately via paidMonths) — that's still their real
+      // data for that month, not something to hide. This also means a
+      // level recorded for a later month is trusted even if it's LOWER
+      // than before (e.g. after a long absence) rather than assuming
+      // levels can only go up.
+      if (!payRaw && !lvlRaw && !dayRaw && !timeRaw) return;
 
       const lvlKey = lvlRaw.trim().toLowerCase();
       const level = IMPORT_LEVEL_MAP[lvlKey];
@@ -2330,8 +2344,10 @@ function parseFullHistorySheet(sheet, coaches = []) {
 
       const day = IMPORT_DAY_MAP[dayRaw.trim()];
       const time = importMapTime(timeRaw, day);
+      const baseSlot = { sessionType: matchedSessionType || "group", coachId: matchedCoach?.id || null, scheduleMonth: monthKeyStr };
       if (day && time) {
         scheduleHistory.push({ day, time, date: monthDate });
+        monthlySchedules[monthKeyStr] = { ...baseSlot, day, time };
       } else {
         // Category placeholders instead of a real day/time — same
         // fallback schedule rules used for the offline migration.
@@ -2339,34 +2355,35 @@ function parseFullHistorySheet(sheet, coaches = []) {
         if (blob.includes("star") || blob.includes("team") || blob.includes("بر تيم") || blob.includes("استار")) {
           scheduleHistory.push({ day: "mon-wed", time: "7:30 PM", date: monthDate });
           scheduleHistory.push({ day: "fri-sat", time: "3:00 PM", date: monthDate });
+          monthlySchedules[monthKeyStr] = {
+            ...baseSlot,
+            day: "mon-wed", time: "7:30 PM",
+            day2: "fri-sat", time2: "3:00 PM", sessionType2: matchedSessionType || "group",
+          };
         } else if (blob.includes("ladies") || blob.includes("laides")) {
           scheduleHistory.push({ day: "fri-sat", time: "8:30 AM", date: monthDate });
+          monthlySchedules[monthKeyStr] = { ...baseSlot, day: "fri-sat", time: "8:30 AM" };
         } else if (blob.includes("adult")) {
           scheduleHistory.push({ day: "sun-tue", time: "7:30 PM", date: monthDate });
+          monthlySchedules[monthKeyStr] = { ...baseSlot, day: "sun-tue", time: "7:30 PM" };
         }
       }
     });
 
-    const currentLevelEntry = [...levelHistory].sort((a, b) => a.date.localeCompare(b.date)).pop();
-    const currentLevel = currentLevelEntry ? currentLevelEntry.level : "";
-    // Use this swimmer's own most recent month that actually has a
-    // day/time filled in — not strictly the file's overall latest month,
-    // since that column can be blank for a given swimmer (not updated
-    // yet) even though an earlier month has their real current schedule.
-    const sortedHistory = [...scheduleHistory].sort((a, b) => a.date.localeCompare(b.date));
-    const mostRecentDate = sortedHistory.length ? sortedHistory[sortedHistory.length - 1].date : null;
-    const latestEntries = mostRecentDate ? sortedHistory.filter((h) => h.date === mostRecentDate) : [];
+    // The flat day/time/level fields (used anywhere in the app that
+    // doesn't look a specific month up in monthlySchedules) only reflect
+    // the FILE'S actual latest month — a swimmer whose real data stops
+    // in June (nothing since, paid or not) has left, and showing June's
+    // old schedule as if it's their current one is exactly the "shows a
+    // swimmer who wasn't really in August" mix-up this avoids. Whether
+    // they've actually PAID for the latest month is a separate concern,
+    // tracked via paidMonths — a real schedule/level with an unpaid
+    // month still counts as active, just with a balance due.
+    const latestMonthSlot = monthlySchedules[latestKey];
+    const latestLevelEntry = levelHistory.find((h) => h.date === `${latestKey}-01T00:00:00.000Z`);
+    const currentLevel = latestLevelEntry?.level || "";
 
     const age = birthYear && /^\d{4}$/.test(birthYear) ? new Date().getFullYear() - Number(birthYear) : "";
-
-    // Matches the sheet's coach/session-type text back to real records —
-    // only if those columns exist (e.g. a file this app exported itself);
-    // an academy's original spreadsheet without them just leaves these
-    // as null/default, same as before.
-    const matchedCoach = coachName ? coaches.find((c) => c.name.trim().toLowerCase() === coachName.trim().toLowerCase()) : null;
-    const matchedSessionType = sessionTypeLabel
-      ? SESSION_TYPES.find((t) => t.label.toLowerCase() === sessionTypeLabel.trim().toLowerCase())?.id
-      : null;
 
     swimmers.push({
       id: genId(),
@@ -2376,14 +2393,15 @@ function parseFullHistorySheet(sheet, coaches = []) {
       altPhone,
       branch: BRANCHES[0].id,
       level: currentLevel,
-      day: latestEntries[0]?.day || "",
-      time: latestEntries[0]?.time || "",
-      day2: latestEntries[1]?.day || "",
-      time2: latestEntries[1]?.time || "",
-      sessionType: matchedSessionType || "group",
-      sessionType2: latestEntries[1] ? matchedSessionType || "group" : "",
-      coachId: matchedCoach?.id || null,
+      day: latestMonthSlot?.day || "",
+      time: latestMonthSlot?.time || "",
+      day2: latestMonthSlot?.day2 || "",
+      time2: latestMonthSlot?.time2 || "",
+      sessionType: latestMonthSlot?.sessionType || "group",
+      sessionType2: latestMonthSlot?.day2 ? latestMonthSlot?.sessionType2 || "group" : "",
+      coachId: latestMonthSlot?.coachId || null,
       coachId2: null,
+      scheduleMonth: latestMonthSlot ? latestKey : undefined,
       notes,
       parentPin: genParentPin(),
       paidMonths,
@@ -2391,6 +2409,7 @@ function parseFullHistorySheet(sheet, coaches = []) {
       freezeLog: [],
       levelHistory,
       scheduleHistory,
+      monthlySchedules,
       trainingDates: [],
       attendance: {},
       createdAt: `${blocks[0].year}-${String(blocks[0].month).padStart(2, "0")}-01T00:00:00.000Z`,
