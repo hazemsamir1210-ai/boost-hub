@@ -13309,10 +13309,9 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   // where they depend on a specific account's configured permissions.
   const canTakeSwimmerAttendance = true;
   const canViewSwimmerAttendance = true;
-  // Skills/assessments are informational for this role — viewing is fine,
-  // but editing them isn't part of "search & check-in only" duties.
+  // Rating a swimmer's skills is part of this role's day-to-day work too.
   const canViewAssessments = true;
-  const canEditAssessments = false;
+  const canEditAssessments = true;
 
   useEffect(() => {
     if (chatOpen) loadCollection(STORE_KEYS.accounts).then(setStaffAccounts);
