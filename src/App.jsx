@@ -6804,7 +6804,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         let query = supabase.from("swimmers").select("data", { count: "exact" }).eq("academy_id", window.__academy?.id);
         // By default, only show swimmers who are actually enrolled — have a
         // day/time slot, not just added to the system with nothing set yet.
-        if (!showUnscheduled) query = query.neq("data->>day", "").neq("data->>time", "");
+        // By default, only show swimmers who are actually enrolled in the
+        // selected "Acting on" month — have a real day/time for that
+        // specific month, not just whatever their current/latest one is.
+        // Swimmers imported with full per-month history (monthlySchedules)
+        // are checked against that exact month; swimmers with no such
+        // history at all (added normally, one schedule only) fall back to
+        // their flat day/time, since there's no month-by-month record for
+        // them to check instead.
+        if (!showUnscheduled) {
+          query = query.or(
+            `data->monthlySchedules->${paymentMonthFilter}->>day.neq.,and(data->monthlySchedules.is.null,data->>day.neq.,data->>time.neq.)`
+          );
+        }
         // A branch-restricted account always gets this filter, regardless
         // of whatever the branch dropdown shows — it's a hard boundary,
         // not just a starting filter they could change.
@@ -7992,6 +8004,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 return monthKey(d);
               })();
               const isOverdue = !(s.paidMonths || []).includes(monthKey()) && !(s.paidMonths || []).includes(prevMonthKey);
+              // Shows this swimmer's schedule/level/coach AS OF the
+              // selected "Acting on" month, not always their current
+              // one — for a swimmer with real per-month history
+              // (monthlySchedules) that can genuinely differ from what
+              // they're doing today; swimmers with no such history (just
+              // one schedule, never imported month-by-month) fall back
+              // to their normal fields either way.
+              const monthSchedule = getMonthlySchedule(s, paymentMonthFilter);
+              const displayLevel = levelInMonth(s, paymentMonthFilter) || s.level;
+              const rowView = monthSchedule ? { ...s, ...monthSchedule, level: displayLevel } : { ...s, level: displayLevel };
               return (
               <div
                 key={s.id}
@@ -8001,7 +8023,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="min-w-[120px]">
                     <div className="font-semibold text-slate-900 text-sm flex items-center gap-1.5">
-                      {s.level === "Baby" && (
+                      {rowView.level === "Baby" && (
                         <span className="inline-flex items-center gap-0.5 bg-amber-100 text-amber-700 rounded-full px-1.5 py-0.5">
                           <Baby className="w-3 h-3" />
                         </span>
@@ -8039,10 +8061,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <div className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-800 font-medium">
                     {BRANCHES.find((b) => b.id === s.branch)?.name.split(" (")[0] || "No branch"}
                   </div>
-                  <div className="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 font-medium">{s.level}</div>
-                  {(LEVEL_SKILLS[s.level] || []).length > 0 && (() => {
-                    const total = LEVEL_SKILLS[s.level].length;
-                    const mastered = LEVEL_SKILLS[s.level].filter((sk) => (s.skills?.[s.level]?.[sk] || 0) >= 5).length;
+                  <div className="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 font-medium">{rowView.level}</div>
+                  {(LEVEL_SKILLS[rowView.level] || []).length > 0 && (() => {
+                    const total = LEVEL_SKILLS[rowView.level].length;
+                    const mastered = LEVEL_SKILLS[rowView.level].filter((sk) => (s.skills?.[rowView.level]?.[sk] || 0) >= 5).length;
                     return (
                       <div className={`text-xs px-2.5 py-1 rounded-full font-medium flex items-center gap-1 ${mastered === total ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>
                         <Star className="w-3 h-3 fill-current" /> {mastered}/{total}
@@ -8050,16 +8072,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     );
                   })()}
 
-                  {s.coachId && (
+                  {rowView.coachId && (
                     <div className="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 font-medium flex items-center gap-1">
                       <Award className="w-3 h-3" />
-                      {coaches.find((c) => c.id === s.coachId)?.name || "Coach"} · {sessionTypeInfo(s.sessionType).label}
+                      {coaches.find((c) => c.id === rowView.coachId)?.name || "Coach"} · {sessionTypeInfo(rowView.sessionType).label}
                     </div>
                   )}
 
                   <div className="flex items-center gap-1.5 text-sm text-slate-500 flex-1 min-w-[200px]">
                     <CalendarDays className="w-3.5 h-3.5 text-slate-400" />
-                    {scheduleLabel(s)}
+                    {scheduleLabel(rowView)}
                   </div>
 
                   <div className="flex items-center gap-1.5">
