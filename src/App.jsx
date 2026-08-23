@@ -4206,6 +4206,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [contactSaved, setContactSaved] = useState(false);
   const [showPricesModal, setShowPricesModal] = useState(false);
   const [showAchievementsModal, setShowAchievementsModal] = useState(false);
+  const [settingsSubTab, setSettingsSubTab] = useState("general");
   const [showSkillsModal, setShowSkillsModal] = useState(false);
   const [settingsSignature, setSettingsSignature] = useState("");
   const [settingsInstapayHandle, setSettingsInstapayHandle] = useState("");
@@ -10856,6 +10857,29 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             )}
           </div>
 
+          <div className="flex gap-2 flex-wrap border-b border-slate-200 pb-3">
+            {[
+              { id: "general", label: "General" },
+              { id: "certificates", label: "Certificates" },
+              { id: "schedule", label: "Schedule" },
+              { id: "homepage", label: "Homepage" },
+              { id: "skills", label: "Skills & Levels" },
+              { id: "backup", label: "Backup" },
+              ...(role === "admin" ? [{ id: "password", label: "Password" }] : []),
+            ].map((t) => (
+              <button
+                key={t.id}
+                onClick={() => (t.id === "skills" ? setShowSkillsModal(true) : setSettingsSubTab(t.id))}
+                className={`text-sm px-3 py-1.5 rounded-lg font-medium transition ${
+                  settingsSubTab === t.id ? "bg-blue-950 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {settingsSubTab === "general" && (
           <div>
             <h3 className="font-bold text-slate-900 mb-1">Academy details</h3>
             <p className="text-sm text-slate-500 mb-4">Shows up on receipts, reminders, and the login screen.</p>
@@ -10973,7 +10997,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </div>
             </div>
           </div>
+          )}
 
+          {settingsSubTab === "certificates" && (
           <div>
             <h3 className="font-bold text-slate-900 mb-1">Certificate design</h3>
             <p className="text-sm text-slate-500 mb-4">
@@ -11205,7 +11231,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               )}
             </div>
           </div>
+          )}
 
+          {settingsSubTab === "schedule" && (
           <div key={timeSlotsRefreshKey}>
             <h3 className="font-bold text-slate-900 mb-1">Day & time slots</h3>
             <p className="text-sm text-slate-500 mb-4">The start times swimmers and coaches can be booked at, per day group.</p>
@@ -11304,7 +11332,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </div>
             </div>
           </div>
+          )}
 
+          {settingsSubTab === "homepage" && (
           <div>
             <h3 className="font-bold text-slate-900 mb-1">Public homepage — hero section</h3>
             <p className="text-sm text-slate-500 mb-4">The banner text and big background photos at the top of your public page.</p>
@@ -11476,7 +11506,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </button>
             </div>
           </div>
+          )}
 
+          {settingsSubTab === "backup" && (
           <div>
             <h3 className="font-bold text-slate-900 mb-1">Backup</h3>
             <p className="text-sm text-slate-500 mb-4">
@@ -11492,6 +11524,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </button>
             </div>
           </div>
+          )}
         </div>
       )}
 
@@ -11510,7 +11543,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "settings" && role === "admin" && (
+      {tab === "settings" && role === "admin" && settingsSubTab === "password" && (
         <div className="max-w-sm mt-8 pt-8 border-t border-slate-200">
           <h3 className="font-bold text-slate-900 mb-1">Change admin password</h3>
           <p className="text-sm text-slate-500 mb-4">
@@ -12883,19 +12916,31 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
             </div>
           </>
         )}
-        {role === "technical" && (
+        {(role === "technical" || role === "coach") && (
           <div className="sm:col-span-2">
-            <label className="text-xs text-slate-500 mb-1 block">Only show swimmers at this level (optional)</label>
-            <select
-              value={levelRestriction}
-              onChange={(e) => setLevelRestriction(e.target.value)}
-              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
-            >
-              <option value="">All levels</option>
-              {LEVELS.map((l) => (
-                <option key={l} value={l}>{l}</option>
-              ))}
-            </select>
+            <label className="text-xs text-slate-500 mb-1 block">Which levels can this account see? (optional — leave empty for all levels)</label>
+            <div className="flex flex-wrap gap-2 border border-slate-200 rounded-lg p-2 max-h-32 overflow-y-auto">
+              {LEVELS.map((l) => {
+                const checked = levelAccess.includes(l);
+                return (
+                  <button
+                    key={l}
+                    type="button"
+                    onClick={() => setLevelAccess(checked ? levelAccess.filter((x) => x !== l) : [...levelAccess, l])}
+                    className={`text-xs px-2.5 py-1.5 rounded-full border ${
+                      checked ? "border-blue-900 bg-blue-50 text-blue-950 font-medium" : "border-slate-200 text-slate-500"
+                    }`}
+                  >
+                    {l}
+                  </button>
+                );
+              })}
+            </div>
+            {levelAccess.length > 0 && (
+              <button onClick={() => setLevelAccess([])} className="text-xs text-slate-400 hover:text-slate-600 underline mt-1">
+                Clear (show all levels)
+              </button>
+            )}
           </div>
         )}
         {role !== "admin" && (
@@ -12991,6 +13036,41 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
           </div>
         )}
       </div>
+
+      {role !== "admin" && (
+        <div className="mb-4">
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-xs text-slate-500 block">Specific permissions</label>
+            <button
+              type="button"
+              onClick={() => setPermissions({ ...ROLE_DEFAULT_PERMISSIONS[role] })}
+              className="text-xs text-slate-400 hover:text-slate-600 underline"
+            >
+              Reset to {ROLES.find((r) => r.id === role)?.label.split(" (")[0]} defaults
+            </button>
+          </div>
+          <div className="grid sm:grid-cols-2 gap-1.5 border border-slate-200 rounded-lg p-3 max-h-56 overflow-y-auto bg-slate-50">
+            {PERMISSION_DEFS.map(([key, label]) => {
+              const checked = !!permissions[key];
+              return (
+                <label key={key} className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => setPermissions({ ...permissions, [key]: e.target.checked })}
+                    className="w-4 h-4"
+                  />
+                  {label}
+                </label>
+              );
+            })}
+          </div>
+          <div className="text-xs text-slate-400 mt-1">
+            Starts from {ROLES.find((r) => r.id === role)?.label.split(" (")[0]}'s usual permissions — tick or untick anything to customize just this account.
+          </div>
+        </div>
+      )}
+
       {error && <div className="text-red-500 text-sm mb-3">{error}</div>}
       <div className="flex gap-2">
         <button
@@ -13303,15 +13383,20 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   const [chatOpen, setChatOpen] = useState(false);
   const [staffAccounts, setStaffAccounts] = useState([]);
 
-  // This view exists specifically for the "Technical" role — search and
-  // check-in duties, which includes marking swimmer attendance — so both
-  // permissions are simply granted outright here, unlike AdminView/CoachView
-  // where they depend on a specific account's configured permissions.
-  const canTakeSwimmerAttendance = true;
-  const canViewSwimmerAttendance = true;
-  // Rating a swimmer's skills is part of this role's day-to-day work too.
-  const canViewAssessments = true;
-  const canEditAssessments = true;
+  // Reads this specific account's actual permissions (role defaults, with
+  // whatever individual overrides an admin set for them in Accounts) —
+  // rather than assuming every Technical account can do the same things.
+  const [myPermissions, setMyPermissions] = useState(ROLE_DEFAULT_PERMISSIONS.technical);
+  useEffect(() => {
+    loadCollection(STORE_KEYS.accounts).then((accounts) => {
+      const mine = accounts.find((a) => a.name === accountName);
+      setMyPermissions(getAccountPermissions(mine, "technical"));
+    });
+  }, [accountName]);
+  const canTakeSwimmerAttendance = !!myPermissions.takeSwimmerAttendance;
+  const canViewSwimmerAttendance = !!myPermissions.viewSwimmerAttendance || canTakeSwimmerAttendance;
+  const canViewAssessments = !!myPermissions.viewAssessments;
+  const canEditAssessments = !!myPermissions.editAssessments;
 
   useEffect(() => {
     if (chatOpen) loadCollection(STORE_KEYS.accounts).then(setStaffAccounts);
