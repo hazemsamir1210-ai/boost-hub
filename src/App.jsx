@@ -266,9 +266,9 @@ const CONFIG = {
   primaryColor: "#0c1e3e", // this academy's brand color for the public homepage — overridden per-academy by resolveAcademy()
   logoDataUri: "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%22200%22%20height%3D%22200%22%3E%3Crect%20width%3D%22200%22%20height%3D%22200%22%20fill%3D%22%230b1e4a%22/%3E%3Ctext%20x%3D%22100%22%20y%3D%22115%22%20font-family%3D%22sans-serif%22%20font-size%3D%2260%22%20text-anchor%3D%22middle%22%3E%F0%9F%8F%8A%3C/text%3E%3C/svg%3E", // academy logo
   signatureDataUri: "", // optional — printed on receipts/reports if set, from the Settings tab
-  instapayHandle: "mahfathy.aaib@instapay", // your Instapay handle
-  instapayLink: "https://ipn.eg/S/mahfathy.aaib/instapay/74AH24", // opens the Instapay app directly
-  instapayPhone: "01000000000",          // phone number linked to Instapay
+  instapayHandle: "", // this academy's own Instapay handle — set from the Settings tab; a new academy starts blank on purpose so its parents never see another academy's payment details by accident
+  instapayLink: "", // opens the Instapay app directly — same reasoning, set per academy from Settings
+  instapayPhone: "",          // phone number linked to Instapay — same reasoning
   adminPassword: "admin123",             // change this before going live
   staffPassword: "staff123",             // pool staff attendance dashboard — change before going live
   // Optional: Telegram bot for instant admin notifications
@@ -3105,32 +3105,40 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
       )}
 
       <div className="bg-blue-950 text-white rounded-2xl p-5 mb-6">
-        <div className="text-sm text-blue-100 mb-1">Transfer {plan.price || "..."} EGP via Instapay to:</div>
-        <a
-          href={CONFIG.instapayLink}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center justify-between bg-white/10 hover:bg-white/20 transition rounded-xl px-4 py-3 mb-2"
-        >
-          <span className="font-mono text-lg">{CONFIG.instapayHandle}</span>
-          <span className="flex items-center gap-2 text-blue-100">
-            <Send className="w-4 h-4" />
-            <button
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                copyHandle();
-              }}
-              className="hover:text-white"
-              title="Copy handle"
+        {CONFIG.instapayHandle ? (
+          <>
+            <div className="text-sm text-blue-100 mb-1">Transfer {plan.price || "..."} EGP via Instapay to:</div>
+            <a
+              href={CONFIG.instapayLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-between bg-white/10 hover:bg-white/20 transition rounded-xl px-4 py-3 mb-2"
             >
-              <Copy className="w-4 h-4" />
-            </button>
-          </span>
-        </a>
-        <div className="text-xs text-blue-200 mb-1">Tap above to open the Instapay app directly</div>
-        {copied && <div className="text-xs text-blue-200 mb-2">Copied ✓</div>}
-        <div className="text-xs text-blue-100">or mobile number: {CONFIG.instapayPhone}</div>
+              <span className="font-mono text-lg">{CONFIG.instapayHandle}</span>
+              <span className="flex items-center gap-2 text-blue-100">
+                <Send className="w-4 h-4" />
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    copyHandle();
+                  }}
+                  className="hover:text-white"
+                  title="Copy handle"
+                >
+                  <Copy className="w-4 h-4" />
+                </button>
+              </span>
+            </a>
+            <div className="text-xs text-blue-200 mb-1">Tap above to open the Instapay app directly</div>
+            {copied && <div className="text-xs text-blue-200 mb-2">Copied ✓</div>}
+            <div className="text-xs text-blue-100">or mobile number: {CONFIG.instapayPhone}</div>
+          </>
+        ) : (
+          <div className="text-sm text-blue-100">
+            This academy hasn't set up its payment details yet — please contact them directly to arrange payment.
+          </div>
+        )}
       </div>
 
       <div className="space-y-4">
@@ -10880,6 +10888,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           </div>
 
           {settingsSubTab === "general" && (
+          <>
           <div>
             <h3 className="font-bold text-slate-900 mb-1">Academy details</h3>
             <p className="text-sm text-slate-500 mb-4">Shows up on receipts, reminders, and the login screen.</p>
@@ -10997,9 +11006,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </div>
             </div>
           </div>
+          </>
           )}
 
           {settingsSubTab === "certificates" && (
+          <>
           <div>
             <h3 className="font-bold text-slate-900 mb-1">Certificate design</h3>
             <p className="text-sm text-slate-500 mb-4">
@@ -11231,9 +11242,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               )}
             </div>
           </div>
+          </>
           )}
 
           {settingsSubTab === "schedule" && (
+          <>
           <div key={timeSlotsRefreshKey}>
             <h3 className="font-bold text-slate-900 mb-1">Day & time slots</h3>
             <p className="text-sm text-slate-500 mb-4">The start times swimmers and coaches can be booked at, per day group.</p>
@@ -11332,9 +11345,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </div>
             </div>
           </div>
+          </>
           )}
 
           {settingsSubTab === "homepage" && (
+          <>
           <div>
             <h3 className="font-bold text-slate-900 mb-1">Public homepage — hero section</h3>
             <p className="text-sm text-slate-500 mb-4">The banner text and big background photos at the top of your public page.</p>
@@ -11506,6 +11521,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </button>
             </div>
           </div>
+          </>
           )}
 
           {settingsSubTab === "backup" && (
@@ -14293,7 +14309,9 @@ function CoachTrainingSection({ coachId, coachName }) {
                     ) : payingCourseId === c.id ? (
                       <div className="bg-slate-50 rounded-lg p-3">
                         <div className="text-xs text-slate-500 mb-2">
-                          Pay {c.price} EGP via Instapay to <strong>{CONFIG.instapayHandle}</strong> ({CONFIG.instapayPhone}), then upload the screenshot.
+                          {CONFIG.instapayHandle
+                            ? <>Pay {c.price} EGP via Instapay to <strong>{CONFIG.instapayHandle}</strong> ({CONFIG.instapayPhone}), then upload the screenshot.</>
+                            : "This academy hasn't set up its payment details yet — please contact them directly."}
                         </div>
                         <input
                           type="file"
@@ -15588,7 +15606,9 @@ function CoursesPortalView({ onBack }) {
           ) : payingCourseId === activeCourse.id ? (
             <div className="bg-white rounded-2xl border border-slate-200 p-6">
               <p className="text-sm text-slate-600 mb-3">
-                Pay <strong>{activeCourse.price} EGP</strong> via Instapay to <strong>{CONFIG.instapayHandle}</strong> ({CONFIG.instapayPhone}), then upload the screenshot below.
+                {CONFIG.instapayHandle
+                  ? <>Pay <strong>{activeCourse.price} EGP</strong> via Instapay to <strong>{CONFIG.instapayHandle}</strong> ({CONFIG.instapayPhone}), then upload the screenshot below.</>
+                  : "This academy hasn't set up its payment details yet — please contact them directly."}
               </p>
               <input
                 type="file"
