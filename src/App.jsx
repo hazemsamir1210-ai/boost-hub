@@ -6705,6 +6705,46 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       setSwimmersPageLoading(true);
       setSwimmersPageError("");
       try {
+        // The paid/unpaid filter checks the paidMonths array with a JSONB
+        // "contains" condition — combined with an exact row count, that
+        // combination doesn't reliably narrow the count down on every
+        // Postgres/PostgREST setup (the list of rows comes back filtered
+        // correctly, but the reported total doesn't). Rather than trust a
+        // count that's sometimes wrong, this path is handled by fetching
+        // everything and filtering/counting in JS instead — the same
+        // approach the rest of the app already uses for accurate totals.
+        if (paymentStatusFilter !== "all") {
+          const all = await fetchAllSwimmers();
+          const matches = all.filter((s) => {
+            if (!showUnscheduled && (!s.day || !s.time)) return false;
+            if (branchRestriction ? s.branch !== branchRestriction : branchFilter !== "all" && s.branch !== branchFilter) return false;
+            if (levelFilter !== "all" && s.level !== levelFilter) return false;
+            if (role !== "admin" && (programAccess.length || levelAccess.length)) {
+              const scopedLevels = [...new Set([
+                ...levelAccess,
+                ...programAccess.flatMap((program) => PROGRAM_LEVEL_SCOPE[program] || []),
+              ])];
+              if (!scopedLevels.includes(s.level)) return false;
+            } else if (role === "technical" && myAccount?.levelRestriction && levelFilter === "all") {
+              if (s.level !== myAccount.levelRestriction) return false;
+            }
+            if (dayFilter !== "all" && s.day !== dayFilter) return false;
+            if (timeFilter !== "all" && s.time !== timeFilter) return false;
+            if (sessionTypeFilter !== "all" && s.sessionType !== sessionTypeFilter) return false;
+            const isPaid = (s.paidMonths || []).includes(paymentMonthFilter);
+            if (paymentStatusFilter === "paid" && !isPaid) return false;
+            if (paymentStatusFilter === "unpaid" && isPaid) return false;
+            const q = search.trim().toLowerCase();
+            if (q && !s.name?.toLowerCase().includes(q) && !s.phone?.includes(q)) return false;
+            return true;
+          });
+          matches.sort((a, b) => a.name.localeCompare(b.name));
+          const pageItems = matches.slice(offset, offset + SWIMMERS_PAGE_SIZE);
+          setSwimmersPage((prev) => (append ? [...prev, ...pageItems] : pageItems));
+          setSwimmersPageTotal(matches.length);
+          return;
+        }
+
         let query = supabase.from("swimmers").select("data", { count: "exact" }).eq("academy_id", window.__academy?.id);
         // By default, only show swimmers who are actually enrolled — have a
         // day/time slot, not just added to the system with nothing set yet.
@@ -6729,11 +6769,6 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         if (dayFilter !== "all") query = query.filter("data->>day", "eq", dayFilter);
         if (timeFilter !== "all") query = query.filter("data->>time", "eq", timeFilter);
         if (sessionTypeFilter !== "all") query = query.filter("data->>sessionType", "eq", sessionTypeFilter);
-        if (paymentStatusFilter === "paid") {
-          query = query.filter("data->paidMonths", "cs", JSON.stringify([paymentMonthFilter]));
-        } else if (paymentStatusFilter === "unpaid") {
-          query = query.not("data->paidMonths", "cs", JSON.stringify([paymentMonthFilter]));
-        }
         const q = search.trim();
         if (q) query = query.or(`name.ilike.%${q}%,phone.ilike.%${q}%`);
         query = query.order("name", { ascending: true }).range(offset, offset + SWIMMERS_PAGE_SIZE - 1);
