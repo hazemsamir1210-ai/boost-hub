@@ -7557,11 +7557,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   {needsCoach.map((s) => (
                     <div key={s.id} className="bg-white rounded-xl border border-amber-200 bg-amber-50/40 p-4 flex items-center justify-between gap-3 flex-wrap">
                       <div>
-                        <div className="font-semibold text-slate-800 text-sm">{s.name}</div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-semibold text-slate-800 text-sm">{s.name}</span>
+                          <span
+                            className="text-xs px-2 py-0.5 rounded-full font-semibold text-white"
+                            style={{ backgroundColor: sessionTypeInfo(s.sessionType).color }}
+                          >
+                            {sessionTypeInfo(s.sessionType).label}
+                          </span>
+                        </div>
                         <div className="text-xs text-slate-400">
                           {DAY_GROUPS.find((d) => d.id === s.day)?.label || s.day} · {s.time} · {s.level}
-                          {" · "}
-                          <span className="font-medium text-slate-600">{sessionTypeInfo(s.sessionType).label}</span>
                         </div>
                       </div>
                       <CoachPicker s={s} />
@@ -7581,11 +7587,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   {alreadyAssigned.map((s) => (
                     <div key={s.id} className="bg-white rounded-xl border border-slate-200 p-4 flex items-center justify-between gap-3 flex-wrap">
                       <div>
-                        <div className="font-semibold text-slate-800 text-sm">{s.name}</div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-semibold text-slate-800 text-sm">{s.name}</span>
+                          <span
+                            className="text-xs px-2 py-0.5 rounded-full font-semibold text-white"
+                            style={{ backgroundColor: sessionTypeInfo(s.sessionType).color }}
+                          >
+                            {sessionTypeInfo(s.sessionType).label}
+                          </span>
+                        </div>
                         <div className="text-xs text-slate-400">
                           {DAY_GROUPS.find((d) => d.id === s.day)?.label || s.day} · {s.time} · {s.level}
-                          {" · "}
-                          <span className="font-medium text-slate-600">{sessionTypeInfo(s.sessionType).label}</span>
                           {" · "}currently <span className="font-medium text-slate-600">{coaches.find((c) => c.id === s.coachId)?.name || "—"}</span>
                         </div>
                       </div>
