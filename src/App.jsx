@@ -8190,7 +8190,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                           <CalendarCheck className="w-4 h-4" />
                         </button>
                         <button
-                          onClick={() => { setEditingSwimmer(s); setPendingActivationId(null); setShowForm(true); }}
+                          onClick={() => { setEditingSwimmer(rowView); setPendingActivationId(null); setShowForm(true); }}
                           className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"
                         >
                           <Pencil className="w-4 h-4" />
