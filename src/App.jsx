@@ -2429,6 +2429,54 @@ function parseImportedSwimmerRow(row, coaches) {
   const coachMatch = coachRaw ? (coaches || []).find((c) => c.name.toLowerCase() === coachRaw) : null;
   if (coachRaw && !coachMatch) warnings.push(`coach "${get("coach", "الكابتن")}" not found — left unassigned`);
 
+  // Payment column is optional and fairly loosely formatted — could be a
+  // specific month ("2026-08", "August 2026", "أغسطس"), several months
+  // separated by commas/slashes, or just a yes/no meaning "paid for the
+  // current month". Anything that can't be matched to an actual month is
+  // dropped with a warning rather than silently left out, so it's easy to
+  // spot and fix after import instead of everyone quietly landing on
+  // paidMonths: [].
+  const ARABIC_MONTHS = ["يناير", "فبراير", "مارس", "ابريل", "أبريل", "مايو", "يونيو", "يوليو", "اغسطس", "أغسطس", "سبتمبر", "اكتوبر", "أكتوبر", "نوفمبر", "ديسمبر"];
+  const parseMonthToken = (raw) => {
+    const t = raw.trim();
+    if (!t) return null;
+    if (/^\d{4}-\d{2}$/.test(t)) return t;
+    if (/^\d{4}\/\d{1,2}$/.test(t)) {
+      const [y, m] = t.split("/");
+      return `${y}-${m.padStart(2, "0")}`;
+    }
+    const monthNameMatch = t.match(/([A-Za-z]+)\D*(\d{4})?/);
+    if (monthNameMatch) {
+      const idx = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
+        .findIndex((m) => m === monthNameMatch[1].toLowerCase());
+      if (idx !== -1) {
+        const year = monthNameMatch[2] ? Number(monthNameMatch[2]) : new Date().getFullYear();
+        return `${year}-${String(idx + 1).padStart(2, "0")}`;
+      }
+    }
+    const arIdx = ARABIC_MONTHS.findIndex((m) => t.includes(m));
+    if (arIdx !== -1) {
+      const normalizedIdx = arIdx >= 6 ? arIdx - 1 : arIdx; // two Arabic spellings share a couple of slots above
+      const yearMatch = t.match(/\d{4}/);
+      const year = yearMatch ? Number(yearMatch[0]) : new Date().getFullYear();
+      return `${year}-${String(Math.min(normalizedIdx + 1, 12)).padStart(2, "0")}`;
+    }
+    return null;
+  };
+  const paidRaw = get("paid month", "paid months", "payment month", "شهر الدفع", "الشهور المدفوعة", "شهور الدفع");
+  let paidMonths = [];
+  if (paidRaw) {
+    const tokens = paidRaw.split(/[,،\/]| and | و /i).map((s) => s.trim()).filter(Boolean);
+    tokens.forEach((tok) => {
+      const parsed = parseMonthToken(tok);
+      if (parsed) paidMonths.push(parsed);
+    });
+    if (paidMonths.length === 0) warnings.push(`payment "${paidRaw}" not recognized as a month — left unpaid, mark it manually`);
+  } else {
+    const paidFlagRaw = get("paid", "paid this month", "مدفوع", "دفع").toLowerCase();
+    if (["yes", "true", "1", "نعم", "ايوه", "أيوه", "مدفوع"].includes(paidFlagRaw)) paidMonths = [monthKey()];
+  }
+
   const notes = get("notes", "note", "ملاحظات");
 
   return {
@@ -2446,7 +2494,7 @@ function parseImportedSwimmerRow(row, coaches) {
       coachId: coachMatch ? coachMatch.id : null,
       notes,
       parentPin: genParentPin(),
-      paidMonths: [],
+      paidMonths,
       frozenUntil: null,
       freezeLog: [],
       levelHistory: [{ level, date: new Date().toISOString() }],
