@@ -2082,34 +2082,25 @@ function coachSlotUsage(swimmers, coachId, day, time, excludeId) {
    state) — same logic proven out for the offline edition's migration,
    ported here so it runs directly from the Import Excel button.
    ============================================================ */
-const ARABIC_MONTH_NAMES = {
-  "يناير": 1, "فبراير": 2, "مارس": 3, "أبريل": 4, "ابريل": 4, "مايو": 5, "يونيو": 6,
-  "يوليو": 7, "أغسطس": 8, "اغسطس": 8, "سبتمبر": 9, "أكتوبر": 10, "اكتوبر": 10,
-  "نوفمبر": 11, "ديسمبر": 12,
+const MONTH_NAMES = {
+  يناير:1, فبراير:2, مارس:3, أبريل:4, ابريل:4, مايو:5, يونيو:6, يوليو:7, أغسطس:8, اغسطس:8, سبتمبر:9, أكتوبر:10, اكتوبر:10, نوفمبر:11, ديسمبر:12,
+  january:1, february:2, march:3, april:4, may:5, june:6, july:7, august:8, september:9, october:10, november:11, december:12,
 };
 
 function parseMonthBlockLabel(label, prevYear, prevMonth) {
-  const text = String(label || "").trim();
-  let year = null;
+  const text = String(label || '').trim();
+  const normalized = text.toLowerCase().replace(/\s+/g, ' ');
   const yearMatch = text.match(/20\d{2}/);
-  if (yearMatch) year = Number(yearMatch[0]);
+  let year = yearMatch ? Number(yearMatch[0]) : null;
   let month = null;
-  for (const name of Object.keys(ARABIC_MONTH_NAMES)) {
-    if (text.includes(name)) {
-      month = ARABIC_MONTH_NAMES[name];
-      break;
-    }
+  for (const [name, num] of Object.entries(MONTH_NAMES)) {
+    if (normalized.includes(name.toLowerCase())) { month = num; break; }
   }
-  if (month && !year) {
-    // "شهر مارس" style, no year written — continue on from the previous
-    // block's month/year in sequence (this month comes right after it).
-    if (prevMonth != null) {
-      year = month > prevMonth ? prevYear : prevYear + 1;
-    } else {
-      year = new Date().getFullYear();
-    }
+  if (!month) return null;
+  if (!year) {
+    if (prevMonth != null) year = month > prevMonth ? prevYear : prevYear + 1;
+    else year = new Date().getFullYear();
   }
-  if (!month) return null; // not a month block (e.g. "رمضان" or similar one-off column)
   return { year, month };
 }
 
@@ -2149,12 +2140,12 @@ const IMPORT_LEVEL_MAP = {
   team: "Team",
 };
 const IMPORT_DAY_MAP = {
-  "الاحد": "sun-tue", "الاحد ": "sun-tue",
-  "الثلاثاء": "sun-tue", "ثلاثاء": "sun-tue",
-  "الاثنين": "mon-wed", "اثنين": "mon-wed",
-  "الاربعاء": "mon-wed", "الاربع": "mon-wed",
-  "الجمعة": "fri-sat", "الجمعه": "fri-sat", "جمعة": "fri-sat", "جمعه": "fri-sat",
-  "السبت": "fri-sat",
+  الاحد:'sun-tue', الأحد:'sun-tue', الثلاثاء:'sun-tue', ثلاثاء:'sun-tue',
+  الاثنين:'mon-wed', الإثنين:'mon-wed', اثنين:'mon-wed', الاربعاء:'mon-wed', الأربعاء:'mon-wed', الاربع:'mon-wed',
+  الجمعة:'fri-sat', الجمعه:'fri-sat', جمعة:'fri-sat', جمعه:'fri-sat', السبت:'fri-sat',
+  'sunday & tuesday':'sun-tue', 'sunday and tuesday':'sun-tue', 'sun & tue':'sun-tue', 'sun-tue':'sun-tue',
+  'monday & wednesday':'mon-wed', 'monday and wednesday':'mon-wed', 'mon & wed':'mon-wed', 'mon-wed':'mon-wed',
+  'friday & saturday':'fri-sat', 'friday and saturday':'fri-sat', 'fri & sat':'fri-sat', 'fri-sat':'fri-sat',
 };
 
 // Matches a bare hour/time from the sheet (e.g. "3", "3:30", or a real
@@ -2256,10 +2247,10 @@ function parseFullHistorySheet(sheet) {
       const dayRaw = cellStr(sheet, r, b.startCol + 2);
       const timeRaw = cellStr(sheet, r, b.startCol + 3);
 
-      if (payRaw === "تم" || payRaw === "done") paidMonths.push(monthKeyStr);
+      if (["تم", "done", "yes", "paid", "نعم", "✓", "true"].includes(payRaw)) paidMonths.push(monthKeyStr);
 
-      const lvlKey = lvlRaw.trim().toLowerCase();
-      const level = IMPORT_LEVEL_MAP[lvlKey];
+      const lvlKey = lvlRaw.trim().toLowerCase().replace(/\s+/g, " ");
+      const level = IMPORT_LEVEL_MAP[lvlKey] || IMPORT_LEVEL_MAP[lvlKey.replace(/^level /, "")];
       if (level) levelHistory.push({ level, date: monthDate });
 
       const day = IMPORT_DAY_MAP[dayRaw.trim()];
