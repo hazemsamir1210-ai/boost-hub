@@ -732,7 +732,7 @@ let TIME_SLOTS = {
   elalsson: {
     "sun-tue": ["3:30 PM", "4:30 PM", "5:30 PM", "6:30 PM", "7:30 PM", "8:30 PM", "9:30 PM"],
     "mon-wed": ["3:30 PM", "4:30 PM", "5:30 PM", "6:30 PM", "7:30 PM", "8:30 PM", "9:30 PM"],
-    "fri-sat": ["10:00 AM", "11:00 AM", "12:00 PM", "1:00 PM", "2:00 PM", "3:00 PM", "4:00 PM", "5:00 PM", "6:00 PM", "8:30 PM"],
+    "fri-sat": ["8:30 AM", "10:00 AM", "10:30 AM", "11:00 AM", "11:30 AM", "12:00 PM", "12:30 PM", "1:00 PM", "1:30 PM", "2:00 PM", "2:30 PM", "3:00 PM", "3:30 PM", "4:00 PM", "5:00 PM", "6:00 PM"],
   },
 };
 const DEFAULT_TIME_SLOTS = JSON.parse(JSON.stringify(TIME_SLOTS));
@@ -2138,6 +2138,21 @@ function cellStr(sheet, r, c) {
   return String(cell.v).trim();
 }
 
+// Like cellStr, but for the "hour" column specifically: when Excel
+// stores an actual time-of-day value (not typed as plain text), the
+// cell comes through as a real JS Date object — stringifying that
+// (like cellStr does) turns "3:30 PM" into a useless
+// "Sat Dec 30 1899 15:30:00 GMT..." string that importMapTime can't
+// read at all. This keeps the Date object intact so importMapTime's
+// own Date-aware branch can pull the real hour/minute out of it, and
+// only falls back to text for cells that were actually typed as text.
+function cellRaw(sheet, r, c) {
+  const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+  if (!cell || cell.v == null) return "";
+  if (cell.v instanceof Date) return cell.v;
+  return String(cell.v).trim();
+}
+
 const IMPORT_LEVEL_MAP = {
   baby: "Baby", babya: "Baby",
   exp: "Exp", exp1: "Exp",
@@ -2254,7 +2269,7 @@ function parseFullHistorySheet(sheet) {
       const payRaw = cellStr(sheet, r, b.startCol).toLowerCase();
       const lvlRaw = cellStr(sheet, r, b.startCol + 1);
       const dayRaw = cellStr(sheet, r, b.startCol + 2);
-      const timeRaw = cellStr(sheet, r, b.startCol + 3);
+      const timeRaw = cellRaw(sheet, r, b.startCol + 3);
 
       if (payRaw === "تم" || payRaw === "done") paidMonths.push(monthKeyStr);
 
@@ -2270,11 +2285,11 @@ function parseFullHistorySheet(sheet) {
         // Category placeholders instead of a real day/time — same
         // fallback schedule rules used for the offline migration.
         const blob = `${lvlRaw} ${dayRaw} ${timeRaw} ${payRaw}`.toLowerCase();
-        if (blob.includes("star") || blob.includes("team") || blob.includes("بر تيم")) {
+        if (blob.includes("star") || blob.includes("team") || blob.includes("بر تيم") || blob.includes("استار")) {
           scheduleHistory.push({ day: "mon-wed", time: "7:30 PM", date: monthDate });
-          scheduleHistory.push({ day: "fri-sat", time: "4:00 PM", date: monthDate });
-        } else if (blob.includes("ladies")) {
-          scheduleHistory.push({ day: "fri-sat", time: "8:30 PM", date: monthDate });
+          scheduleHistory.push({ day: "fri-sat", time: "3:00 PM", date: monthDate });
+        } else if (blob.includes("ladies") || blob.includes("laides")) {
+          scheduleHistory.push({ day: "fri-sat", time: "8:30 AM", date: monthDate });
         } else if (blob.includes("adult")) {
           scheduleHistory.push({ day: "sun-tue", time: "7:30 PM", date: monthDate });
         }
@@ -2429,54 +2444,6 @@ function parseImportedSwimmerRow(row, coaches) {
   const coachMatch = coachRaw ? (coaches || []).find((c) => c.name.toLowerCase() === coachRaw) : null;
   if (coachRaw && !coachMatch) warnings.push(`coach "${get("coach", "الكابتن")}" not found — left unassigned`);
 
-  // Payment column is optional and fairly loosely formatted — could be a
-  // specific month ("2026-08", "August 2026", "أغسطس"), several months
-  // separated by commas/slashes, or just a yes/no meaning "paid for the
-  // current month". Anything that can't be matched to an actual month is
-  // dropped with a warning rather than silently left out, so it's easy to
-  // spot and fix after import instead of everyone quietly landing on
-  // paidMonths: [].
-  const ARABIC_MONTHS = ["يناير", "فبراير", "مارس", "ابريل", "أبريل", "مايو", "يونيو", "يوليو", "اغسطس", "أغسطس", "سبتمبر", "اكتوبر", "أكتوبر", "نوفمبر", "ديسمبر"];
-  const parseMonthToken = (raw) => {
-    const t = raw.trim();
-    if (!t) return null;
-    if (/^\d{4}-\d{2}$/.test(t)) return t;
-    if (/^\d{4}\/\d{1,2}$/.test(t)) {
-      const [y, m] = t.split("/");
-      return `${y}-${m.padStart(2, "0")}`;
-    }
-    const monthNameMatch = t.match(/([A-Za-z]+)\D*(\d{4})?/);
-    if (monthNameMatch) {
-      const idx = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]
-        .findIndex((m) => m === monthNameMatch[1].toLowerCase());
-      if (idx !== -1) {
-        const year = monthNameMatch[2] ? Number(monthNameMatch[2]) : new Date().getFullYear();
-        return `${year}-${String(idx + 1).padStart(2, "0")}`;
-      }
-    }
-    const arIdx = ARABIC_MONTHS.findIndex((m) => t.includes(m));
-    if (arIdx !== -1) {
-      const normalizedIdx = arIdx >= 6 ? arIdx - 1 : arIdx; // two Arabic spellings share a couple of slots above
-      const yearMatch = t.match(/\d{4}/);
-      const year = yearMatch ? Number(yearMatch[0]) : new Date().getFullYear();
-      return `${year}-${String(Math.min(normalizedIdx + 1, 12)).padStart(2, "0")}`;
-    }
-    return null;
-  };
-  const paidRaw = get("paid month", "paid months", "payment month", "شهر الدفع", "الشهور المدفوعة", "شهور الدفع");
-  let paidMonths = [];
-  if (paidRaw) {
-    const tokens = paidRaw.split(/[,،\/]| and | و /i).map((s) => s.trim()).filter(Boolean);
-    tokens.forEach((tok) => {
-      const parsed = parseMonthToken(tok);
-      if (parsed) paidMonths.push(parsed);
-    });
-    if (paidMonths.length === 0) warnings.push(`payment "${paidRaw}" not recognized as a month — left unpaid, mark it manually`);
-  } else {
-    const paidFlagRaw = get("paid", "paid this month", "مدفوع", "دفع").toLowerCase();
-    if (["yes", "true", "1", "نعم", "ايوه", "أيوه", "مدفوع"].includes(paidFlagRaw)) paidMonths = [monthKey()];
-  }
-
   const notes = get("notes", "note", "ملاحظات");
 
   return {
@@ -2494,7 +2461,7 @@ function parseImportedSwimmerRow(row, coaches) {
       coachId: coachMatch ? coachMatch.id : null,
       notes,
       parentPin: genParentPin(),
-      paidMonths,
+      paidMonths: [],
       frozenUntil: null,
       freezeLog: [],
       levelHistory: [{ level, date: new Date().toISOString() }],
@@ -4074,6 +4041,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [contactError, setContactError] = useState("");
   const [contactSaved, setContactSaved] = useState(false);
   const [showPricesModal, setShowPricesModal] = useState(false);
+  const [showAchievementsModal, setShowAchievementsModal] = useState(false);
+  const [showSkillsModal, setShowSkillsModal] = useState(false);
   const [settingsSignature, setSettingsSignature] = useState("");
   const [settingsInstapayHandle, setSettingsInstapayHandle] = useState("");
   const [settingsInstapayPhone, setSettingsInstapayPhone] = useState("");
@@ -6753,52 +6722,6 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       setSwimmersPageLoading(true);
       setSwimmersPageError("");
       try {
-        // The paid/unpaid filter checks the paidMonths array with a JSONB
-        // "contains" condition — combined with an exact row count, that
-        // combination doesn't reliably narrow the count down on every
-        // Postgres/PostgREST setup (the list of rows comes back filtered
-        // correctly, but the reported total doesn't). Rather than trust a
-        // count that's sometimes wrong, this path fetches every row from
-        // the same swimmers table (not the old bulk-blob storage, which
-        // is capped in size and can be stale/incomplete for a real
-        // academy) and filters/counts it in JS instead.
-        if (paymentStatusFilter !== "all") {
-          const { data: allRows, error: allError } = await supabase
-            .from("swimmers")
-            .select("data")
-            .eq("academy_id", window.__academy?.id);
-          if (allError) throw allError;
-          const all = (allRows || []).map((r) => r.data);
-          const matches = all.filter((s) => {
-            if (!showUnscheduled && (!s.day || !s.time)) return false;
-            if (branchRestriction ? s.branch !== branchRestriction : branchFilter !== "all" && s.branch !== branchFilter) return false;
-            if (levelFilter !== "all" && s.level !== levelFilter) return false;
-            if (role !== "admin" && (programAccess.length || levelAccess.length)) {
-              const scopedLevels = [...new Set([
-                ...levelAccess,
-                ...programAccess.flatMap((program) => PROGRAM_LEVEL_SCOPE[program] || []),
-              ])];
-              if (!scopedLevels.includes(s.level)) return false;
-            } else if (role === "technical" && myAccount?.levelRestriction && levelFilter === "all") {
-              if (s.level !== myAccount.levelRestriction) return false;
-            }
-            if (dayFilter !== "all" && s.day !== dayFilter) return false;
-            if (timeFilter !== "all" && s.time !== timeFilter) return false;
-            if (sessionTypeFilter !== "all" && s.sessionType !== sessionTypeFilter) return false;
-            const isPaid = (s.paidMonths || []).includes(paymentMonthFilter);
-            if (paymentStatusFilter === "paid" && !isPaid) return false;
-            if (paymentStatusFilter === "unpaid" && isPaid) return false;
-            const q = search.trim().toLowerCase();
-            if (q && !s.name?.toLowerCase().includes(q) && !s.phone?.includes(q)) return false;
-            return true;
-          });
-          matches.sort((a, b) => a.name.localeCompare(b.name));
-          const pageItems = matches.slice(offset, offset + SWIMMERS_PAGE_SIZE);
-          setSwimmersPage((prev) => (append ? [...prev, ...pageItems] : pageItems));
-          setSwimmersPageTotal(matches.length);
-          return;
-        }
-
         let query = supabase.from("swimmers").select("data", { count: "exact" }).eq("academy_id", window.__academy?.id);
         // By default, only show swimmers who are actually enrolled — have a
         // day/time slot, not just added to the system with nothing set yet.
@@ -6823,6 +6746,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         if (dayFilter !== "all") query = query.filter("data->>day", "eq", dayFilter);
         if (timeFilter !== "all") query = query.filter("data->>time", "eq", timeFilter);
         if (sessionTypeFilter !== "all") query = query.filter("data->>sessionType", "eq", sessionTypeFilter);
+        if (paymentStatusFilter === "paid") {
+          query = query.filter("data->paidMonths", "cs", JSON.stringify([paymentMonthFilter]));
+        } else if (paymentStatusFilter === "unpaid") {
+          query = query.not("data->paidMonths", "cs", JSON.stringify([paymentMonthFilter]));
+        }
         const q = search.trim();
         if (q) query = query.or(`name.ilike.%${q}%,phone.ilike.%${q}%`);
         query = query.order("name", { ascending: true }).range(offset, offset + SWIMMERS_PAGE_SIZE - 1);
@@ -7210,26 +7138,6 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <CalendarCheck className="w-4 h-4" /> Reports
         </button>
         )}
-        {canEditContent && role !== "technical_director" && (
-          <button
-            onClick={() => setTab("achievements")}
-            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-              tab === "achievements" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-            }`}
-          >
-            <Star className="w-4 h-4" /> Achievements
-          </button>
-        )}
-        {(can("manageCurriculum") || canEdit) && role !== "technical_director" && (
-          <button
-            onClick={() => setTab("skills")}
-            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-              tab === "skills" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-            }`}
-          >
-            <Award className="w-4 h-4" /> Skills
-          </button>
-        )}
         {canViewPayroll && role !== "technical_director" && (
           <button
             onClick={() => setTab("attendance")}
@@ -7561,6 +7469,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         <div className="font-semibold text-slate-800 text-sm">{s.name}</div>
                         <div className="text-xs text-slate-400">
                           {DAY_GROUPS.find((d) => d.id === s.day)?.label || s.day} · {s.time} · {s.level}
+                          {" · "}
+                          <span className="font-medium text-slate-600">{sessionTypeInfo(s.sessionType).label}</span>
                         </div>
                       </div>
                       <CoachPicker s={s} />
@@ -7583,6 +7493,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         <div className="font-semibold text-slate-800 text-sm">{s.name}</div>
                         <div className="text-xs text-slate-400">
                           {DAY_GROUPS.find((d) => d.id === s.day)?.label || s.day} · {s.time} · {s.level}
+                          {" · "}
+                          <span className="font-medium text-slate-600">{sessionTypeInfo(s.sessionType).label}</span>
                           {" · "}currently <span className="font-medium text-slate-600">{coaches.find((c) => c.id === s.coachId)?.name || "—"}</span>
                         </div>
                       </div>
@@ -8844,7 +8756,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "achievements" && canEditContent && (
+      {showAchievementsModal && canEditContent && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 px-4 py-6" onClick={() => setShowAchievementsModal(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-full overflow-auto p-6" onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => setShowAchievementsModal(false)} className="float-right p-1.5 rounded-lg hover:bg-slate-100 text-slate-400">
+              <X className="w-4 h-4" />
+            </button>
         <div>
           <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
             <div>
@@ -8889,6 +8806,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 </button>
               </div>
             ))}
+          </div>
+        </div>
           </div>
         </div>
       )}
@@ -9485,7 +9404,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         );
       })()}
 
-      {tab === "skills" && (can("manageCurriculum") || canEdit) && (
+      {showSkillsModal && (can("manageCurriculum") || canEdit) && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 px-4 py-6" onClick={() => setShowSkillsModal(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-full overflow-auto p-6" onClick={(e) => e.stopPropagation()}>
+            <button onClick={() => setShowSkillsModal(false)} className="float-right p-1.5 rounded-lg hover:bg-slate-100 text-slate-400">
+              <X className="w-4 h-4" />
+            </button>
         <div key={skillsRefreshKey}>
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-slate-900">Required skills per level</h3>
@@ -9572,6 +9496,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 </div>
               );
             })}
+          </div>
+        </div>
           </div>
         </div>
       )}
@@ -10657,6 +10583,34 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <div>
                   <div className="font-semibold text-slate-900 text-sm">Prices & Plans</div>
                   <div className="text-xs text-slate-400">Edit each plan's name and monthly price</div>
+                </div>
+              </button>
+            )}
+            {canEditContent && (
+              <button
+                onClick={() => setShowAchievementsModal(true)}
+                className="bg-white rounded-2xl border border-slate-200 p-4 flex items-center gap-3 hover:border-blue-200 hover:bg-blue-50/40 transition text-left"
+              >
+                <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center shrink-0">
+                  <Star className="w-5 h-5 text-amber-600" />
+                </div>
+                <div>
+                  <div className="font-semibold text-slate-900 text-sm">Achievements</div>
+                  <div className="text-xs text-slate-400">Photos shown on the public homepage</div>
+                </div>
+              </button>
+            )}
+            {(can("manageCurriculum") || canEdit) && (
+              <button
+                onClick={() => setShowSkillsModal(true)}
+                className="bg-white rounded-2xl border border-slate-200 p-4 flex items-center gap-3 hover:border-blue-200 hover:bg-blue-50/40 transition text-left"
+              >
+                <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+                  <Award className="w-5 h-5 text-blue-700" />
+                </div>
+                <div>
+                  <div className="font-semibold text-slate-900 text-sm">Skills</div>
+                  <div className="text-xs text-slate-400">Required skills checklist per level</div>
                 </div>
               </button>
             )}
