@@ -32,16 +32,22 @@ async function supabaseRequest(path, options = {}) {
 module.exports = async (req, res) => {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  const secureKey = process.env.FAWRY_SECURE_KEY;
   const payload = req.body || {};
+  const ref = payload.merchantRefNumber || "";
+  // Every academy has its own Fawry secure key now, so the signature check
+  // needs that specific academy's key — pulled from the same merchantRefNum
+  // convention the checkout step already encodes (sub-<swimmerId>-<academyId>-...).
+  const refAcademyId = ref.split("-")[2];
 
-  if (secureKey && payload.messageSignature) {
-    const valid = verifyCallbackSignature(payload, secureKey);
-    if (!valid) return res.status(400).json({ error: "Invalid signature" });
+  if (payload.messageSignature && refAcademyId) {
+    const rows = await supabaseRequest(`academies?id=eq.${refAcademyId}&select=fawry_secure_key`);
+    const academySecureKey = rows[0]?.fawry_secure_key;
+    if (academySecureKey && !verifyCallbackSignature(payload, academySecureKey)) {
+      return res.status(400).json({ error: "Invalid signature" });
+    }
   }
 
   const isPaid = payload.orderStatus === "PAID";
-  const ref = payload.merchantRefNumber || "";
 
   try {
     if (isPaid && ref.startsWith("sub-")) {
