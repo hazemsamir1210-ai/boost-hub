@@ -3897,6 +3897,27 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [authed, setAuthed] = useState(preAuthed);
   const [checkingSession, setCheckingSession] = useState(!preAuthed);
   const [showRenewSubscription, setShowRenewSubscription] = useState(false);
+  // window.__academy is only resolved once, when the app first loads — so
+  // if the super admin cancels/extends a subscription while this admin is
+  // already sitting in their dashboard, nothing here would notice until a
+  // hard refresh. This re-checks the live value straight from the
+  // database on mount and periodically, keeping the banner honest without
+  // needing a reload.
+  const [subscriptionExpiredNow, setSubscriptionExpiredNow] = useState(!!window.__academy?.subscriptionExpired);
+  useEffect(() => {
+    if (!window.__academy?.id) return;
+    const checkSubscription = async () => {
+      const { data } = await supabase.from("academies").select("subscription_paid_until").eq("id", window.__academy.id).maybeSingle();
+      if (!data) return;
+      const expired = !!(data.subscription_paid_until && data.subscription_paid_until < todayISO());
+      window.__academy.subscriptionExpired = expired;
+      window.__academy.subscriptionPaidUntil = data.subscription_paid_until || null;
+      setSubscriptionExpiredNow(expired);
+    };
+    checkSubscription();
+    const interval = setInterval(checkSubscription, 60000);
+    return () => clearInterval(interval);
+  }, []);
   const [pass, setPass] = useState("");
   const [passError, setPassError] = useState("");
   const [showLegacyLogin, setShowLegacyLogin] = useState(false);
@@ -7562,7 +7583,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
         return (
           <div>
-            {role === "admin" && window.__academy?.subscriptionExpired && (
+            {role === "admin" && subscriptionExpiredNow && (
               <div className="flex items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-2xl px-5 py-4 mb-6 flex-wrap">
                 <div>
                   <div className="font-semibold text-red-800">Your subscription or trial has ended</div>
