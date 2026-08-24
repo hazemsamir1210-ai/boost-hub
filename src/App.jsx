@@ -17405,14 +17405,20 @@ function SuperAdminView() {
   // paying, or asked to close their account. Their admins can still sign
   // in (that's a separate thing from RLS access); this only affects what
   // the subscription badge shows, as a record for you to act on.
+  const [cancelError, setCancelError] = useState("");
   const cancelSubscription = async (academyId) => {
+    setCancelError("");
     // A null date means "unrestricted" elsewhere in this app (an academy
     // that's never had an expiry configured) — so cancelling can't just
     // set it to null, or the academy would read as having no restriction
     // at all instead of being blocked. A definitely-past date reads as
     // expired under the exact same check used everywhere else.
     const { error } = await supabase.from("academies").update({ subscription_paid_until: "2000-01-01" }).eq("id", academyId);
-    if (!error) loadAcademies();
+    if (error) {
+      setCancelError(error.message || "Could not cancel — please try again");
+      return;
+    }
+    loadAcademies();
   };
 
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
@@ -17947,6 +17953,7 @@ function SuperAdminView() {
             <RefreshCw className={`w-4 h-4 ${loadingAcademies ? "animate-spin" : ""}`} />
           </button>
         </div>
+        {cancelError && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-3">{cancelError}</div>}
         <div className="space-y-2">
           {academies.map((a) => {
             const paidUntil = a.subscription_paid_until;
