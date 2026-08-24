@@ -312,13 +312,10 @@ async function savePlatformInstapay(info) {
 // used everywhere else in this app. Stored as one JSONB array column
 // (same reasoning as above — not tied to any one academy's row).
 async function loadSubscriptionPayments() {
-  try {
-    const { data, error } = await supabase.from("platform_settings").select("subscription_payments").eq("id", true).maybeSingle();
-    if (error || !data?.subscription_payments) return [];
-    return typeof data.subscription_payments === "string" ? JSON.parse(data.subscription_payments) : data.subscription_payments;
-  } catch {
-    return [];
-  }
+  const { data, error } = await supabase.from("platform_settings").select("subscription_payments").eq("id", true).maybeSingle();
+  if (error) throw error;
+  if (!data?.subscription_payments) return [];
+  return typeof data.subscription_payments === "string" ? JSON.parse(data.subscription_payments) : data.subscription_payments;
 }
 
 async function saveSubscriptionPayments(list) {
@@ -12978,6 +12975,12 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
           programAccess: role === "admin" ? [] : programAccess,
           levelAccess: role === "admin" ? [] : levelAccess,
           createdAt: initial?.createdAt || new Date().toISOString(),
+          // Preserved as-is — editing any other field on this form used to
+          // silently wipe out an email login already set up via "Create
+          // email login", since this object used to be built from scratch
+          // without carrying these two fields forward.
+          authUserId: initial?.authUserId || null,
+          email: initial?.email || null,
         },
         email.trim() ? { email: email.trim(), password: emailPassword.trim() } : null
       );
@@ -17249,10 +17252,14 @@ function SuperAdminView() {
     setPlatformInstapay(instapay);
   };
 
+  const [subscriptionPaymentsError, setSubscriptionPaymentsError] = useState("");
   const loadSubscriptionPaymentsList = async () => {
     setSubscriptionPaymentsLoading(true);
+    setSubscriptionPaymentsError("");
     try {
       setSubscriptionPayments(await loadSubscriptionPayments());
+    } catch (e) {
+      setSubscriptionPaymentsError(e?.message || "Could not load subscription payments");
     } finally {
       setSubscriptionPaymentsLoading(false);
     }
@@ -17867,6 +17874,9 @@ function SuperAdminView() {
             <RefreshCw className={`w-4 h-4 ${subscriptionPaymentsLoading ? "animate-spin" : ""}`} />
           </button>
         </div>
+        {subscriptionPaymentsError && (
+          <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-3">{subscriptionPaymentsError}</div>
+        )}
         {(() => {
           const pending = subscriptionPayments.filter((p) => p.status === "pending");
           const confirmed = subscriptionPayments.filter((p) => p.status === "confirmed").sort((a, b) => new Date(b.confirmedAt) - new Date(a.confirmedAt));
