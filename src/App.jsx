@@ -111,6 +111,7 @@ async function resolveAcademy() {
     // A null date means "no expiry set" (unrestricted) — matches the
     // database-side RLS check that actually enforces this on writes.
     subscriptionExpired: !!(data.subscription_paid_until && data.subscription_paid_until < todayISO()),
+    subscriptionPaidUntil: data.subscription_paid_until || null,
     primaryColor: data.primary_color || "#0c1e3e",
     contactPhone: data.contact_phone || "",
     whatsapp: data.whatsapp || "",
@@ -257,6 +258,92 @@ window.storage = {
     return { key, deleted: true };
   },
 };
+
+// Platform-level settings (subscription plan prices/discounts, and the
+// platform owner's own Instapay details for collecting academy
+// subscription payments) are NOT scoped to any one academy — they use
+// this fixed sentinel "academy_id" instead of a real academy's row, so
+// the exact same app_storage table/RLS setup can hold them without
+// needing a separate table or policy.
+const PLATFORM_SCOPE_ID = "00000000-0000-0000-0000-000000000000";
+
+async function loadPlatformSetting(key) {
+  const { data, error } = await supabase
+    .from("app_storage")
+    .select("value")
+    .eq("key", key)
+    .eq("academy_id", PLATFORM_SCOPE_ID)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? data.value : null;
+}
+
+async function savePlatformSetting(key, value) {
+  const { error } = await supabase
+    .from("app_storage")
+    .upsert({ key, value, academy_id: PLATFORM_SCOPE_ID, updated_at: new Date().toISOString() });
+  if (error) throw error;
+  return true;
+}
+
+const DEFAULT_SUBSCRIPTION_PLANS = {
+  monthly: { label: "Monthly", months: 1, price: 500, discount: 0 },
+  semiannual: { label: "Every 6 months", months: 6, price: 2700, discount: 10 },
+  annual: { label: "Yearly", months: 12, price: 5000, discount: 20 },
+};
+
+async function loadSubscriptionPlans() {
+  try {
+    const { data, error } = await supabase.from("platform_settings").select("subscription_plans").eq("id", true).maybeSingle();
+    if (error || !data?.subscription_plans) return DEFAULT_SUBSCRIPTION_PLANS;
+    const parsed = typeof data.subscription_plans === "string" ? JSON.parse(data.subscription_plans) : data.subscription_plans;
+    return { ...DEFAULT_SUBSCRIPTION_PLANS, ...parsed };
+  } catch {
+    return DEFAULT_SUBSCRIPTION_PLANS;
+  }
+}
+
+async function saveSubscriptionPlans(plans) {
+  const { error } = await supabase.from("platform_settings").update({ subscription_plans: plans }).eq("id", true);
+  if (error) throw error;
+  return true;
+}
+
+// The platform owner's own Instapay details — where academies send their
+// subscription payment to, as distinct from each academy's own Instapay
+// (which is where THEIR swim parents pay THEM). Marked "temporary" in the
+// UI since this is a manual review flow, not a real payment gateway yet.
+async function loadPlatformInstapay() {
+  try {
+    const { data, error } = await supabase.from("platform_settings").select("instapay_handle, instapay_phone").eq("id", true).maybeSingle();
+    if (error || !data) return { handle: "", phone: "" };
+    return { handle: data.instapay_handle || "", phone: data.instapay_phone || "" };
+  } catch {
+    return { handle: "", phone: "" };
+  }
+}
+
+async function savePlatformInstapay(info) {
+  const { error } = await supabase.from("platform_settings").update({ instapay_handle: info.handle || null, instapay_phone: info.phone || null }).eq("id", true);
+  if (error) throw error;
+  return true;
+}
+
+// Records of academies paying the platform itself to renew — reviewed by
+// the super admin in /_admin, same manual Instapay + screenshot pattern
+// used everywhere else in this app.
+async function loadSubscriptionPayments() {
+  try {
+    const raw = await loadPlatformSetting("subscription-payments");
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveSubscriptionPayments(list) {
+  return savePlatformSetting("subscription-payments", JSON.stringify(list));
+}
 
 /* ============================================================
    Academy settings — edit these values easily
@@ -3809,6 +3896,7 @@ function SwimmerSearchInput({ onSearch }) {
 function AdminView({ onExit, role = "admin", preAuthed = false, accountName, branchRestriction = null }) {
   const [authed, setAuthed] = useState(preAuthed);
   const [checkingSession, setCheckingSession] = useState(!preAuthed);
+  const [showRenewSubscription, setShowRenewSubscription] = useState(false);
   const [pass, setPass] = useState("");
   const [passError, setPassError] = useState("");
   const [showLegacyLogin, setShowLegacyLogin] = useState(false);
@@ -7174,6 +7262,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     refunded: requests.filter((r) => r.status === "refunded").length,
   };
 
+  if (showRenewSubscription && window.__academy) {
+    return <RenewSubscriptionView academy={window.__academy} onExit={() => setShowRenewSubscription(false)} />;
+  }
+
   return (
     <div className="max-w-5xl mx-auto px-4 py-8">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-6">
@@ -7470,6 +7562,24 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
         return (
           <div>
+            {role === "admin" && window.__academy?.subscriptionExpired && (
+              <div className="flex items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-2xl px-5 py-4 mb-6 flex-wrap">
+                <div>
+                  <div className="font-semibold text-red-800">Your subscription or trial has ended</div>
+                  <div className="text-sm text-red-600">
+                    {window.__academy.subscriptionPaidUntil
+                      ? `It ended on ${window.__academy.subscriptionPaidUntil}. Renew now to keep everything running.`
+                      : "Choose a plan to keep using the full dashboard."}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowRenewSubscription(true)}
+                  className="px-4 py-2.5 rounded-lg bg-red-600 text-white text-sm font-semibold hover:bg-red-700 shrink-0"
+                >
+                  Renew now
+                </button>
+              </div>
+            )}
             <div className="mb-6">
               <h2 className="text-2xl font-bold text-slate-900">{greeting}{accountName ? `, ${accountName.split(" ")[0]}` : ""}</h2>
               <p className="text-sm text-slate-400">
@@ -16730,6 +16840,172 @@ function AcademyNameGateView() {
   );
 }
 
+/* Shown to an academy's own admin once their trial or paid subscription
+   has expired — pick a plan, pay the platform (not their own academy's
+   Instapay — a separate, temporary manual-review flow, same pattern used
+   for course payments elsewhere), and wait for the super admin to confirm
+   and extend them. */
+function RenewSubscriptionView({ academy, onExit }) {
+  const [plans, setPlans] = useState(DEFAULT_SUBSCRIPTION_PLANS);
+  const [platformInstapay, setPlatformInstapay] = useState({ handle: "", phone: "" });
+  const [loading, setLoading] = useState(true);
+  const [selectedPlan, setSelectedPlan] = useState("monthly");
+  const [screenshot, setScreenshot] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [pendingPayment, setPendingPayment] = useState(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    Promise.all([loadSubscriptionPlans(), loadPlatformInstapay(), loadSubscriptionPayments()]).then(
+      ([loadedPlans, loadedInstapay, payments]) => {
+        setPlans(loadedPlans);
+        setPlatformInstapay(loadedInstapay);
+        const mine = payments.find((p) => p.academyId === academy.id && p.status === "pending");
+        if (mine) setPendingPayment(mine);
+        setLoading(false);
+      }
+    );
+  }, [academy.id]);
+
+  const submit = async () => {
+    if (!screenshot) return setError("Upload your payment screenshot first");
+    setError("");
+    setSubmitting(true);
+    try {
+      const plan = plans[selectedPlan];
+      const all = await loadSubscriptionPayments();
+      const record = {
+        id: genId(),
+        academyId: academy.id,
+        academyName: academy.name,
+        plan: selectedPlan,
+        planLabel: plan.label,
+        months: plan.months,
+        price: plan.price,
+        discount: plan.discount || 0,
+        finalPrice: Math.round(plan.price * (1 - (plan.discount || 0) / 100)),
+        screenshotDataUri: screenshot,
+        status: "pending",
+        createdAt: new Date().toISOString(),
+      };
+      await saveSubscriptionPayments([...all, record]);
+      setPendingPayment(record);
+      setSubmitted(true);
+    } catch (e) {
+      setError("Could not submit — check your connection and try again");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <RefreshCw className="w-6 h-6 animate-spin text-slate-300" />
+      </div>
+    );
+  }
+
+  if (pendingPayment) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4 bg-slate-50">
+        <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100 text-center">
+          <Clock className="w-14 h-14 text-amber-500 mx-auto mb-4" />
+          <h2 className="text-xl font-bold text-slate-900 mb-2">Payment under review</h2>
+          <p className="text-sm text-slate-500 mb-4">
+            Your {pendingPayment.planLabel.toLowerCase()} plan ({pendingPayment.finalPrice} EGP) is being reviewed. Your academy unlocks again as soon as it's confirmed.
+          </p>
+          {onExit && (
+            <button onClick={onExit} className="text-sm text-blue-900 hover:underline">
+              Back
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4 py-10 bg-slate-50">
+      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
+        <h2 className="text-xl font-bold text-slate-900 mb-1 text-center">Renew your subscription</h2>
+        <p className="text-sm text-slate-400 mb-6 text-center">
+          {academy.subscriptionPaidUntil
+            ? `Your subscription ended on ${academy.subscriptionPaidUntil}.`
+            : "Your free trial has ended."}{" "}
+          Choose a plan to keep {academy.name} running.
+        </p>
+
+        <div className="space-y-2 mb-5">
+          {Object.entries(plans).map(([id, plan]) => {
+            const finalPrice = Math.round(plan.price * (1 - (plan.discount || 0) / 100));
+            return (
+              <button
+                key={id}
+                onClick={() => setSelectedPlan(id)}
+                className={`w-full text-left px-4 py-3 rounded-xl border-2 transition ${
+                  selectedPlan === id ? "border-blue-900 bg-blue-50" : "border-slate-200 hover:bg-slate-50"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-slate-800">{plan.label}</span>
+                  <span className="text-right">
+                    {plan.discount > 0 && <span className="text-xs text-slate-400 line-through mr-1.5">{plan.price} EGP</span>}
+                    <span className="font-bold text-blue-950">{finalPrice} EGP</span>
+                  </span>
+                </div>
+                {plan.discount > 0 && <div className="text-xs text-green-600 mt-0.5">{plan.discount}% off</div>}
+              </button>
+            );
+          })}
+        </div>
+
+        {platformInstapay.handle ? (
+          <div className="bg-blue-950 text-white rounded-xl p-4 mb-4">
+            <div className="text-xs text-blue-200 mb-1">Pay via Instapay to:</div>
+            <div className="font-mono text-base">{platformInstapay.handle}</div>
+            {platformInstapay.phone && <div className="text-xs text-blue-200 mt-1">or mobile number: {platformInstapay.phone}</div>}
+          </div>
+        ) : (
+          <div className="bg-amber-50 text-amber-700 rounded-xl p-4 mb-4 text-sm">
+            Payment details aren't set up yet — please contact support directly.
+          </div>
+        )}
+
+        <div className="mb-4">
+          <label className="text-xs text-slate-500 mb-1 block">Upload your payment screenshot</label>
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) compressImage(file, 700, 0.8).then(setScreenshot);
+            }}
+            className="text-sm"
+          />
+          {screenshot && <img src={screenshot} alt="" className="w-24 rounded-lg border border-slate-200 mt-2" />}
+        </div>
+
+        {error && <div className="text-red-500 text-sm mb-3">{error}</div>}
+
+        <button
+          onClick={submit}
+          disabled={submitting || !screenshot}
+          className="w-full py-3.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60"
+        >
+          {submitting ? "Submitting..." : "Submit payment"}
+        </button>
+        {onExit && (
+          <button onClick={onExit} className="w-full text-center text-xs text-slate-400 hover:text-slate-600 mt-3">
+            Back
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SignupView() {
   const TRIAL_DAYS = 14;
   const [name, setName] = useState("");
@@ -16955,6 +17231,82 @@ function SuperAdminView() {
   const [platformContactSaving, setPlatformContactSaving] = useState(false);
   const [platformContactSaved, setPlatformContactSaved] = useState(false);
 
+  const [subscriptionPlans, setSubscriptionPlans] = useState(DEFAULT_SUBSCRIPTION_PLANS);
+  const [plansSaving, setPlansSaving] = useState(false);
+  const [plansSaved, setPlansSaved] = useState(false);
+  const [platformInstapay, setPlatformInstapay] = useState({ handle: "", phone: "" });
+  const [instapaySaving, setInstapaySaving] = useState(false);
+  const [instapaySaved, setInstapaySaved] = useState(false);
+  const [subscriptionPayments, setSubscriptionPayments] = useState([]);
+  const [subscriptionPaymentsLoading, setSubscriptionPaymentsLoading] = useState(false);
+
+  const loadSubscriptionSettings = async () => {
+    const [plans, instapay] = await Promise.all([loadSubscriptionPlans(), loadPlatformInstapay()]);
+    setSubscriptionPlans(plans);
+    setPlatformInstapay(instapay);
+  };
+
+  const loadSubscriptionPaymentsList = async () => {
+    setSubscriptionPaymentsLoading(true);
+    try {
+      setSubscriptionPayments(await loadSubscriptionPayments());
+    } finally {
+      setSubscriptionPaymentsLoading(false);
+    }
+  };
+
+  const savePlans = async () => {
+    setPlansSaving(true);
+    setPlansSaved(false);
+    try {
+      await saveSubscriptionPlans(subscriptionPlans);
+      setPlansSaved(true);
+      setTimeout(() => setPlansSaved(false), 2000);
+    } finally {
+      setPlansSaving(false);
+    }
+  };
+
+  const saveInstapay = async () => {
+    setInstapaySaving(true);
+    setInstapaySaved(false);
+    try {
+      await savePlatformInstapay(platformInstapay);
+      setInstapaySaved(true);
+      setTimeout(() => setInstapaySaved(false), 2000);
+    } finally {
+      setInstapaySaving(false);
+    }
+  };
+
+  // Confirming credits the academy with the plan's full duration, counted
+  // from today or from their current expiry if they're renewing early
+  // (not paid-until-in-the-past) — so an early renewal stacks on top
+  // instead of wasting whatever time they had left.
+  const confirmSubscriptionPayment = async (payment) => {
+    const academy = academies.find((a) => a.id === payment.academyId);
+    const base =
+      academy?.subscription_paid_until && academy.subscription_paid_until > todayISO()
+        ? new Date(academy.subscription_paid_until + "T00:00:00")
+        : new Date();
+    base.setMonth(base.getMonth() + payment.months);
+    const newDate = base.toISOString().slice(0, 10);
+    const { error } = await supabase.from("academies").update({ subscription_paid_until: newDate }).eq("id", payment.academyId);
+    if (error) return;
+    const all = await loadSubscriptionPayments();
+    const next = all.map((p) => (p.id === payment.id ? { ...p, status: "confirmed", confirmedAt: new Date().toISOString(), newExpiry: newDate } : p));
+    await saveSubscriptionPayments(next);
+    setSubscriptionPayments(next);
+    loadAcademies();
+  };
+
+  const rejectSubscriptionPayment = async (payment) => {
+    const all = await loadSubscriptionPayments();
+    const next = all.filter((p) => p.id !== payment.id);
+    await saveSubscriptionPayments(next);
+    setSubscriptionPayments(next);
+  };
+
   const loadGateHero = async () => {
     const { data } = await supabase
       .from("platform_settings")
@@ -17033,7 +17385,12 @@ function SuperAdminView() {
   // in (that's a separate thing from RLS access); this only affects what
   // the subscription badge shows, as a record for you to act on.
   const cancelSubscription = async (academyId) => {
-    const { error } = await supabase.from("academies").update({ subscription_paid_until: null }).eq("id", academyId);
+    // A null date means "unrestricted" elsewhere in this app (an academy
+    // that's never had an expiry configured) — so cancelling can't just
+    // set it to null, or the academy would read as having no restriction
+    // at all instead of being blocked. A definitely-past date reads as
+    // expired under the exact same check used everywhere else.
+    const { error } = await supabase.from("academies").update({ subscription_paid_until: "2000-01-01" }).eq("id", academyId);
     if (!error) loadAcademies();
   };
 
@@ -17063,6 +17420,8 @@ function SuperAdminView() {
     if (session) {
       loadAcademies();
       loadGateHero();
+      loadSubscriptionSettings();
+      loadSubscriptionPaymentsList();
     }
   }, [session]);
 
@@ -17408,6 +17767,156 @@ function SuperAdminView() {
           {platformContactSaving ? "Saving..." : "Save"}
         </button>
         {platformContactSaved && <span className="ml-2 text-sm text-green-700">Saved.</span>}
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+        <h3 className="font-bold text-slate-900 mb-1">Subscription plans</h3>
+        <p className="text-xs text-slate-400 mb-4">Prices and discounts academies see on their renewal page. Set a discount to 0 for no discount.</p>
+        <div className="space-y-3 mb-4">
+          {Object.entries(subscriptionPlans).map(([id, plan]) => (
+            <div key={id} className="grid sm:grid-cols-4 gap-3 items-end border-b border-slate-100 pb-3">
+              <div className="sm:col-span-1">
+                <label className="text-xs text-slate-500 mb-1 block">Plan</label>
+                <div className="text-sm font-semibold text-slate-800 py-2.5">{plan.label}</div>
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Price (EGP)</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={plan.price}
+                  onChange={(e) => setSubscriptionPlans({ ...subscriptionPlans, [id]: { ...plan, price: Number(e.target.value) } })}
+                  className="w-full border border-slate-200 rounded-lg py-2 px-3 outline-none focus:border-blue-900"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Discount (%)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={plan.discount || 0}
+                  onChange={(e) => setSubscriptionPlans({ ...subscriptionPlans, [id]: { ...plan, discount: Number(e.target.value) } })}
+                  className="w-full border border-slate-200 rounded-lg py-2 px-3 outline-none focus:border-blue-900"
+                />
+              </div>
+              <div className="text-sm text-slate-500">
+                Final: <strong className="text-blue-950">{Math.round(plan.price * (1 - (plan.discount || 0) / 100))} EGP</strong>
+              </div>
+            </div>
+          ))}
+        </div>
+        <button
+          onClick={savePlans}
+          disabled={plansSaving}
+          className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+        >
+          {plansSaving ? "Saving..." : "Save plans"}
+        </button>
+        {plansSaved && <span className="ml-2 text-sm text-green-700">Saved.</span>}
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+        <h3 className="font-bold text-slate-900 mb-1">Your Instapay details (temporary)</h3>
+        <p className="text-xs text-slate-400 mb-4">
+          Where academies send their subscription payment — separate from each academy's own Instapay, which is for their own swim parents.
+        </p>
+        <div className="grid sm:grid-cols-2 gap-3 mb-4">
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Instapay handle</label>
+            <input
+              value={platformInstapay.handle}
+              onChange={(e) => setPlatformInstapay({ ...platformInstapay, handle: e.target.value })}
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+              placeholder="you@instapay"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Instapay phone</label>
+            <input
+              value={platformInstapay.phone}
+              onChange={(e) => setPlatformInstapay({ ...platformInstapay, phone: e.target.value })}
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+              placeholder="01xxxxxxxxx"
+            />
+          </div>
+        </div>
+        <button
+          onClick={saveInstapay}
+          disabled={instapaySaving}
+          className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+        >
+          {instapaySaving ? "Saving..." : "Save"}
+        </button>
+        {instapaySaved && <span className="ml-2 text-sm text-green-700">Saved.</span>}
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="font-bold text-slate-900">Subscription payments</h3>
+          <button onClick={loadSubscriptionPaymentsList} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+            <RefreshCw className={`w-4 h-4 ${subscriptionPaymentsLoading ? "animate-spin" : ""}`} />
+          </button>
+        </div>
+        {(() => {
+          const pending = subscriptionPayments.filter((p) => p.status === "pending");
+          const confirmed = subscriptionPayments.filter((p) => p.status === "confirmed").sort((a, b) => new Date(b.confirmedAt) - new Date(a.confirmedAt));
+          const totalRevenue = confirmed.reduce((sum, p) => sum + (p.finalPrice || 0), 0);
+          return (
+            <>
+              <p className="text-xs text-slate-400 mb-4">
+                {pending.length} pending review · {confirmed.length} confirmed · {totalRevenue.toLocaleString()} EGP total collected
+              </p>
+              {pending.length > 0 && (
+                <div className="space-y-2 mb-5">
+                  {pending.map((p) => (
+                    <div key={p.id} className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-800">{p.academyName}</div>
+                        <div className="text-xs text-slate-500">
+                          {p.planLabel} · {p.finalPrice} EGP{p.discount > 0 ? ` (${p.discount}% off ${p.price})` : ""}
+                        </div>
+                        {p.screenshotDataUri && (
+                          <a href={p.screenshotDataUri} target="_blank" rel="noreferrer" className="text-xs text-blue-900 hover:underline">
+                            View payment screenshot
+                          </a>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => confirmSubscriptionPayment(p)}
+                          className="text-xs px-3 py-1.5 rounded-full font-semibold bg-green-600 text-white hover:bg-green-700"
+                        >
+                          Confirm
+                        </button>
+                        <button
+                          onClick={() => rejectSubscriptionPayment(p)}
+                          className="text-xs px-3 py-1.5 rounded-full font-medium text-red-500 hover:bg-red-50"
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {confirmed.length > 0 && (
+                <div>
+                  <div className="text-xs font-semibold text-slate-500 mb-2">History</div>
+                  <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                    {confirmed.map((p) => (
+                      <div key={p.id} className="flex items-center justify-between text-xs text-slate-500 border-b border-slate-100 pb-1.5">
+                        <span>{p.academyName} · {p.planLabel}</span>
+                        <span>{p.finalPrice} EGP · {(p.confirmedAt || "").slice(0, 10)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {pending.length === 0 && confirmed.length === 0 && <div className="text-sm text-slate-400 text-center py-6">No subscription payments yet</div>}
+            </>
+          );
+        })()}
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200 p-5">
