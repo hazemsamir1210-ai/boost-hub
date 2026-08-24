@@ -307,6 +307,30 @@ async function savePlatformInstapay(info) {
   return true;
 }
 
+// Lets the super admin turn a payment method's button on or off across the
+// whole platform from /_admin — separate from whether the underlying Vercel
+// environment variables are configured, so a gateway can be wired up and
+// tested privately before switching it on for everyone (or switched back off
+// immediately if something's wrong with it).
+const DEFAULT_PAYMENT_GATEWAYS = { fawry: false, paymob: false };
+
+async function loadPaymentGatewaysEnabled() {
+  try {
+    const { data, error } = await supabase.from("platform_settings").select("payment_gateways_enabled").eq("id", true).maybeSingle();
+    if (error || !data?.payment_gateways_enabled) return DEFAULT_PAYMENT_GATEWAYS;
+    const parsed = typeof data.payment_gateways_enabled === "string" ? JSON.parse(data.payment_gateways_enabled) : data.payment_gateways_enabled;
+    return { ...DEFAULT_PAYMENT_GATEWAYS, ...parsed };
+  } catch {
+    return DEFAULT_PAYMENT_GATEWAYS;
+  }
+}
+
+async function savePaymentGatewaysEnabled(settings) {
+  const { error } = await supabase.from("platform_settings").update({ payment_gateways_enabled: settings }).eq("id", true);
+  if (error) throw error;
+  return true;
+}
+
 // Records of academies paying the platform itself to renew — reviewed by
 // the super admin in /_admin, same manual Instapay + screenshot pattern
 // used everywhere else in this app. Stored as one JSONB array column
@@ -2999,6 +3023,137 @@ function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
   );
 }
 
+/* A "Pay online now" button that hands off to Fawry's own hosted checkout
+   page — real-time card/wallet/reference-number payment that confirms
+   itself automatically via a webhook, instead of the manual Instapay +
+   screenshot review used everywhere else in this app. Shows a plain error
+   instead of crashing if Fawry hasn't been configured with real
+   credentials yet (see /api/fawry-create-checkout.js for setup notes). */
+function FawryPayButton({ amount, description, customerName, customerMobile, refPrefix, refParts }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  // The super admin can switch this off platform-wide from /_admin even
+  // when the underlying Vercel credentials are already configured — e.g.
+  // while still testing a gateway end-to-end. Hidden entirely (not just
+  // disabled) so it doesn't confuse anyone into thinking it should work.
+  const [enabled, setEnabled] = useState(false);
+  useEffect(() => {
+    loadPaymentGatewaysEnabled().then((g) => setEnabled(!!g.fawry));
+  }, []);
+
+  const payNow = async () => {
+    setError("");
+    if (!amount || Number(amount) <= 0) return setError("Enter an amount first");
+    if (!customerName?.trim() || !customerMobile?.trim()) return setError("Enter your name and phone number first");
+    setLoading(true);
+    try {
+      const merchantRefNum = [refPrefix, ...refParts, Math.random().toString(36).slice(2, 8)].join("-");
+      const res = await fetch("/api/fawry-create-checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount: Number(amount),
+          description,
+          customerName: customerName.trim(),
+          customerMobile: customerMobile.trim(),
+          merchantRefNum,
+          returnUrl: window.location.href,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "Could not start payment");
+      if (data.checkoutUrl) {
+        window.location.href = data.checkoutUrl;
+      } else if (data.referenceNumber) {
+        alert(`Your Fawry reference number is ${data.referenceNumber} — pay it at any Fawry outlet.`);
+      } else {
+        throw new Error("Fawry didn't return a way to pay — please try Instapay below instead");
+      }
+    } catch (e) {
+      setError(e.message || "Could not start payment — please try Instapay below instead");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!enabled) return null;
+
+  return (
+    <div className="mb-4">
+      <button
+        onClick={payNow}
+        disabled={loading}
+        className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-amber-500 text-white font-semibold hover:bg-amber-600 transition disabled:opacity-60"
+      >
+        {loading && <RefreshCw className="w-4 h-4 animate-spin" />}
+        {loading ? "Starting payment..." : "Pay online now — Fawry"}
+      </button>
+      {error && <div className="text-red-500 text-sm mt-2">{error}</div>}
+    </div>
+  );
+}
+
+/* Same idea as FawryPayButton above, but hands off to Paymob's hosted
+   Unified Checkout page instead. See /api/paymob-create-checkout.js for
+   the credentials this needs before it can actually process a payment. */
+function PaymobPayButton({ amount, description, customerName, customerMobile, customerEmail, refPrefix, refParts }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [enabled, setEnabled] = useState(false);
+  useEffect(() => {
+    loadPaymentGatewaysEnabled().then((g) => setEnabled(!!g.paymob));
+  }, []);
+
+  const payNow = async () => {
+    setError("");
+    if (!amount || Number(amount) <= 0) return setError("Enter an amount first");
+    if (!customerName?.trim() || !customerMobile?.trim()) return setError("Enter your name and phone number first");
+    setLoading(true);
+    try {
+      const merchantRefNum = [refPrefix, ...refParts, Math.random().toString(36).slice(2, 8)].join("-");
+      const res = await fetch("/api/paymob-create-checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount: Number(amount),
+          description,
+          customerName: customerName.trim(),
+          customerMobile: customerMobile.trim(),
+          customerEmail,
+          merchantRefNum,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "Could not start payment");
+      if (data.checkoutUrl) {
+        window.location.href = data.checkoutUrl;
+      } else {
+        throw new Error("Paymob didn't return a checkout link — please try another option below");
+      }
+    } catch (e) {
+      setError(e.message || "Could not start payment — please try another option below");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!enabled) return null;
+
+  return (
+    <div className="mb-4">
+      <button
+        onClick={payNow}
+        disabled={loading}
+        className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-emerald-600 text-white font-semibold hover:bg-emerald-700 transition disabled:opacity-60"
+      >
+        {loading && <RefreshCw className="w-4 h-4 animate-spin" />}
+        {loading ? "Starting payment..." : "Pay online now — Paymob"}
+      </button>
+      {error && <div className="text-red-500 text-sm mt-2">{error}</div>}
+    </div>
+  );
+}
+
 function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
   const [planId, setPlanId] = useState(initialPlanId || PLANS[0].id);
   const [name, setName] = useState(initialSwimmer?.name || "");
@@ -3170,10 +3325,27 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
         </div>
       )}
 
+      <FawryPayButton
+        amount={plan.price}
+        description={`${plan.name} — ${name || "swimmer"}`}
+        customerName={name}
+        customerMobile={phone}
+        refPrefix="sub"
+        refParts={[swimmerId || "new", window.__academy?.id || "", monthKey()]}
+      />
+      <PaymobPayButton
+        amount={plan.price}
+        description={`${plan.name} — ${name || "swimmer"}`}
+        customerName={name}
+        customerMobile={phone}
+        refPrefix="sub"
+        refParts={[swimmerId || "new", window.__academy?.id || "", monthKey()]}
+      />
+
       <div className="bg-blue-950 text-white rounded-2xl p-5 mb-6">
         {CONFIG.instapayHandle ? (
           <>
-            <div className="text-sm text-blue-100 mb-1">Transfer {plan.price || "..."} EGP via Instapay to:</div>
+            <div className="text-sm text-blue-100 mb-1">Or transfer {plan.price || "..."} EGP via Instapay to:</div>
             <a
               href={CONFIG.instapayLink}
               target="_blank"
@@ -17245,11 +17417,25 @@ function SuperAdminView() {
   const [instapaySaved, setInstapaySaved] = useState(false);
   const [subscriptionPayments, setSubscriptionPayments] = useState([]);
   const [subscriptionPaymentsLoading, setSubscriptionPaymentsLoading] = useState(false);
+  const [gatewaysEnabled, setGatewaysEnabled] = useState(DEFAULT_PAYMENT_GATEWAYS);
+  const [gatewaysSaving, setGatewaysSaving] = useState(false);
 
   const loadSubscriptionSettings = async () => {
-    const [plans, instapay] = await Promise.all([loadSubscriptionPlans(), loadPlatformInstapay()]);
+    const [plans, instapay, gateways] = await Promise.all([loadSubscriptionPlans(), loadPlatformInstapay(), loadPaymentGatewaysEnabled()]);
     setSubscriptionPlans(plans);
     setPlatformInstapay(instapay);
+    setGatewaysEnabled(gateways);
+  };
+
+  const toggleGateway = async (key) => {
+    const next = { ...gatewaysEnabled, [key]: !gatewaysEnabled[key] };
+    setGatewaysEnabled(next);
+    setGatewaysSaving(true);
+    try {
+      await savePaymentGatewaysEnabled(next);
+    } finally {
+      setGatewaysSaving(false);
+    }
   };
 
   const [subscriptionPaymentsError, setSubscriptionPaymentsError] = useState("");
@@ -17865,6 +18051,38 @@ function SuperAdminView() {
           {instapaySaving ? "Saving..." : "Save"}
         </button>
         {instapaySaved && <span className="ml-2 text-sm text-green-700">Saved.</span>}
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+        <h3 className="font-bold text-slate-900 mb-1">Online payment gateways</h3>
+        <p className="text-xs text-slate-400 mb-4">
+          Switch these on once you've tested a gateway end-to-end — until then, academies only see Instapay, even if the Vercel environment variables are already set.
+        </p>
+        <div className="space-y-2">
+          {[
+            { key: "fawry", label: "Fawry", color: "bg-amber-500" },
+            { key: "paymob", label: "Paymob", color: "bg-emerald-600" },
+          ].map((gw) => (
+            <div key={gw.key} className="flex items-center justify-between border border-slate-100 rounded-xl px-4 py-3">
+              <div className="flex items-center gap-2">
+                <span className={`w-2.5 h-2.5 rounded-full ${gatewaysEnabled[gw.key] ? gw.color : "bg-slate-300"}`} />
+                <span className="text-sm font-medium text-slate-700">{gw.label}</span>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${gatewaysEnabled[gw.key] ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"}`}>
+                  {gatewaysEnabled[gw.key] ? "Live for everyone" : "Off"}
+                </span>
+              </div>
+              <button
+                onClick={() => toggleGateway(gw.key)}
+                disabled={gatewaysSaving}
+                className={`relative w-11 h-6 rounded-full transition disabled:opacity-60 ${gatewaysEnabled[gw.key] ? "bg-blue-950" : "bg-slate-300"}`}
+              >
+                <span
+                  className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition ${gatewaysEnabled[gw.key] ? "left-5" : "left-0.5"}`}
+                />
+              </button>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
