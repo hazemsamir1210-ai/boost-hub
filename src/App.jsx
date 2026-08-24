@@ -259,33 +259,11 @@ window.storage = {
   },
 };
 
-// Platform-level settings (subscription plan prices/discounts, and the
-// platform owner's own Instapay details for collecting academy
-// subscription payments) are NOT scoped to any one academy — they use
-// this fixed sentinel "academy_id" instead of a real academy's row, so
-// the exact same app_storage table/RLS setup can hold them without
-// needing a separate table or policy.
-const PLATFORM_SCOPE_ID = "00000000-0000-0000-0000-000000000000";
-
-async function loadPlatformSetting(key) {
-  const { data, error } = await supabase
-    .from("app_storage")
-    .select("value")
-    .eq("key", key)
-    .eq("academy_id", PLATFORM_SCOPE_ID)
-    .maybeSingle();
-  if (error) throw error;
-  return data ? data.value : null;
-}
-
-async function savePlatformSetting(key, value) {
-  const { error } = await supabase
-    .from("app_storage")
-    .upsert({ key, value, academy_id: PLATFORM_SCOPE_ID, updated_at: new Date().toISOString() });
-  if (error) throw error;
-  return true;
-}
-
+// Platform-level settings (subscription plan prices/discounts, the
+// platform owner's own Instapay details, and the log of academies paying
+// to renew) all live in the platform_settings table's single row — a
+// separate table with no per-academy foreign key, since this data isn't
+// scoped to any one academy the way app_storage rows are.
 const DEFAULT_SUBSCRIPTION_PLANS = {
   monthly: { label: "Monthly", months: 1, price: 500, discount: 0 },
   semiannual: { label: "Every 6 months", months: 6, price: 2700, discount: 10 },
@@ -331,18 +309,22 @@ async function savePlatformInstapay(info) {
 
 // Records of academies paying the platform itself to renew — reviewed by
 // the super admin in /_admin, same manual Instapay + screenshot pattern
-// used everywhere else in this app.
+// used everywhere else in this app. Stored as one JSONB array column
+// (same reasoning as above — not tied to any one academy's row).
 async function loadSubscriptionPayments() {
   try {
-    const raw = await loadPlatformSetting("subscription-payments");
-    return raw ? JSON.parse(raw) : [];
+    const { data, error } = await supabase.from("platform_settings").select("subscription_payments").eq("id", true).maybeSingle();
+    if (error || !data?.subscription_payments) return [];
+    return typeof data.subscription_payments === "string" ? JSON.parse(data.subscription_payments) : data.subscription_payments;
   } catch {
     return [];
   }
 }
 
 async function saveSubscriptionPayments(list) {
-  return savePlatformSetting("subscription-payments", JSON.stringify(list));
+  const { error } = await supabase.from("platform_settings").update({ subscription_payments: list }).eq("id", true);
+  if (error) throw error;
+  return true;
 }
 
 /* ============================================================
