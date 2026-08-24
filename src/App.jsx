@@ -16914,7 +16914,7 @@ function RenewSubscriptionView({ academy, onExit }) {
       setPendingPayment(record);
       setSubmitted(true);
     } catch (e) {
-      setError("Could not submit — check your connection and try again");
+      setError(e?.message || "Could not submit — check your connection and try again");
     } finally {
       setSubmitting(false);
     }
