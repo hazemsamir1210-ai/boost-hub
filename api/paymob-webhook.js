@@ -53,17 +53,23 @@ async function supabaseRequest(path, options = {}) {
 module.exports = async (req, res) => {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  const hmacSecret = process.env.PAYMOB_HMAC_SECRET;
   const receivedHmac = req.query?.hmac;
   const transaction = req.body?.obj || {};
+  const ref = transaction.extras?.merchantRefNum || transaction.special_reference || transaction.order?.merchant_order_id || "";
+  // Every academy has its own Paymob HMAC secret now — pulled from the same
+  // merchantRefNum convention the checkout step encodes
+  // (sub-<swimmerId>-<academyId>-...).
+  const refAcademyId = ref.split("-")[2];
 
-  if (hmacSecret && receivedHmac) {
-    const valid = verifyPaymobHmac(transaction, hmacSecret, receivedHmac);
-    if (!valid) return res.status(400).json({ error: "Invalid HMAC" });
+  if (receivedHmac && refAcademyId) {
+    const rows = await supabaseRequest(`academies?id=eq.${refAcademyId}&select=paymob_hmac_secret`);
+    const academyHmacSecret = rows[0]?.paymob_hmac_secret;
+    if (academyHmacSecret && !verifyPaymobHmac(transaction, academyHmacSecret, receivedHmac)) {
+      return res.status(400).json({ error: "Invalid HMAC" });
+    }
   }
 
   const isPaid = transaction.success === true && transaction.pending === false;
-  const ref = transaction.extras?.merchantRefNum || transaction.special_reference || transaction.order?.merchant_order_id || "";
 
   try {
     if (isPaid && ref.startsWith("sub-")) {
