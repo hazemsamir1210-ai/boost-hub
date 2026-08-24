@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import * as XLSX from "xlsx";
 import { createClient } from "@supabase/supabase-js";
 import jsQR from "jsqr";
 import QRCode from "qrcode";
@@ -12,6 +11,17 @@ import {
   FileUp, Menu, Camera, QrCode, LayoutGrid, TrendingUp, AlertCircle,
   UserPlus, GraduationCap, MessageSquare, AlignLeft, AlignCenter, AlignRight
 } from "lucide-react";
+
+// xlsx is one of the heaviest packages in this app (several hundred KB on
+// its own) but only ever needed for the admin's Excel import/export — every
+// parent or coach just logging in or paying fees was downloading it too,
+// even though they'd never touch it. Loading it on demand, only the moment
+// an import/export actually happens, keeps it out of everyone else's way.
+let _xlsxModule = null;
+async function loadXLSX() {
+  if (!_xlsxModule) _xlsxModule = await import("xlsx");
+  return _xlsxModule;
+}
 
 // The single fixed code printed and hung at the pool entrance — every
 // coach/staff member scans this SAME code with their own phone camera,
@@ -2229,7 +2239,7 @@ function parseMonthBlockLabel(label, prevYear, prevMonth) {
   return { year, month };
 }
 
-function findMonthBlocks(sheet) {
+function findMonthBlocks(sheet, XLSX) {
   const merges = sheet["!merges"] || [];
   const blocks = [];
   let prevYear = null;
@@ -2248,7 +2258,7 @@ function findMonthBlocks(sheet) {
   return blocks;
 }
 
-function cellStr(sheet, r, c) {
+function cellStr(sheet, r, c, XLSX) {
   const cell = sheet[XLSX.utils.encode_cell({ r, c })];
   if (!cell || cell.v == null) return "";
   return String(cell.v).trim();
@@ -2262,7 +2272,7 @@ function cellStr(sheet, r, c) {
 // read at all. This keeps the Date object intact so importMapTime's
 // own Date-aware branch can pull the real hour/minute out of it, and
 // only falls back to text for cells that were actually typed as text.
-function cellRaw(sheet, r, c) {
+function cellRaw(sheet, r, c, XLSX) {
   const cell = sheet[XLSX.utils.encode_cell({ r, c })];
   if (!cell || cell.v == null) return "";
   if (cell.v instanceof Date) return cell.v;
@@ -2338,8 +2348,8 @@ function importMapTime(raw, day) {
   return matched || null;
 }
 
-function parseFullHistorySheet(sheet, coaches = []) {
-  const blocks = findMonthBlocks(sheet);
+function parseFullHistorySheet(sheet, coaches = [], XLSX) {
+  const blocks = findMonthBlocks(sheet, XLSX);
   if (blocks.length === 0) return null; // not this kind of sheet
 
   const range = XLSX.utils.decode_range(sheet["!ref"]);
@@ -2349,7 +2359,7 @@ function parseFullHistorySheet(sheet, coaches = []) {
   // "Export full history" button vs. an academy's original spreadsheet).
   let nameCol = null, birthCol = null, phoneCol = null, notesCol = null, coachCol = null, sessionTypeCol = null;
   for (let c = range.s.c; c <= range.e.c; c++) {
-    const header = cellStr(sheet, 0, c) || cellStr(sheet, 1, c);
+    const header = cellStr(sheet, 0, c, XLSX) || cellStr(sheet, 1, c, XLSX);
     if (!header) continue;
     if (nameCol == null && header.includes("اسم")) nameCol = c;
     if (birthCol == null && header.includes("مواليد")) birthCol = c;
@@ -2371,7 +2381,7 @@ function parseFullHistorySheet(sheet, coaches = []) {
     const offsets = { pay: 0, level: 1, day: 2, time: 3 }; // fallback: this app's historical default
     let found = 0;
     for (let i = 0; i < 4; i++) {
-      const label = cellStr(sheet, 1, startCol + i);
+      const label = cellStr(sheet, 1, startCol + i, XLSX);
       if (!label) continue;
       if (label.includes("دفع") || label.toLowerCase().includes("pay")) {
         offsets.pay = i;
@@ -2400,13 +2410,13 @@ function parseFullHistorySheet(sheet, coaches = []) {
   const swimmers = [];
   const warnings = [];
   for (let r = 2; r <= range.e.r; r++) {
-    const name = cellStr(sheet, r, nameCol);
+    const name = cellStr(sheet, r, nameCol, XLSX);
     if (!name) continue;
-    const birthYear = cellStr(sheet, r, birthCol);
-    const phoneRaw = cellStr(sheet, r, phoneCol);
-    const notes = notesCol != null ? cellStr(sheet, r, notesCol) : "";
-    const coachName = coachCol != null ? cellStr(sheet, r, coachCol) : "";
-    const sessionTypeLabel = sessionTypeCol != null ? cellStr(sheet, r, sessionTypeCol) : "";
+    const birthYear = cellStr(sheet, r, birthCol, XLSX);
+    const phoneRaw = cellStr(sheet, r, phoneCol, XLSX);
+    const notes = notesCol != null ? cellStr(sheet, r, notesCol, XLSX) : "";
+    const coachName = coachCol != null ? cellStr(sheet, r, coachCol, XLSX) : "";
+    const sessionTypeLabel = sessionTypeCol != null ? cellStr(sheet, r, sessionTypeCol, XLSX) : "";
 
     const phoneParts = phoneRaw.split(/[-/]/).map((p) => p.replace(/\D/g, "")).filter(Boolean);
     const fixPhone = (p) => (p.length === 10 ? "0" + p : p);
@@ -2433,10 +2443,10 @@ function parseFullHistorySheet(sheet, coaches = []) {
       const off = blockOffsets[bi];
       const monthKeyStr = `${b.year}-${String(b.month).padStart(2, "0")}`;
       const monthDate = `${monthKeyStr}-01T00:00:00.000Z`;
-      const payRaw = cellStr(sheet, r, b.startCol + off.pay).toLowerCase();
-      const lvlRaw = cellStr(sheet, r, b.startCol + off.level);
-      const dayRaw = cellStr(sheet, r, b.startCol + off.day);
-      const timeRaw = cellRaw(sheet, r, b.startCol + off.time);
+      const payRaw = cellStr(sheet, r, b.startCol + off.pay, XLSX).toLowerCase();
+      const lvlRaw = cellStr(sheet, r, b.startCol + off.level, XLSX);
+      const dayRaw = cellStr(sheet, r, b.startCol + off.day, XLSX);
+      const timeRaw = cellRaw(sheet, r, b.startCol + off.time, XLSX);
 
       // Accepts whatever this app's own export writes ("Yes") as well as
       // the original academy spreadsheet's convention ("تم" / "done").
@@ -3032,14 +3042,22 @@ function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
 function FawryPayButton({ amount, description, customerName, customerMobile, refPrefix, refParts }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  // The super admin can switch this off platform-wide from /_admin even
-  // when the underlying Vercel credentials are already configured — e.g.
-  // while still testing a gateway end-to-end. Hidden entirely (not just
-  // disabled) so it doesn't confuse anyone into thinking it should work.
+  // Two independent switches both need to be on: the super admin's
+  // platform-wide kill switch (/_admin, for testing a gateway safely
+  // before it goes live for anyone), and this specific academy actually
+  // having saved their own Fawry credentials (Settings) — without that,
+  // there'd be nowhere for the money to go.
   const [enabled, setEnabled] = useState(false);
+  const academyId = window.__academy?.id;
   useEffect(() => {
-    loadPaymentGatewaysEnabled().then((g) => setEnabled(!!g.fawry));
-  }, []);
+    if (!academyId) return;
+    Promise.all([
+      loadPaymentGatewaysEnabled(),
+      fetch(`/api/payment-credentials-status?academyId=${academyId}`).then((r) => r.json()).catch(() => ({})),
+    ]).then(([platformToggle, academyStatus]) => {
+      setEnabled(!!platformToggle.fawry && !!academyStatus.fawry);
+    });
+  }, [academyId]);
 
   const payNow = async () => {
     setError("");
@@ -3052,6 +3070,7 @@ function FawryPayButton({ amount, description, customerName, customerMobile, ref
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          academyId,
           amount: Number(amount),
           description,
           customerName: customerName.trim(),
@@ -3100,9 +3119,16 @@ function PaymobPayButton({ amount, description, customerName, customerMobile, cu
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [enabled, setEnabled] = useState(false);
+  const academyId = window.__academy?.id;
   useEffect(() => {
-    loadPaymentGatewaysEnabled().then((g) => setEnabled(!!g.paymob));
-  }, []);
+    if (!academyId) return;
+    Promise.all([
+      loadPaymentGatewaysEnabled(),
+      fetch(`/api/payment-credentials-status?academyId=${academyId}`).then((r) => r.json()).catch(() => ({})),
+    ]).then(([platformToggle, academyStatus]) => {
+      setEnabled(!!platformToggle.paymob && !!academyStatus.paymob);
+    });
+  }, [academyId]);
 
   const payNow = async () => {
     setError("");
@@ -3115,6 +3141,7 @@ function PaymobPayButton({ amount, description, customerName, customerMobile, cu
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          academyId,
           amount: Number(amount),
           description,
           customerName: customerName.trim(),
@@ -4475,6 +4502,65 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [showPricesModal, setShowPricesModal] = useState(false);
   const [showAchievementsModal, setShowAchievementsModal] = useState(false);
   const [settingsSubTab, setSettingsSubTab] = useState("general");
+
+  // ---- Settings: online payment gateways (this academy's own credentials) ----
+  const [paymentCreds, setPaymentCreds] = useState({
+    fawryMerchantCode: "", fawrySecureKey: "",
+    paymobSecretKey: "", paymobPublicKey: "", paymobIntegrationId: "", paymobHmacSecret: "",
+  });
+  const [paymentCredsStatus, setPaymentCredsStatus] = useState({ fawry: false, paymob: false });
+  const [paymentCredsSaving, setPaymentCredsSaving] = useState(false);
+  const [paymentCredsSaved, setPaymentCredsSaved] = useState("");
+  const [paymentCredsError, setPaymentCredsError] = useState("");
+
+  const loadPaymentCredsStatus = useCallback(() => {
+    if (!window.__academy?.id) return;
+    fetch(`/api/payment-credentials-status?academyId=${window.__academy.id}`)
+      .then((r) => r.json())
+      .then((s) => setPaymentCredsStatus({ fawry: !!s.fawry, paymob: !!s.paymob }))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (settingsSubTab === "payments") loadPaymentCredsStatus();
+  }, [settingsSubTab, loadPaymentCredsStatus]);
+
+  const savePaymentCreds = async (which) => {
+    setPaymentCredsError("");
+    setPaymentCredsSaved("");
+    setPaymentCredsSaving(true);
+    try {
+      const body =
+        which === "fawry"
+          ? { academyId: window.__academy.id, fawryMerchantCode: paymentCreds.fawryMerchantCode, fawrySecureKey: paymentCreds.fawrySecureKey }
+          : {
+              academyId: window.__academy.id,
+              paymobSecretKey: paymentCreds.paymobSecretKey,
+              paymobPublicKey: paymentCreds.paymobPublicKey,
+              paymobIntegrationId: paymentCreds.paymobIntegrationId,
+              paymobHmacSecret: paymentCreds.paymobHmacSecret,
+            };
+      const res = await fetch("/api/save-payment-credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "Could not save");
+      setPaymentCredsSaved(which);
+      loadPaymentCredsStatus();
+      setPaymentCreds((prev) =>
+        which === "fawry"
+          ? { ...prev, fawryMerchantCode: "", fawrySecureKey: "" }
+          : { ...prev, paymobSecretKey: "", paymobPublicKey: "", paymobIntegrationId: "", paymobHmacSecret: "" }
+      );
+    } catch (e) {
+      setPaymentCredsError(e.message || "Could not save — please try again");
+    } finally {
+      setPaymentCredsSaving(false);
+    }
+  };
+
   const [showSkillsModal, setShowSkillsModal] = useState(false);
   const [settingsSignature, setSettingsSignature] = useState("");
   const [settingsInstapayHandle, setSettingsInstapayHandle] = useState("");
@@ -6485,6 +6571,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const exportSwimmersToExcel = async () => {
     setExportingSwimmers(true);
     try {
+      const XLSX = await loadXLSX();
       const all = await fetchAllSwimmers();
       const sorted = all.slice().sort((a, b) => a.name.localeCompare(b.name));
 
@@ -6605,6 +6692,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     setImportError("");
     setImportPreview(null);
     try {
+      const XLSX = await loadXLSX();
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { type: "array", cellDates: true });
 
@@ -6616,7 +6704,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       // single-row importer below handles the first sheet instead.
       let fullHistory = null;
       for (const sheetName of wb.SheetNames) {
-        const candidate = parseFullHistorySheet(wb.Sheets[sheetName], coaches);
+        const candidate = parseFullHistorySheet(wb.Sheets[sheetName], coaches, XLSX);
         if (candidate && (!fullHistory || candidate.monthsFound > fullHistory.monthsFound)) {
           fullHistory = candidate;
         }
@@ -11154,6 +11242,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               { id: "schedule", label: "Schedule" },
               { id: "homepage", label: "Homepage" },
               { id: "skills", label: "Skills & Levels" },
+              { id: "payments", label: "Online payments" },
               { id: "backup", label: "Backup" },
               ...(role === "admin" ? [{ id: "password", label: "Password" }] : []),
             ].map((t) => (
@@ -11804,6 +11893,116 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             </div>
           </div>
           </>
+          )}
+
+          {settingsSubTab === "payments" && (
+          <div>
+            <h3 className="font-bold text-slate-900 mb-1">Online payments</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              Your own Fawry / Paymob accounts — swimmers' fees paid online land directly in these, not anywhere else. Keys are write-only here for security: once saved, they can't be viewed again, only replaced.
+            </p>
+            {paymentCredsError && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-3">{paymentCredsError}</div>}
+
+            <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-4">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-semibold text-slate-800">Fawry</h4>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${paymentCredsStatus.fawry ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"}`}>
+                  {paymentCredsStatus.fawry ? "Connected" : "Not set up"}
+                </span>
+              </div>
+              <div className="grid sm:grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Merchant Code</label>
+                  <input
+                    value={paymentCreds.fawryMerchantCode}
+                    onChange={(e) => setPaymentCreds({ ...paymentCreds, fawryMerchantCode: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    placeholder={paymentCredsStatus.fawry ? "•••••••• (already set)" : "From your Fawry business portal"}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Security Key</label>
+                  <input
+                    type="password"
+                    value={paymentCreds.fawrySecureKey}
+                    onChange={(e) => setPaymentCreds({ ...paymentCreds, fawrySecureKey: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    placeholder={paymentCredsStatus.fawry ? "•••••••• (already set)" : "From your Fawry business portal"}
+                  />
+                </div>
+              </div>
+              <button
+                onClick={() => savePaymentCreds("fawry")}
+                disabled={paymentCredsSaving || !paymentCreds.fawryMerchantCode.trim() || !paymentCreds.fawrySecureKey.trim()}
+                className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+              >
+                {paymentCredsSaving ? "Saving..." : "Save"}
+              </button>
+              {paymentCredsSaved === "fawry" && <span className="ml-2 text-sm text-green-700">Saved.</span>}
+            </div>
+
+            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-semibold text-slate-800">Paymob</h4>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${paymentCredsStatus.paymob ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"}`}>
+                  {paymentCredsStatus.paymob ? "Connected" : "Not set up"}
+                </span>
+              </div>
+              <div className="grid sm:grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Secret Key</label>
+                  <input
+                    type="password"
+                    value={paymentCreds.paymobSecretKey}
+                    onChange={(e) => setPaymentCreds({ ...paymentCreds, paymobSecretKey: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    placeholder={paymentCredsStatus.paymob ? "•••••••• (already set)" : "sk_..."}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Public Key</label>
+                  <input
+                    value={paymentCreds.paymobPublicKey}
+                    onChange={(e) => setPaymentCreds({ ...paymentCreds, paymobPublicKey: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    placeholder={paymentCredsStatus.paymob ? "•••••••• (already set)" : "pk_..."}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Integration ID (card)</label>
+                  <input
+                    value={paymentCreds.paymobIntegrationId}
+                    onChange={(e) => setPaymentCreds({ ...paymentCreds, paymobIntegrationId: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    placeholder={paymentCredsStatus.paymob ? "•••••••• (already set)" : "From Payment Integrations"}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">HMAC Secret</label>
+                  <input
+                    type="password"
+                    value={paymentCreds.paymobHmacSecret}
+                    onChange={(e) => setPaymentCreds({ ...paymentCreds, paymobHmacSecret: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    placeholder={paymentCredsStatus.paymob ? "•••••••• (already set)" : "From Account Info"}
+                  />
+                </div>
+              </div>
+              <button
+                onClick={() => savePaymentCreds("paymob")}
+                disabled={
+                  paymentCredsSaving ||
+                  !paymentCreds.paymobSecretKey.trim() ||
+                  !paymentCreds.paymobPublicKey.trim() ||
+                  !paymentCreds.paymobIntegrationId.trim()
+                }
+                className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+              >
+                {paymentCredsSaving ? "Saving..." : "Save"}
+              </button>
+              {paymentCredsSaved === "paymob" && <span className="ml-2 text-sm text-green-700">Saved.</span>}
+            </div>
+          </div>
           )}
 
           {settingsSubTab === "backup" && (
