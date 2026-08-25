@@ -4505,6 +4505,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [showPricesModal, setShowPricesModal] = useState(false);
   const [showAchievementsModal, setShowAchievementsModal] = useState(false);
   const [settingsSubTab, setSettingsSubTab] = useState("general");
+  const [coachPerfMonth, setCoachPerfMonth] = useState("");
+  const [coachPerfCoachFilter, setCoachPerfCoachFilter] = useState("all");
 
   // ---- Settings: online payment gateways (this academy's own credentials) ----
   const [paymentCreds, setPaymentCreds] = useState({
@@ -7731,6 +7733,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <CalendarCheck className="w-4 h-4" /> {t("reports")}
         </button>
         )}
+        {(canViewFinancialReports || can("viewCoachReports")) && (
+        <button
+          onClick={() => setTab("coachperformance")}
+          className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+            tab === "coachperformance" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+          }`}
+        >
+          <Award className="w-4 h-4" /> {t("coachPerformance")}
+        </button>
+        )}
         {canViewPayroll && role !== "technical_director" && (
           <button
             onClick={() => setTab("attendance")}
@@ -9556,34 +9568,42 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         const stillActiveThisMonth = activeLastMonth.filter((s) => s.day && s.time);
         const retentionRate = activeLastMonth.length ? Math.round((stillActiveThisMonth.length / activeLastMonth.length) * 100) : null;
 
+        const prevRangeForCoaches = periodRange(reportType, previousAnchor(reportType, reportAnchor));
+
         // Coach performance — for each coach: how many swimmers they
-        // currently have, their swimmers' attendance rate this period,
-        // how many skills ratings they've actually recorded (a coach who
-        // never rates anyone leaves parents with no sense of progress),
-        // and retention — of THEIR swimmers active last month, how many
-        // are still with them (not just still at the academy under a
-        // different coach) this month.
+        // currently have, their swimmers' attendance rate this period (and
+        // whether that's trending up or down vs the previous period, like
+        // iClassPro's own period-over-period comparisons), how much of
+        // their roster has at least one skill actually rated (a coverage
+        // rate reads more fairly across coaches with different roster
+        // sizes than a raw count would), and retention — of THEIR swimmers
+        // active last month, how many are still with them (not just still
+        // at the academy under a different coach) this month.
         const coachPerformance = coaches.map((c) => {
           const mySwimmers = swimmers.filter((s) => s.coachId === c.id || s.coachId2 === c.id);
           const myActiveSwimmers = mySwimmers.filter((s) => s.day && s.time);
 
-          let presentCount = 0;
-          let totalMarked = 0;
-          mySwimmers.forEach((s) => {
-            Object.keys(s.attendance || {}).forEach((date) => {
-              if (!inRange(date, startISO, endISO)) return;
-              totalMarked++;
-              if (s.attendance[date] === "present") presentCount++;
+          const attendanceRateForRange = (rStartISO, rEndISO) => {
+            let presentCount = 0;
+            let totalMarked = 0;
+            mySwimmers.forEach((s) => {
+              Object.keys(s.attendance || {}).forEach((date) => {
+                if (!inRange(date, rStartISO, rEndISO)) return;
+                totalMarked++;
+                if (s.attendance[date] === "present") presentCount++;
+              });
             });
-          });
-          const attendanceRate = totalMarked > 0 ? Math.round((presentCount / totalMarked) * 100) : null;
+            return totalMarked > 0 ? Math.round((presentCount / totalMarked) * 100) : null;
+          };
+          const attendanceRate = attendanceRateForRange(startISO, endISO);
+          const prevAttendanceRate = attendanceRateForRange(prevRangeForCoaches.startISO, prevRangeForCoaches.endISO);
+          const attendanceTrend =
+            attendanceRate !== null && prevAttendanceRate !== null ? attendanceRate - prevAttendanceRate : null;
 
-          let ratedSkillsCount = 0;
-          mySwimmers.forEach((s) => {
-            Object.values(s.skills || {}).forEach((levelSkills) => {
-              ratedSkillsCount += Object.values(levelSkills || {}).filter((v) => v > 0).length;
-            });
-          });
+          const ratedSwimmerCount = myActiveSwimmers.filter((s) =>
+            Object.values(s.skills || {}).some((levelSkills) => Object.values(levelSkills || {}).some((v) => v > 0))
+          ).length;
+          const skillsCoverage = myActiveSwimmers.length > 0 ? Math.round((ratedSwimmerCount / myActiveSwimmers.length) * 100) : null;
 
           const myActiveLastMonth = mySwimmers.filter((s) => {
             const sched = (s.scheduleHistory || []).find((h) => (h.date || "").slice(0, 7) === prevMonthKeyForRetention && h.coachId === c.id);
@@ -9596,7 +9616,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             coach: c,
             activeCount: myActiveSwimmers.length,
             attendanceRate,
-            ratedSkillsCount,
+            attendanceTrend,
+            skillsCoverage,
             retention: coachRetention,
           };
         });
@@ -10040,53 +10061,6 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     </div>
                   </div>
                 )}
-                {(canViewFinancialReports || can("viewCoachReports")) && coachPerformance.length > 0 && (
-                  <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4">
-                    <div className="text-xs text-slate-400 mb-3">Coach performance — this period ({label})</div>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
-                            <th className="pb-2 pr-3">Coach</th>
-                            <th className="pb-2 pr-3">Swimmers</th>
-                            <th className="pb-2 pr-3">Attendance</th>
-                            <th className="pb-2 pr-3">Skills rated</th>
-                            <th className="pb-2">Retention</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {coachPerformance
-                            .sort((a, b) => b.activeCount - a.activeCount)
-                            .map((row) => (
-                              <tr key={row.coach.id} className="border-b border-slate-50 last:border-0">
-                                <td className="py-2 pr-3 font-medium text-slate-700">{row.coach.name}</td>
-                                <td className="py-2 pr-3 text-slate-600">{row.activeCount}</td>
-                                <td className="py-2 pr-3">
-                                  {row.attendanceRate === null ? (
-                                    <span className="text-slate-300">—</span>
-                                  ) : (
-                                    <span className={row.attendanceRate >= 80 ? "text-green-600" : row.attendanceRate >= 60 ? "text-amber-600" : "text-red-500"}>
-                                      {row.attendanceRate}%
-                                    </span>
-                                  )}
-                                </td>
-                                <td className="py-2 pr-3 text-slate-600">{row.ratedSkillsCount}</td>
-                                <td className="py-2">
-                                  {row.retention === null ? (
-                                    <span className="text-slate-300">—</span>
-                                  ) : (
-                                    <span className={row.retention >= 80 ? "text-green-600" : row.retention >= 60 ? "text-amber-600" : "text-red-500"}>
-                                      {row.retention}%
-                                    </span>
-                                  )}
-                                </td>
-                              </tr>
-                            ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
                 <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4">
                   <div className="text-xs text-slate-400 mb-3">Revenue trend — last 6 months</div>
                   <div className="flex items-end gap-3 h-28">
@@ -10161,6 +10135,189 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 </div>
               </div>
             )}
+          </div>
+        );
+      })()}
+
+      {tab === "coachperformance" && (canViewFinancialReports || can("viewCoachReports")) && (() => {
+        const monthOptions = [];
+        for (let i = 0; i < 12; i++) {
+          const d = new Date();
+          d.setDate(1);
+          d.setMonth(d.getMonth() - i);
+          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+          monthOptions.push({ key, label: monthLabel(key) });
+        }
+        const selectedMonthKey = coachPerfMonth || monthKey();
+        const monthStartISO = `${selectedMonthKey}-01`;
+        const monthEndDate = new Date(Number(selectedMonthKey.slice(0, 4)), Number(selectedMonthKey.slice(5, 7)), 0);
+        const monthEndISO = toISODate(monthEndDate);
+        const prevMonthDate = new Date(Number(selectedMonthKey.slice(0, 4)), Number(selectedMonthKey.slice(5, 7)) - 2, 1);
+        const prevSelectedMonthKey = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, "0")}`;
+        const prevMonthStartISO = `${prevSelectedMonthKey}-01`;
+        const prevMonthEndDate = new Date(Number(prevSelectedMonthKey.slice(0, 4)), Number(prevSelectedMonthKey.slice(5, 7)), 0);
+        const prevMonthEndISO = toISODate(prevMonthEndDate);
+
+        const allCoachStats = coaches.map((c) => {
+          const mySwimmers = swimmers.filter((s) => s.coachId === c.id || s.coachId2 === c.id);
+          const myActiveSwimmers = mySwimmers.filter((s) => s.day && s.time);
+
+          const attendanceRateForRange = (rStartISO, rEndISO) => {
+            let presentCount = 0;
+            let totalMarked = 0;
+            mySwimmers.forEach((s) => {
+              Object.keys(s.attendance || {}).forEach((date) => {
+                if (!inRange(date, rStartISO, rEndISO)) return;
+                totalMarked++;
+                if (s.attendance[date] === "present") presentCount++;
+              });
+            });
+            return totalMarked > 0 ? Math.round((presentCount / totalMarked) * 100) : null;
+          };
+          const attendanceRate = attendanceRateForRange(monthStartISO, monthEndISO);
+          const prevAttendanceRate = attendanceRateForRange(prevMonthStartISO, prevMonthEndISO);
+          const attendanceTrend = attendanceRate !== null && prevAttendanceRate !== null ? attendanceRate - prevAttendanceRate : null;
+
+          const ratedSwimmerCount = myActiveSwimmers.filter((s) =>
+            Object.values(s.skills || {}).some((levelSkills) => Object.values(levelSkills || {}).some((v) => v > 0))
+          ).length;
+          const skillsCoverage = myActiveSwimmers.length > 0 ? Math.round((ratedSwimmerCount / myActiveSwimmers.length) * 100) : null;
+
+          const myActiveInPrevMonth = mySwimmers.filter((s) => {
+            const sched = (s.scheduleHistory || []).find((h) => (h.date || "").slice(0, 7) === prevSelectedMonthKey && h.coachId === c.id);
+            return !!sched || (s.coachId === c.id && s.day && s.time && (s.createdAt || "").slice(0, 7) <= prevSelectedMonthKey);
+          });
+          const myStillWithMe = myActiveInPrevMonth.filter((s) => s.coachId === c.id && s.day && s.time);
+          const coachRetention = myActiveInPrevMonth.length ? Math.round((myStillWithMe.length / myActiveInPrevMonth.length) * 100) : null;
+
+          const scoreParts = [attendanceRate, skillsCoverage, coachRetention].filter((v) => v !== null);
+          const overallScore = scoreParts.length > 0 ? Math.round(scoreParts.reduce((a, b) => a + b, 0) / scoreParts.length) : null;
+
+          return {
+            coach: c,
+            activeCount: myActiveSwimmers.length,
+            attendanceRate,
+            attendanceTrend,
+            skillsCoverage,
+            retention: coachRetention,
+            overallScore,
+          };
+        });
+
+        const filteredStats = coachPerfCoachFilter === "all" ? allCoachStats : allCoachStats.filter((r) => r.coach.id === coachPerfCoachFilter);
+        const topThree = allCoachStats
+          .filter((r) => r.overallScore !== null)
+          .sort((a, b) => b.overallScore - a.overallScore)
+          .slice(0, 3);
+        const medals = ["🥇", "🥈", "🥉"];
+
+        return (
+          <div>
+            <div className="flex flex-wrap items-center gap-3 mb-6">
+              <select
+                value={coachPerfCoachFilter}
+                onChange={(e) => setCoachPerfCoachFilter(e.target.value)}
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+              >
+                <option value="all">{t("allCoaches")}</option>
+                {coaches.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+              <select
+                value={selectedMonthKey}
+                onChange={(e) => setCoachPerfMonth(e.target.value)}
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+              >
+                {monthOptions.map((m) => (
+                  <option key={m.key} value={m.key}>{m.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {coachPerfCoachFilter === "all" && (
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+                <h3 className="font-bold text-slate-900 mb-1">{t("topCoachesTitle")}</h3>
+                <p className="text-xs text-slate-400 mb-4">{t("topCoachesSub")}</p>
+                {topThree.length === 0 ? (
+                  <div className="text-sm text-slate-400 text-center py-6">{t("notEnoughData")}</div>
+                ) : (
+                  <div className="grid sm:grid-cols-3 gap-3">
+                    {topThree.map((row, i) => (
+                      <div key={row.coach.id} className="border border-slate-100 rounded-xl p-4 text-center">
+                        <div className="text-3xl mb-1">{medals[i]}</div>
+                        <div className="font-semibold text-slate-800">{row.coach.name}</div>
+                        <div className="text-xs text-slate-400 mb-2">{t("overallScore")}</div>
+                        <div className="text-2xl font-bold text-blue-950">{row.overallScore}%</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="bg-white rounded-2xl border border-slate-200 p-4">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
+                      <th className="pb-2 pr-3">{t("coach")}</th>
+                      <th className="pb-2 pr-3">{t("swimmersCol")}</th>
+                      <th className="pb-2 pr-3">{t("attendanceCol")}</th>
+                      <th className="pb-2 pr-3">{t("skillsCoverageCol")}</th>
+                      <th className="pb-2">{t("retentionCol")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredStats
+                      .sort((a, b) => b.activeCount - a.activeCount)
+                      .map((row) => (
+                        <tr key={row.coach.id} className="border-b border-slate-50 last:border-0">
+                          <td className="py-2 pr-3 font-medium text-slate-700">{row.coach.name}</td>
+                          <td className="py-2 pr-3 text-slate-600">{row.activeCount}</td>
+                          <td className="py-2 pr-3">
+                            {row.attendanceRate === null ? (
+                              <span className="text-slate-300">—</span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1">
+                                <span className={row.attendanceRate >= 80 ? "text-green-600" : row.attendanceRate >= 60 ? "text-amber-600" : "text-red-500"}>
+                                  {row.attendanceRate}%
+                                </span>
+                                {row.attendanceTrend !== null && row.attendanceTrend !== 0 && (
+                                  <span
+                                    className={`text-xs ${row.attendanceTrend > 0 ? "text-green-500" : "text-red-400"}`}
+                                    title={`${row.attendanceTrend > 0 ? "+" : ""}${row.attendanceTrend}%`}
+                                  >
+                                    {row.attendanceTrend > 0 ? "↑" : "↓"}
+                                  </span>
+                                )}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2 pr-3">
+                            {row.skillsCoverage === null ? (
+                              <span className="text-slate-300">—</span>
+                            ) : (
+                              <span className={row.skillsCoverage >= 80 ? "text-green-600" : row.skillsCoverage >= 50 ? "text-amber-600" : "text-red-500"}>
+                                {row.skillsCoverage}%
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2">
+                            {row.retention === null ? (
+                              <span className="text-slate-300">—</span>
+                            ) : (
+                              <span className={row.retention >= 80 ? "text-green-600" : row.retention >= 60 ? "text-amber-600" : "text-red-500"}>
+                                {row.retention}%
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         );
       })()}
@@ -16568,6 +16725,19 @@ const TRANSLATIONS = {
     fullReports: "Full reports",
     staffChat: "Staff chat",
     renewNow: "Renew now",
+    coachPerformance: "Coach performance",
+    thisPeriod: "this period",
+    coach: "Coach",
+    swimmersCol: "Swimmers",
+    attendanceCol: "Attendance",
+    skillsCoverageCol: "Skills coverage",
+    retentionCol: "Retention",
+    allCoaches: "All coaches",
+    selectMonth: "Month",
+    topCoachesTitle: "Top 3 coaches this month",
+    topCoachesSub: "Ranked by a combined score of attendance, retention and skills coverage",
+    notEnoughData: "Not enough data yet for this month",
+    overallScore: "Score",
   },
   ar: {
     newRegistration: "تسجيل سباح جديد",
@@ -16663,6 +16833,19 @@ const TRANSLATIONS = {
     fullReports: "التقارير الكاملة",
     staffChat: "شات الفريق",
     renewNow: "جدّد دلوقتي",
+    coachPerformance: "أداء الكباتن",
+    thisPeriod: "الفترة دي",
+    coach: "الكابتن",
+    swimmersCol: "السباحين",
+    attendanceCol: "الحضور",
+    skillsCoverageCol: "تغطية التقييمات",
+    retentionCol: "الاحتفاظ",
+    allCoaches: "كل الكباتن",
+    selectMonth: "الشهر",
+    topCoachesTitle: "أفضل 3 كباتن الشهر ده",
+    topCoachesSub: "الترتيب حسب مجموع نسبة الحضور، الاحتفاظ، وتغطية التقييمات",
+    notEnoughData: "لسه مفيش بيانات كفاية للشهر ده",
+    overallScore: "التقييم",
   },
 };
 
