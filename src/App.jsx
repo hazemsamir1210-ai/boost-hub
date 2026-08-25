@@ -2915,6 +2915,7 @@ function SuccessScreen({ record, onHome }) {
    pending until an admin reviews and approves it, and only at that point
    does an actual swimmer record get created. */
 function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
+  const { t, dir } = useLang();
   const [swimmerName, setSwimmerName] = useState("");
   const [age, setAge] = useState("");
   const [phone, setPhone] = useState("");
@@ -2954,16 +2955,16 @@ function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
   };
 
   return (
-    <div className="max-w-md mx-auto px-4 py-10">
+    <div className="max-w-md mx-auto px-4 py-10" dir={dir}>
       <button onClick={onBack} className="flex items-center gap-1 text-slate-400 hover:text-slate-600 text-sm mb-6">
-        <ChevronLeft className="w-4 h-4" /> Back
+        <ChevronLeft className="w-4 h-4" /> {t("back")}
       </button>
-      <h2 className="text-xl font-bold text-slate-900 mb-1">New swimmer registration</h2>
-      <p className="text-sm text-slate-500 mb-6">Fill this in once to register — payment is a separate step afterward, once you\'re confirmed.</p>
+      <h2 className="text-xl font-bold text-slate-900 mb-1">{t("newSwimmerRegTitle")}</h2>
+      <p className="text-sm text-slate-500 mb-6">{t("newSwimmerRegSub")}</p>
 
       <div className="space-y-4">
         <div>
-          <label className="text-xs text-slate-500 mb-1 block">Swimmer\'s name</label>
+          <label className="text-xs text-slate-500 mb-1 block">{t("swimmerName")}</label>
           <input
             value={swimmerName}
             onChange={(e) => setSwimmerName(e.target.value)}
@@ -2971,7 +2972,7 @@ function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
           />
         </div>
         <div>
-          <label className="text-xs text-slate-500 mb-1 block">Age</label>
+          <label className="text-xs text-slate-500 mb-1 block">{t("age")}</label>
           <input
             type="number"
             min="0"
@@ -2981,7 +2982,7 @@ function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
           />
         </div>
         <div>
-          <label className="text-xs text-slate-500 mb-1 block">Parent/guardian name</label>
+          <label className="text-xs text-slate-500 mb-1 block">{t("parentGuardianName")}</label>
           <input
             value={parentName}
             onChange={(e) => setParentName(e.target.value)}
@@ -2989,7 +2990,7 @@ function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
           />
         </div>
         <div>
-          <label className="text-xs text-slate-500 mb-1 block">Phone number</label>
+          <label className="text-xs text-slate-500 mb-1 block">{t("phoneNumber")}</label>
           <input
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
@@ -3004,7 +3005,7 @@ function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
             onClick={() => setWaiverExpanded((v) => !v)}
             className="text-xs text-blue-900 hover:underline mb-2"
           >
-            {waiverExpanded ? "Hide" : "Read"} liability waiver & terms
+            {waiverExpanded ? t("hideWaiver") : t("readWaiver")} {t("waiverAndTerms")}
           </button>
           {waiverExpanded && <div className="text-xs text-slate-500 leading-relaxed mb-2 max-h-40 overflow-y-auto pr-1">{WAIVER_TEXT}</div>}
           <label className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
@@ -3014,7 +3015,7 @@ function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
               onChange={(e) => setWaiverAccepted(e.target.checked)}
               className="w-4 h-4 mt-0.5 shrink-0"
             />
-            I have read and agree to the liability waiver and terms above.
+            {t("agreeToWaiver")}
           </label>
         </div>
 
@@ -3026,7 +3027,7 @@ function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
           className="w-full py-3.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60 flex items-center justify-center gap-2"
         >
           {submitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-          {submitting ? "Sending..." : "Submit registration"}
+          {submitting ? t("sending") : t("submitRegistration")}
         </button>
       </div>
     </div>
@@ -3182,6 +3183,7 @@ function PaymobPayButton({ amount, description, customerName, customerMobile, cu
 }
 
 function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
+  const { t, dir } = useLang();
   const [planId, setPlanId] = useState(initialPlanId || PLANS[0].id);
   const [name, setName] = useState(initialSwimmer?.name || "");
   const [phone, setPhone] = useState(initialSwimmer?.phone || "");
@@ -3296,13 +3298,13 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
   };
 
   return (
-    <div className="max-w-xl mx-auto px-4 py-10">
+    <div className="max-w-xl mx-auto px-4 py-10" dir={dir}>
       <button onClick={onBack} className="flex items-center gap-1 text-slate-500 hover:text-slate-700 mb-6 text-sm">
-        <ChevronLeft className="w-4 h-4" /> Back
+        <ChevronLeft className="w-4 h-4" /> {t("back")}
       </button>
 
-      <h2 className="text-2xl font-bold text-slate-900 mb-1">Confirm subscription</h2>
-      <p className="text-slate-500 mb-6">Choose a plan and send your payment proof</p>
+      <h2 className="text-2xl font-bold text-slate-900 mb-1">{t("confirmSubscription")}</h2>
+      <p className="text-slate-500 mb-6">{t("choosePlanAndSend")}</p>
 
       {bookingLocked && (
         <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-xl px-4 py-3 mb-6">
@@ -3310,7 +3312,7 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
           <strong>
             {new Date(bookingOpenDate + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "long" })}
           </strong>
-          . Feel free to fill in the form now and come back to send it then.
+          . {t("comeBackLater")}
         </div>
       )}
 
@@ -3333,21 +3335,21 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
             isCustom ? "border-blue-900 bg-blue-50" : "border-slate-200 bg-white hover:border-slate-300"
           }`}
         >
-          <div className="font-semibold text-slate-900 text-sm">Open amount</div>
-          <div className="text-blue-900 font-bold text-sm">Enter amount</div>
+          <div className="font-semibold text-slate-900 text-sm">{t("openAmount")}</div>
+          <div className="text-blue-900 font-bold text-sm">{t("enterAmount")}</div>
         </button>
       </div>
 
       {isCustom && (
         <div className="mb-6">
-          <label className="text-sm text-slate-600 mb-1 block">Amount (EGP)</label>
+          <label className="text-sm text-slate-600 mb-1 block">{t("amountEGP")}</label>
           <input
             type="number"
             min="1"
             value={customAmount}
             onChange={(e) => setCustomAmount(e.target.value)}
             className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900"
-            placeholder="Enter the amount you're transferring"
+            placeholder={t("enterAmountPlaceholder")}
           />
         </div>
       )}
@@ -3372,7 +3374,7 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
       <div className="bg-blue-950 text-white rounded-2xl p-5 mb-6">
         {CONFIG.instapayHandle ? (
           <>
-            <div className="text-sm text-blue-100 mb-1">Or transfer {plan.price || "..."} EGP via Instapay to:</div>
+            <div className="text-sm text-blue-100 mb-1">{t("orTransferVia").replace("{amount}", plan.price || "...")}</div>
             <a
               href={CONFIG.instapayLink}
               target="_blank"
@@ -3395,33 +3397,33 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
                 </button>
               </span>
             </a>
-            <div className="text-xs text-blue-200 mb-1">Tap above to open the Instapay app directly</div>
-            {copied && <div className="text-xs text-blue-200 mb-2">Copied ✓</div>}
-            <div className="text-xs text-blue-100">or mobile number: {CONFIG.instapayPhone}</div>
+            <div className="text-xs text-blue-200 mb-1">{t("tapToOpenInstapay")}</div>
+            {copied && <div className="text-xs text-blue-200 mb-2">{t("copied")}</div>}
+            <div className="text-xs text-blue-100">{t("orMobileNumber")} {CONFIG.instapayPhone}</div>
           </>
         ) : (
           <div className="text-sm text-blue-100">
-            This academy hasn't set up its payment details yet — please contact them directly to arrange payment.
+            {t("paymentNotSetUp")}
           </div>
         )}
       </div>
 
       <div className="space-y-4">
         <div>
-          <label className="text-sm text-slate-600 mb-1 block">Full name</label>
+          <label className="text-sm text-slate-600 mb-1 block">{t("fullName")}</label>
           <div className="relative">
             <User className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="w-full border border-slate-200 rounded-xl py-3 pl-10 pr-3 outline-none focus:border-blue-900"
-              placeholder="Your name"
+              placeholder={t("yourName")}
             />
           </div>
         </div>
 
         <div>
-          <label className="text-sm text-slate-600 mb-1 block">Mobile number</label>
+          <label className="text-sm text-slate-600 mb-1 block">{t("mobileNumber")}</label>
           <div className="relative">
             <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
             <input
@@ -3436,26 +3438,26 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
         {name.trim().length >= 2 && (
           <div>
             <label className="text-sm text-slate-600 mb-1 block">
-              Already a registered swimmer? <span className="text-slate-400 font-normal">(optional, but helps us link your payment)</span>
+              {t("alreadyRegistered")} <span className="text-slate-400 font-normal">{t("optionalHelpsLink")}</span>
             </label>
             <select
               value={swimmerId}
               onChange={(e) => setSwimmerId(e.target.value)}
               className="w-full border border-slate-200 rounded-xl py-3 px-3 outline-none focus:border-blue-900 bg-white"
             >
-              <option value="">— Select the swimmer's name —</option>
+              <option value="">{t("selectSwimmerName")}</option>
               {existingSwimmers.map((s) => (
                 <option key={s.id} value={s.id}>{s.name} ({s.age} yrs)</option>
               ))}
             </select>
             <div className="text-xs text-slate-400 mt-1">
-              Paying from a different phone than the one on file? Pick the name here so it still gets linked correctly.
+              {t("differentPhone")}
             </div>
           </div>
         )}
 
         <div>
-          <label className="text-sm text-slate-600 mb-1 block">Payment screenshot</label>
+          <label className="text-sm text-slate-600 mb-1 block">{t("paymentScreenshot")}</label>
           <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={(e) => handleFile(e.target.files?.[0])} />
           {!preview ? (
             <button
@@ -3463,7 +3465,7 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
               className="w-full border-2 border-dashed border-slate-300 rounded-xl py-8 flex flex-col items-center gap-2 text-slate-400 hover:border-blue-900 hover:text-blue-900 transition"
             >
               <Upload className="w-6 h-6" />
-              <span className="text-sm">Upload the payment screenshot</span>
+              <span className="text-sm">{t("uploadScreenshot")}</span>
             </button>
           ) : (
             <div className="relative">
@@ -3483,7 +3485,7 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
           className="w-full py-3.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60 flex items-center justify-center gap-2"
         >
           {submitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-          {submitting ? "Sending..." : bookingLocked ? "Not open yet" : "Send request"}
+          {submitting ? t("sending") : bookingLocked ? t("notOpenYet") : t("sendRequest")}
         </button>
       </div>
     </div>
@@ -4072,6 +4074,7 @@ function SwimmerSearchInput({ onSearch }) {
 }
 
 function AdminView({ onExit, role = "admin", preAuthed = false, accountName, branchRestriction = null }) {
+  const { t, lang, setLang } = useLang();
   const [authed, setAuthed] = useState(preAuthed);
   const [checkingSession, setCheckingSession] = useState(!preAuthed);
   const [showRenewSubscription, setShowRenewSubscription] = useState(false);
@@ -7625,7 +7628,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               Test storage
             </button>
           )}
-          <button onClick={onExit} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+          <button
+            onClick={() => setLang(lang === "en" ? "ar" : "en")}
+            className="text-xs px-3 py-2 rounded-lg hover:bg-slate-100 text-slate-500 font-semibold whitespace-nowrap"
+          >
+            {lang === "en" ? "العربية" : "English"}
+          </button>
+          <button onClick={onExit} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500" title={t("logOut")}>
             <LogOut className="w-4 h-4" />
           </button>
         </div>
@@ -7647,7 +7656,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             tab === "dashboard" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
           }`}
         >
-          <LayoutGrid className="w-4 h-4" /> Dashboard
+          <LayoutGrid className="w-4 h-4" /> {t("dashboard")}
         </button>
         {canAssignCoaches && (
           <button
@@ -7656,7 +7665,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               tab === "coachassign" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             }`}
           >
-            <Users className="w-4 h-4" /> Coach Assignments
+            <Users className="w-4 h-4" /> {t("coachAssignments")}
           </button>
         )}
         {canEditContent && role !== "technical_director" && (
@@ -7666,7 +7675,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               tab === "registrations" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             }`}
           >
-            <User className="w-4 h-4" /> Registrations
+            <User className="w-4 h-4" /> {t("registrations")}
             {pendingRegistrations.length > 0 && (
               <span className="text-[10px] bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center shrink-0">
                 {pendingRegistrations.length}
@@ -7681,7 +7690,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             tab === "requests" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
           }`}
         >
-          <Bell className="w-4 h-4" /> Payment requests
+          <Bell className="w-4 h-4" /> {t("paymentRequests")}
         </button>
         )}
         {can("viewSwimmers") && (
@@ -7691,7 +7700,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             tab === "swimmers" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
           }`}
         >
-          <Users className="w-4 h-4" /> Swimmers
+          <Users className="w-4 h-4" /> {t("swimmers")}
         </button>
         )}
         {role !== "technical_director" && (
@@ -7701,7 +7710,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             tab === "coaches" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
           }`}
         >
-          <Award className="w-4 h-4" /> Coaches
+          <Award className="w-4 h-4" /> {t("coaches")}
         </button>
         )}
         <button
@@ -7710,7 +7719,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             tab === "schedule" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
           }`}
         >
-          <CalendarDays className="w-4 h-4" /> Schedule
+          <CalendarDays className="w-4 h-4" /> {t("schedule")}
         </button>
         {role !== "technical_director" && (canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && (
         <button
@@ -7719,7 +7728,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             tab === "reports" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
           }`}
         >
-          <CalendarCheck className="w-4 h-4" /> Reports
+          <CalendarCheck className="w-4 h-4" /> {t("reports")}
         </button>
         )}
         {canViewPayroll && role !== "technical_director" && (
@@ -7729,7 +7738,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               tab === "attendance" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             }`}
           >
-            <Clock className="w-4 h-4" /> Attendance
+            <Clock className="w-4 h-4" /> {t("attendance")}
           </button>
         )}
         {canEdit && role !== "technical_director" && (
@@ -7739,7 +7748,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               tab === "accounts" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             }`}
           >
-            <Lock className="w-4 h-4" /> Accounts
+            <Lock className="w-4 h-4" /> {t("accounts")}
           </button>
         )}
         {canEdit && role !== "technical_director" && (
@@ -7749,7 +7758,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               tab === "activity" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             }`}
           >
-            <Clock className="w-4 h-4" /> Activity Log
+            <Clock className="w-4 h-4" /> {t("activityLog")}
           </button>
         )}
         {canEdit && role !== "technical_director" && (
@@ -7759,7 +7768,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               tab === "settings" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             }`}
           >
-            <ShieldCheck className="w-4 h-4" /> Settings
+            <ShieldCheck className="w-4 h-4" /> {t("settings")}
           </button>
         )}
         {canEditContent && role !== "technical_director" && (
@@ -7769,7 +7778,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               tab === "incidents" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             }`}
           >
-            <ShieldCheck className="w-4 h-4" /> Incidents
+            <ShieldCheck className="w-4 h-4" /> {t("incidents")}
           </button>
         )}
         {canEditContent && role !== "technical_director" && (
@@ -7779,7 +7788,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               tab === "feedback" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             }`}
           >
-            <Star className="w-4 h-4" /> Feedback
+            <Star className="w-4 h-4" /> {t("feedback")}
           </button>
         )}
         {(canEditContent || role === "technical_director") && (
@@ -7789,7 +7798,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               tab === "courses" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             }`}
           >
-            <GraduationCap className="w-4 h-4" /> Courses
+            <GraduationCap className="w-4 h-4" /> {t("courses")}
           </button>
         )}
         {(can("manageWaitlist") || canEditContent) && role !== "technical_director" && (
@@ -7799,7 +7808,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               tab === "waitlist" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             }`}
           >
-            <Clock className="w-4 h-4" /> Waitlist
+            <Clock className="w-4 h-4" /> {t("waitlist")}
             {waitlist.length > 0 && (
               <span className="text-[10px] bg-slate-400 text-white rounded-full w-4 h-4 flex items-center justify-center shrink-0">
                 {waitlist.length}
@@ -7814,7 +7823,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               tab === "chat" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
             }`}
           >
-            <Send className="w-4 h-4" /> Chat
+            <Send className="w-4 h-4" /> {t("chat")}
           </button>
         )}
       </div>
@@ -7865,6 +7874,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           .sort((a, b) => new Date(b.cert.date) - new Date(a.cert.date))
           .slice(0, 5);
 
+        const daysLeftInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate() - now.getDate();
+        const needsReminder = activeNow.filter((s) => !isPaidThisMonth(s) && daysLeftInMonth <= 5);
+
         const greeting = now.getHours() < 12 ? "Good morning" : now.getHours() < 18 ? "Good afternoon" : "Good evening";
 
         return (
@@ -7883,7 +7895,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   onClick={() => setShowRenewSubscription(true)}
                   className="px-4 py-2.5 rounded-lg bg-red-600 text-white text-sm font-semibold hover:bg-red-700 shrink-0"
                 >
-                  Renew now
+                  {t("renewNow")}
                 </button>
               </div>
             )}
@@ -7893,6 +7905,39 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 {now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })} · {CONFIG.academyName}
               </p>
             </div>
+
+            {needsReminder.length > 0 && (
+              <div className="bg-white rounded-2xl border border-amber-200 p-5 mb-6">
+                <div className="flex items-center gap-2 mb-1">
+                  <Send className="w-4 h-4 text-amber-600" />
+                  <h3 className="font-semibold text-slate-900">
+                    {needsReminder.length} {t("swimmersHaventPaidPrefix")}{needsReminder.length === 1 ? "" : lang === "ar" ? "ين" : "s"} {t("swimmersHaventPaidSuffix")} {daysLeftInMonth} {t("dayLeftSuffix")}{daysLeftInMonth === 1 ? "" : lang === "ar" ? "" : "s"} {t("daysLeftThisMonth")}
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-400 mb-3">
+                  {t("tapRemindToOpen")}
+                </p>
+                <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                  {needsReminder.map((s) => (
+                    <div key={s.id} className="flex items-center justify-between text-sm bg-slate-50 rounded-lg px-3 py-2">
+                      <span className="text-slate-700">{s.name}</span>
+                      {waLink(s.phone) ? (
+                        <a
+                          href={waLink(s.phone, renewalWaMessage(s))}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-medium text-green-700 hover:bg-green-100"
+                        >
+                          <Send className="w-3 h-3" /> {t("remind")}
+                        </a>
+                      ) : (
+                        <span className="text-xs text-slate-300">{t("noPhoneOnFile")}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {(pendingRegistrations.length > 0 || pendingPaymentRequests > 0) && (
               <div className="flex flex-wrap gap-3 mb-6">
@@ -7904,9 +7949,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
                     <div>
                       <div className="text-sm font-semibold text-amber-900">
-                        {pendingRegistrations.length} new registration{pendingRegistrations.length === 1 ? "" : "s"} waiting
+                        {pendingRegistrations.length} {pendingRegistrations.length === 1 ? t("newRegistrationWaiting") : t("newRegistrationsWaiting")} {t("waiting")}
                       </div>
-                      <div className="text-xs text-amber-600">Needs your approval</div>
+                      <div className="text-xs text-amber-600">{t("needsYourApproval")}</div>
                     </div>
                   </button>
                 )}
@@ -7918,9 +7963,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     <Bell className="w-5 h-5 text-blue-700 shrink-0" />
                     <div>
                       <div className="text-sm font-semibold text-blue-900">
-                        {pendingPaymentRequests} payment{pendingPaymentRequests === 1 ? "" : "s"} to confirm
+                        {pendingPaymentRequests} {pendingPaymentRequests === 1 ? t("paymentToConfirm") : t("paymentsToConfirm")} {t("toConfirm")}
                       </div>
-                      <div className="text-xs text-blue-600">Waiting for review</div>
+                      <div className="text-xs text-blue-600">{t("waitingForReview")}</div>
                     </div>
                   </button>
                 )}
@@ -7930,21 +7975,21 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
               <div className="bg-white rounded-2xl border border-slate-200 p-4">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-slate-400 font-medium">Active swimmers</span>
+                  <span className="text-xs text-slate-400 font-medium">{t("activeSwimmers")}</span>
                   <Users className="w-4 h-4 text-slate-300" />
                 </div>
                 <div className="text-2xl font-bold text-slate-900">{activeNow.length}</div>
               </div>
               <div className="bg-white rounded-2xl border border-slate-200 p-4">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-slate-400 font-medium">Unpaid this month</span>
+                  <span className="text-xs text-slate-400 font-medium">{t("unpaidThisMonth")}</span>
                   <AlertCircle className="w-4 h-4 text-slate-300" />
                 </div>
                 <div className={`text-2xl font-bold ${unpaidCount > 0 ? "text-red-500" : "text-slate-900"}`}>{unpaidCount}</div>
               </div>
               <div className="bg-white rounded-2xl border border-slate-200 p-4">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-slate-400 font-medium">Revenue this month</span>
+                  <span className="text-xs text-slate-400 font-medium">{t("revenueThisMonth")}</span>
                   <TrendingUp className="w-4 h-4 text-slate-300" />
                 </div>
                 <div className="text-2xl font-bold text-slate-900">
@@ -7953,13 +7998,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 </div>
                 {revenueDelta !== null && (
                   <div className={`text-xs mt-0.5 ${revenueDelta >= 0 ? "text-green-600" : "text-red-500"}`}>
-                    {revenueDelta >= 0 ? "↑" : "↓"} {Math.abs(revenueDelta)}% vs last month
+                    {revenueDelta >= 0 ? "↑" : "↓"} {Math.abs(revenueDelta)}% {t("vsLastMonth")}
                   </div>
                 )}
               </div>
               <div className="bg-white rounded-2xl border border-slate-200 p-4">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-slate-400 font-medium">New this week</span>
+                  <span className="text-xs text-slate-400 font-medium">{t("newThisWeek")}</span>
                   <UserPlus className="w-4 h-4 text-slate-300" />
                 </div>
                 <div className="text-2xl font-bold text-slate-900">{newThisWeek}</div>
@@ -7968,7 +8013,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
             <div className="grid lg:grid-cols-2 gap-4 mb-6">
               <div className="bg-white rounded-2xl border border-slate-200 p-5">
-                <div className="text-sm font-semibold text-slate-800 mb-4">Revenue — last 6 months</div>
+                <div className="text-sm font-semibold text-slate-800 mb-4">{t("revenueLast6Months")}</div>
                 <div className="flex items-end gap-3 h-24">
                   {miniTrend.map((m, i) => (
                     <div key={i} className="flex-1 flex flex-col items-center gap-1">
@@ -7985,18 +8030,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
               <div className="bg-white rounded-2xl border border-slate-200 p-5">
                 <div className="flex items-center justify-between mb-4">
-                  <div className="text-sm font-semibold text-slate-800">Recent achievements</div>
+                  <div className="text-sm font-semibold text-slate-800">{t("recentAchievements")}</div>
                   <GraduationCap className="w-4 h-4 text-slate-300" />
                 </div>
                 {recentlyLeveledUp.length === 0 ? (
-                  <div className="text-xs text-slate-400 py-6 text-center">No level-ups recorded yet</div>
+                  <div className="text-xs text-slate-400 py-6 text-center">{t("noLevelUpsYet")}</div>
                 ) : (
                   <div className="space-y-2.5">
                     {recentlyLeveledUp.map(({ swimmer: s, cert }, i) => (
                       <div key={i} className="flex items-center justify-between text-sm">
                         <div>
                           <span className="font-medium text-slate-700">{s.name}</span>
-                          <span className="text-slate-400"> completed {cert.level}</span>
+                          <span className="text-slate-400"> {t("completedLevel")} {cert.level}</span>
                         </div>
                         <span className="text-xs text-slate-400 shrink-0">{new Date(cert.date).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>
                       </div>
@@ -8008,10 +8053,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {[
-                { label: "Add swimmer", icon: UserPlus, onClick: () => { setTab("swimmers"); setTimeout(() => setShowForm(true), 0); } },
-                { label: "View coaches", icon: Users, onClick: () => setTab("coaches") },
-                (canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && { label: "Full reports", icon: TrendingUp, onClick: () => setTab("reports") },
-                { label: "Staff chat", icon: MessageSquare, onClick: () => setTab("chat") },
+                { label: t("addSwimmer"), icon: UserPlus, onClick: () => { setTab("swimmers"); setTimeout(() => setShowForm(true), 0); } },
+                { label: t("viewCoaches"), icon: Users, onClick: () => setTab("coaches") },
+                (canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && { label: t("fullReports"), icon: TrendingUp, onClick: () => setTab("reports") },
+                { label: t("staffChat"), icon: MessageSquare, onClick: () => setTab("chat") },
               ].filter(Boolean).map((action) => (
                 <button
                   key={action.label}
@@ -9511,6 +9556,51 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         const stillActiveThisMonth = activeLastMonth.filter((s) => s.day && s.time);
         const retentionRate = activeLastMonth.length ? Math.round((stillActiveThisMonth.length / activeLastMonth.length) * 100) : null;
 
+        // Coach performance — for each coach: how many swimmers they
+        // currently have, their swimmers' attendance rate this period,
+        // how many skills ratings they've actually recorded (a coach who
+        // never rates anyone leaves parents with no sense of progress),
+        // and retention — of THEIR swimmers active last month, how many
+        // are still with them (not just still at the academy under a
+        // different coach) this month.
+        const coachPerformance = coaches.map((c) => {
+          const mySwimmers = swimmers.filter((s) => s.coachId === c.id || s.coachId2 === c.id);
+          const myActiveSwimmers = mySwimmers.filter((s) => s.day && s.time);
+
+          let presentCount = 0;
+          let totalMarked = 0;
+          mySwimmers.forEach((s) => {
+            Object.keys(s.attendance || {}).forEach((date) => {
+              if (!inRange(date, startISO, endISO)) return;
+              totalMarked++;
+              if (s.attendance[date] === "present") presentCount++;
+            });
+          });
+          const attendanceRate = totalMarked > 0 ? Math.round((presentCount / totalMarked) * 100) : null;
+
+          let ratedSkillsCount = 0;
+          mySwimmers.forEach((s) => {
+            Object.values(s.skills || {}).forEach((levelSkills) => {
+              ratedSkillsCount += Object.values(levelSkills || {}).filter((v) => v > 0).length;
+            });
+          });
+
+          const myActiveLastMonth = mySwimmers.filter((s) => {
+            const sched = (s.scheduleHistory || []).find((h) => (h.date || "").slice(0, 7) === prevMonthKeyForRetention && h.coachId === c.id);
+            return !!sched || (s.coachId === c.id && s.day && s.time && (s.createdAt || "").slice(0, 7) <= prevMonthKeyForRetention);
+          });
+          const myStillWithMe = myActiveLastMonth.filter((s) => s.coachId === c.id && s.day && s.time);
+          const coachRetention = myActiveLastMonth.length ? Math.round((myStillWithMe.length / myActiveLastMonth.length) * 100) : null;
+
+          return {
+            coach: c,
+            activeCount: myActiveSwimmers.length,
+            attendanceRate,
+            ratedSkillsCount,
+            retention: coachRetention,
+          };
+        });
+
         // KPI — this period's income and new signups vs a target of "+20%
         // over the previous period" (same length: last month vs this month,
         // last week vs this week, etc.) rather than a fixed number.
@@ -9947,6 +10037,53 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     </div>
                     <div className={`text-xl font-bold ${retentionRate >= 80 ? "text-green-600" : retentionRate >= 60 ? "text-amber-500" : "text-red-500"}`}>
                       {retentionRate}%
+                    </div>
+                  </div>
+                )}
+                {(canViewFinancialReports || can("viewCoachReports")) && coachPerformance.length > 0 && (
+                  <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4">
+                    <div className="text-xs text-slate-400 mb-3">Coach performance — this period ({label})</div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
+                            <th className="pb-2 pr-3">Coach</th>
+                            <th className="pb-2 pr-3">Swimmers</th>
+                            <th className="pb-2 pr-3">Attendance</th>
+                            <th className="pb-2 pr-3">Skills rated</th>
+                            <th className="pb-2">Retention</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {coachPerformance
+                            .sort((a, b) => b.activeCount - a.activeCount)
+                            .map((row) => (
+                              <tr key={row.coach.id} className="border-b border-slate-50 last:border-0">
+                                <td className="py-2 pr-3 font-medium text-slate-700">{row.coach.name}</td>
+                                <td className="py-2 pr-3 text-slate-600">{row.activeCount}</td>
+                                <td className="py-2 pr-3">
+                                  {row.attendanceRate === null ? (
+                                    <span className="text-slate-300">—</span>
+                                  ) : (
+                                    <span className={row.attendanceRate >= 80 ? "text-green-600" : row.attendanceRate >= 60 ? "text-amber-600" : "text-red-500"}>
+                                      {row.attendanceRate}%
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-2 pr-3 text-slate-600">{row.ratedSkillsCount}</td>
+                                <td className="py-2">
+                                  {row.retention === null ? (
+                                    <span className="text-slate-300">—</span>
+                                  ) : (
+                                    <span className={row.retention >= 80 ? "text-green-600" : row.retention >= 60 ? "text-amber-600" : "text-red-500"}>
+                                      {row.retention}%
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
                 )}
@@ -16328,7 +16465,229 @@ function CoursesPortalView({ onBack }) {
   );
 }
 
+// Bilingual support for the public-facing pages — starting with the
+// homepage, since that's what every visitor (parents, and other academies
+// discovering the platform) sees first. This only covers UI labels this
+// app itself wrote; an academy's own custom text (hero tagline, program
+// descriptions, etc.) stays exactly as that academy typed it, in whichever
+// language they wrote it — translating someone else's own words for them
+// isn't this feature's job. More screens get their own translations over
+// time; this is the foundation the rest builds on.
+const TRANSLATIONS = {
+  en: {
+    newRegistration: "New swimmer registration",
+    subscribeNow: "Subscribe now",
+    courses: "Courses",
+    logIn: "Log in",
+    whosLoggingIn: "Who's logging in?",
+    pickRole: "Pick your role — you'll go straight to your own login",
+    parent: "Parent",
+    parentSub: "Check progress & renew",
+    staff: "Staff",
+    staffSub: "Log in with your username & password",
+    back: "Back",
+    confirmSubscription: "Confirm subscription",
+    choosePlanAndSend: "Choose a plan and send your payment proof",
+    comeBackLater: "Feel free to fill in the form now and come back to send it then.",
+    openAmount: "Open amount",
+    enterAmount: "Enter amount",
+    amountEGP: "Amount (EGP)",
+    enterAmountPlaceholder: "Enter the amount you're transferring",
+    orTransferVia: "Or transfer {amount} EGP via Instapay to:",
+    tapToOpenInstapay: "Tap above to open the Instapay app directly",
+    copied: "Copied ✓",
+    orMobileNumber: "or mobile number:",
+    paymentNotSetUp: "This academy hasn't set up its payment details yet — please contact them directly to arrange payment.",
+    fullName: "Full name",
+    yourName: "Your name",
+    mobileNumber: "Mobile number",
+    alreadyRegistered: "Already a registered swimmer?",
+    optionalHelpsLink: "(optional, but helps us link your payment)",
+    selectSwimmerName: "— Select the swimmer's name —",
+    differentPhone: "Paying from a different phone than the one on file? Pick the name here so it still gets linked correctly.",
+    paymentScreenshot: "Payment screenshot",
+    uploadScreenshot: "Upload the payment screenshot",
+    sending: "Sending...",
+    notOpenYet: "Not open yet",
+    sendRequest: "Send request",
+    newSwimmerRegTitle: "New swimmer registration",
+    newSwimmerRegSub: "Fill this in once to register — payment is a separate step afterward, once you're confirmed.",
+    swimmerName: "Swimmer's name",
+    age: "Age",
+    parentGuardianName: "Parent/guardian name",
+    phoneNumber: "Phone number",
+    hideWaiver: "Hide",
+    readWaiver: "Read",
+    waiverAndTerms: "liability waiver & terms",
+    agreeToWaiver: "I have read and agree to the liability waiver and terms above.",
+    submitRegistration: "Submit registration",
+    // Admin dashboard — sidebar
+    dashboard: "Dashboard",
+    coachAssignments: "Coach Assignments",
+    registrations: "Registrations",
+    paymentRequests: "Payment requests",
+    swimmers: "Swimmers",
+    coaches: "Coaches",
+    schedule: "Schedule",
+    reports: "Reports",
+    attendance: "Attendance",
+    accounts: "Accounts",
+    activityLog: "Activity Log",
+    settings: "Settings",
+    incidents: "Incidents",
+    feedback: "Feedback",
+    waitlist: "Waitlist",
+    chat: "Chat",
+    logOut: "Log out",
+    swimmersHaventPaidPrefix: "swimmer",
+    swimmersHaventPaidSuffix: "still haven't paid —",
+    dayLeftSuffix: "day",
+    daysLeftThisMonth: "left this month",
+    tapRemindToOpen: "Tap \"Remind\" to open WhatsApp with a message ready to send — you still tap Send yourself, nothing goes out on its own.",
+    remind: "Remind",
+    noPhoneOnFile: "No phone on file",
+    newRegistrationWaiting: "new registration",
+    newRegistrationsWaiting: "new registrations",
+    waiting: "waiting",
+    needsYourApproval: "Needs your approval",
+    paymentToConfirm: "payment",
+    paymentsToConfirm: "payments",
+    toConfirm: "to confirm",
+    waitingForReview: "Waiting for review",
+    activeSwimmers: "Active swimmers",
+    unpaidThisMonth: "Unpaid this month",
+    revenueThisMonth: "Revenue this month",
+    vsLastMonth: "vs last month",
+    newThisWeek: "New this week",
+    revenueLast6Months: "Revenue — last 6 months",
+    recentAchievements: "Recent achievements",
+    noLevelUpsYet: "No level-ups recorded yet",
+    completedLevel: "completed",
+    addSwimmer: "Add swimmer",
+    viewCoaches: "View coaches",
+    fullReports: "Full reports",
+    staffChat: "Staff chat",
+    renewNow: "Renew now",
+  },
+  ar: {
+    newRegistration: "تسجيل سباح جديد",
+    subscribeNow: "اشترك الآن",
+    courses: "الكورسات",
+    logIn: "تسجيل الدخول",
+    whosLoggingIn: "مين بيسجّل دخول؟",
+    pickRole: "اختار صفتك — هتوصل لصفحة الدخول بتاعتك على طول",
+    parent: "ولي أمر",
+    parentSub: "تابع تقدّم ابنك وجدد الاشتراك",
+    staff: "فريق العمل",
+    staffSub: "سجّل دخول باليوزر نيم والباسورد",
+    back: "رجوع",
+    confirmSubscription: "تأكيد الاشتراك",
+    choosePlanAndSend: "اختار خطة وابعت إثبات الدفع",
+    comeBackLater: "تقدر تملي الفورم دلوقتي وترجع تبعته بعد كده.",
+    openAmount: "مبلغ مفتوح",
+    enterAmount: "دخّل المبلغ",
+    amountEGP: "المبلغ (جنيه)",
+    enterAmountPlaceholder: "اكتب المبلغ اللي هتحوّله",
+    orTransferVia: "أو حوّل {amount} جنيه عن طريق إنستاباي لـ:",
+    tapToOpenInstapay: "دوس فوق عشان يفتح تطبيق إنستاباي مباشرة",
+    copied: "اتنسخ ✓",
+    orMobileNumber: "أو رقم الموبايل:",
+    paymentNotSetUp: "الأكاديمية دي لسه مظبطتش بيانات الدفع بتاعتها — كلّميهم مباشرة لترتيب الدفع.",
+    fullName: "الاسم بالكامل",
+    yourName: "اسمك",
+    mobileNumber: "رقم الموبايل",
+    alreadyRegistered: "مسجّل عندنا بالفعل؟",
+    optionalHelpsLink: "(اختياري، بس بيساعدنا نربط الدفع بحسابك)",
+    selectSwimmerName: "— اختار اسم السباح —",
+    differentPhone: "بتدفع من موبايل مختلف عن اللي مسجّل عندنا؟ اختار الاسم هنا عشان يترابط صح.",
+    paymentScreenshot: "صورة إثبات الدفع",
+    uploadScreenshot: "ارفع صورة إثبات الدفع",
+    sending: "بيتبعت...",
+    notOpenYet: "لسه مش متاح",
+    sendRequest: "ابعت الطلب",
+    newSwimmerRegTitle: "تسجيل سباح جديد",
+    newSwimmerRegSub: "املي البيانات دي مرة واحدة للتسجيل — الدفع خطوة منفصلة بعد كده، لما تتأكدي.",
+    swimmerName: "اسم السباح",
+    age: "السن",
+    parentGuardianName: "اسم ولي الأمر",
+    phoneNumber: "رقم التليفون",
+    hideWaiver: "إخفاء",
+    readWaiver: "اقرأ",
+    waiverAndTerms: "إقرار المسؤولية والشروط",
+    agreeToWaiver: "قرأت ووافقت على إقرار المسؤولية والشروط اللي فوق.",
+    submitRegistration: "ابعت التسجيل",
+    // Admin dashboard — sidebar
+    dashboard: "الرئيسية",
+    coachAssignments: "توزيع الكباتن",
+    registrations: "طلبات التسجيل",
+    paymentRequests: "طلبات الدفع",
+    swimmers: "السباحين",
+    coaches: "الكباتن",
+    schedule: "الجدول",
+    reports: "التقارير",
+    attendance: "الحضور",
+    accounts: "الحسابات",
+    activityLog: "سجل النشاط",
+    settings: "الإعدادات",
+    incidents: "الحوادث",
+    feedback: "التقييمات",
+    waitlist: "قايمة الانتظار",
+    chat: "الشات",
+    logOut: "تسجيل الخروج",
+    swimmersHaventPaidPrefix: "سباح",
+    swimmersHaventPaidSuffix: "لسه مادفعوش —",
+    dayLeftSuffix: "يوم",
+    daysLeftThisMonth: "باقي على نهاية الشهر",
+    tapRemindToOpen: "دوسي \"Remind\" عشان يفتح واتساب برسالة جاهزة — إنتي بس اللي تدوسي إرسال، مفيش حاجة بتتبعت لوحدها.",
+    remind: "تذكير",
+    noPhoneOnFile: "مفيش رقم موبايل مسجّل",
+    newRegistrationWaiting: "طلب تسجيل جديد",
+    newRegistrationsWaiting: "طلبات تسجيل جديدة",
+    waiting: "في الانتظار",
+    needsYourApproval: "محتاج موافقتك",
+    paymentToConfirm: "دفعة",
+    paymentsToConfirm: "دفعات",
+    toConfirm: "محتاجة تأكيد",
+    waitingForReview: "في انتظار المراجعة",
+    activeSwimmers: "السباحين النشطين",
+    unpaidThisMonth: "مادفعوش الشهر ده",
+    revenueThisMonth: "إيرادات الشهر ده",
+    vsLastMonth: "مقارنة بالشهر اللي فات",
+    newThisWeek: "جدد الأسبوع ده",
+    revenueLast6Months: "الإيرادات — آخر 6 شهور",
+    recentAchievements: "آخر الإنجازات",
+    noLevelUpsYet: "مفيش ترقيات مسجّلة لسه",
+    completedLevel: "خلّص",
+    addSwimmer: "إضافة سباح",
+    viewCoaches: "عرض الكباتن",
+    fullReports: "التقارير الكاملة",
+    staffChat: "شات الفريق",
+    renewNow: "جدّد دلوقتي",
+  },
+};
+
+function useLang() {
+  const [lang, setLangState] = useState(() => {
+    try {
+      return localStorage.getItem("academyLang") || "en";
+    } catch {
+      return "en";
+    }
+  });
+  const setLang = (l) => {
+    try {
+      localStorage.setItem("academyLang", l);
+    } catch {
+      // best-effort — the choice just won't survive a reload
+    }
+    setLangState(l);
+  };
+  const t = (key) => TRANSLATIONS[lang]?.[key] ?? TRANSLATIONS.en[key] ?? key;
+  return { lang, setLang, t, dir: lang === "ar" ? "rtl" : "ltr" };
+}
+
 function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff, onStaffPortal, onParentPortal }) {
+  const { lang, setLang, t, dir } = useLang();
   const hasPhotos = CONFIG.heroPhotos && CONFIG.heroPhotos.length > 0;
   const [menuOpen, setMenuOpen] = useState(false);
   const [loginPickerOpen, setLoginPickerOpen] = useState(false);
@@ -16347,17 +16706,24 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
   // through the same "Staff login" username+password screen, which
   // figures out their role and sends them to the right dashboard itself.
   const roleOptions = [
-    { label: "Parent", sub: "Check progress & renew", icon: Star, onClick: onParentPortal },
-    { label: "Staff", sub: "Log in with your username & password", icon: Lock, onClick: onStaffPortal },
+    { label: t("parent"), sub: t("parentSub"), icon: Star, onClick: onParentPortal },
+    { label: t("staff"), sub: t("staffSub"), icon: Lock, onClick: onStaffPortal },
   ];
   const menuItems = [
-    { label: "New swimmer registration", icon: User, onClick: onNewRegistration },
-    { label: "Subscribe now", icon: Waves, onClick: () => onChoosePlan(null) },
-    { label: "Courses", icon: GraduationCap, onClick: onCourses },
-    { label: "Log in", icon: Lock, onClick: () => setLoginPickerOpen(true) },
+    { label: t("newRegistration"), icon: User, onClick: onNewRegistration },
+    { label: t("subscribeNow"), icon: Waves, onClick: () => onChoosePlan(null) },
+    { label: t("courses"), icon: GraduationCap, onClick: onCourses },
+    { label: t("logIn"), icon: Lock, onClick: () => setLoginPickerOpen(true) },
   ];
   return (
-    <div>
+    <div dir={dir}>
+      <button
+        onClick={() => setLang(lang === "en" ? "ar" : "en")}
+        className="fixed top-4 z-50 px-3 py-1.5 rounded-full bg-white/95 shadow-lg text-xs font-semibold text-blue-950 hover:bg-white transition"
+        style={dir === "rtl" ? { left: "1rem" } : { right: "1rem" }}
+      >
+        {lang === "en" ? "العربية" : "English"}
+      </button>
       {menuOpen && <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />}
       <div className="fixed top-4 left-4 z-50">
         <button
@@ -16390,12 +16756,12 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
         <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center px-4" onClick={() => setLoginPickerOpen(false)}>
           <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-1">
-              <h3 className="text-lg font-bold text-slate-900">Who's logging in?</h3>
+              <h3 className="text-lg font-bold text-slate-900">{t("whosLoggingIn")}</h3>
               <button onClick={() => setLoginPickerOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <p className="text-sm text-slate-400 mb-4">Pick your role — you'll go straight to your own login</p>
+            <p className="text-sm text-slate-400 mb-4">{t("pickRole")}</p>
             <div className="space-y-2">
               {roleOptions.map((opt) => (
                 <button
@@ -16414,6 +16780,7 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
           </div>
         </div>
       )}
+
 
       <section className="relative text-white overflow-hidden" style={{ backgroundColor: CONFIG.primaryColor }}>
         {hasPhotos && (
