@@ -4561,6 +4561,53 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
   };
 
+  // ---- Settings: WhatsApp payment reminders (this academy's own credentials) ----
+  const [whatsappCreds, setWhatsappCreds] = useState({
+    whatsappPhoneNumberId: "", whatsappAccessToken: "", whatsappTemplateName: "",
+  });
+  const [whatsappReminderDays, setWhatsappReminderDays] = useState(3);
+  const [whatsappStatus, setWhatsappStatus] = useState({ configured: false, templateName: null });
+  const [whatsappSaving, setWhatsappSaving] = useState(false);
+  const [whatsappSaved, setWhatsappSaved] = useState(false);
+  const [whatsappError, setWhatsappError] = useState("");
+
+  const loadWhatsappStatus = useCallback(() => {
+    if (!window.__academy?.id) return;
+    fetch(`/api/whatsapp-credentials-status?academyId=${window.__academy.id}`)
+      .then((r) => r.json())
+      .then((s) => {
+        setWhatsappStatus({ configured: !!s.configured, templateName: s.templateName || null });
+        if (s.reminderDaysBefore != null) setWhatsappReminderDays(s.reminderDaysBefore);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (settingsSubTab === "whatsapp") loadWhatsappStatus();
+  }, [settingsSubTab, loadWhatsappStatus]);
+
+  const saveWhatsappCreds = async () => {
+    setWhatsappError("");
+    setWhatsappSaved(false);
+    setWhatsappSaving(true);
+    try {
+      const res = await fetch("/api/save-whatsapp-credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ academyId: window.__academy.id, ...whatsappCreds, whatsappReminderDaysBefore: whatsappReminderDays }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "Could not save");
+      setWhatsappSaved(true);
+      loadWhatsappStatus();
+      setWhatsappCreds({ whatsappPhoneNumberId: "", whatsappAccessToken: "", whatsappTemplateName: "" });
+    } catch (e) {
+      setWhatsappError(e.message || "Could not save — please try again");
+    } finally {
+      setWhatsappSaving(false);
+    }
+  };
+
   const [showSkillsModal, setShowSkillsModal] = useState(false);
   const [settingsSignature, setSettingsSignature] = useState("");
   const [settingsInstapayHandle, setSettingsInstapayHandle] = useState("");
@@ -11243,6 +11290,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               { id: "homepage", label: "Homepage" },
               { id: "skills", label: "Skills & Levels" },
               { id: "payments", label: "Online payments" },
+              { id: "whatsapp", label: "WhatsApp reminders" },
               { id: "backup", label: "Backup" },
               ...(role === "admin" ? [{ id: "password", label: "Password" }] : []),
             ].map((t) => (
@@ -12001,6 +12049,77 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 {paymentCredsSaving ? "Saving..." : "Save"}
               </button>
               {paymentCredsSaved === "paymob" && <span className="ml-2 text-sm text-green-700">Saved.</span>}
+            </div>
+          </div>
+          )}
+
+          {settingsSubTab === "whatsapp" && (
+          <div>
+            <h3 className="font-bold text-slate-900 mb-1">WhatsApp payment reminders</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              Sends an automatic WhatsApp message to any swimmer who hasn't paid yet, a few days before the month ends — no one has to remember to send it by hand. Needs your own WhatsApp Business API account (Meta Business Suite) with an approved message template.
+            </p>
+            {whatsappError && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-3">{whatsappError}</div>}
+
+            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-semibold text-slate-800">Connection</h4>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${whatsappStatus.configured ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"}`}>
+                  {whatsappStatus.configured ? "Connected" : "Not set up"}
+                </span>
+              </div>
+              <div className="grid sm:grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Phone Number ID</label>
+                  <input
+                    value={whatsappCreds.whatsappPhoneNumberId}
+                    onChange={(e) => setWhatsappCreds({ ...whatsappCreds, whatsappPhoneNumberId: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    placeholder={whatsappStatus.configured ? "•••••••• (already set)" : "From Meta developer console"}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Access Token</label>
+                  <input
+                    type="password"
+                    value={whatsappCreds.whatsappAccessToken}
+                    onChange={(e) => setWhatsappCreds({ ...whatsappCreds, whatsappAccessToken: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    placeholder={whatsappStatus.configured ? "•••••••• (already set)" : "A permanent System User token"}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Approved template name</label>
+                  <input
+                    value={whatsappCreds.whatsappTemplateName}
+                    onChange={(e) => setWhatsappCreds({ ...whatsappCreds, whatsappTemplateName: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    placeholder={whatsappStatus.templateName || "e.g. payment_reminder"}
+                  />
+                  <div className="text-xs text-slate-400 mt-1">
+                    The template's body should expect 2 variables in order: swimmer's name, then academy name.
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Remind this many days before month-end</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="15"
+                    value={whatsappReminderDays}
+                    onChange={(e) => setWhatsappReminderDays(Number(e.target.value))}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  />
+                </div>
+              </div>
+              <button
+                onClick={saveWhatsappCreds}
+                disabled={whatsappSaving}
+                className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+              >
+                {whatsappSaving ? "Saving..." : "Save"}
+              </button>
+              {whatsappSaved && <span className="ml-2 text-sm text-green-700">Saved.</span>}
             </div>
           </div>
           )}
