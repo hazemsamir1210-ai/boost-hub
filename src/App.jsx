@@ -611,6 +611,17 @@ function sessionTypeInfo(id) {
   return SESSION_TYPES.find((t) => t.id === id) || SESSION_TYPES[2];
 }
 
+// Lower number = higher priority (offered a spot first). "Existing" and
+// "New" are set automatically when someone joins the waitlist; "Sibling"
+// and "Returning" are staff calls — set manually from the Waitlist tab
+// since the system has no reliable way to detect either on its own.
+const WAITLIST_PRIORITY_TIERS = [
+  { value: 1, label: "Existing student" },
+  { value: 2, label: "Sibling" },
+  { value: 3, label: "Returning student" },
+  { value: 4, label: "New student" },
+];
+
 // Exp / Exp 2 / Exp 3 are small groups — capped at 2 swimmers, not the
 // usual Group capacity — everywhere a "how full is this slot" check
 // happens should use this instead of sessionTypeInfo(...).capacity alone.
@@ -1693,7 +1704,48 @@ async function loadCollection(storeKey) {
 }
 
 async function saveCollection(storeKey, list) {
-  return storageSet(storeKey, JSON.stringify(list), true);
+  const res = await storageSet(storeKey, JSON.stringify(list), true);
+  // The "swimmers" table is a SEPARATE, denormalized copy of this same
+  // data — kept only so search/pagination/session-roster queries can hit
+  // Supabase directly instead of pulling the whole roster into memory.
+  // Nothing else writes to it, so every save through here has to mirror
+  // into it too, or that table just silently goes stale and every read
+  // that depends on it (search, coach/staff rosters, capacity checks)
+  // starts returning nothing.
+  if (storeKey === STORE_KEYS.swimmers) {
+    syncSwimmersTable(list).catch((e) => console.warn("swimmers table sync failed", e));
+  }
+  return res;
+}
+
+// Mirrors the full swimmers array into the dedicated "swimmers" table:
+// upserts every current swimmer, then deletes any row for this academy
+// that's no longer in the array (covers deletes and the "reset all").
+// Fire-and-forget from saveCollection's point of view — a sync failure
+// here shouldn't block the actual save the user was waiting on, but it
+// does mean search/rosters can lag behind until the next successful save.
+async function syncSwimmersTable(list) {
+  if (!window.__academy) return;
+  const academyId = window.__academy.id;
+  const rows = list.map((s) => ({
+    id: s.id,
+    academy_id: academyId,
+    name: s.name || "",
+    branch: s.branch || null,
+    level: s.level || null,
+    data: s,
+  }));
+  if (rows.length > 0) {
+    const { error } = await supabase.from("swimmers").upsert(rows, { onConflict: "id" });
+    if (error) throw error;
+  }
+  const currentIds = list.map((s) => s.id);
+  let delQuery = supabase.from("swimmers").delete().eq("academy_id", academyId);
+  delQuery = currentIds.length > 0
+    ? delQuery.not("id", "in", `(${currentIds.map((id) => `"${id}"`).join(",")})`)
+    : delQuery; // empty list (e.g. "reset all") — delete every row for this academy
+  const { error: delError } = await delQuery;
+  if (delError) throw delError;
 }
 
 /* Payment screenshots are the one thing here that's genuinely heavy (each is
@@ -2706,6 +2758,68 @@ function attendanceCounts(swimmer, dateSet) {
     }
   }
   return { present, absent };
+}
+
+// Marking a swimmer absent automatically grants one makeup credit;
+// undoing that mark (toggling it off, or correcting it to present)
+// takes the credit back. Keeps makeupCredits in sync with attendance
+// so staff don't have to also remember to click the manual +/- control.
+function applyAttendanceStatus(swimmer, date, status) {
+  const attendance = { ...(swimmer.attendance || {}) };
+  const prevStatus = attendance[date];
+  const isToggleOff = prevStatus === status;
+  const newStatus = isToggleOff ? undefined : status;
+
+  if (newStatus === undefined) delete attendance[date];
+  else attendance[date] = newStatus;
+
+  let makeupCredits = swimmer.makeupCredits || 0;
+  if (prevStatus === "absent" && newStatus !== "absent") makeupCredits = Math.max(0, makeupCredits - 1);
+  if (prevStatus !== "absent" && newStatus === "absent") makeupCredits = makeupCredits + 1;
+
+  return { ...swimmer, attendance, makeupCredits };
+}
+
+// Attendance rate, skill-mastery rate, parent rating, and pending makeup
+// burden for one coach — computed straight from their currently-assigned
+// swimmers (and those swimmers' feedback), no separate coach-performance
+// data model needed. Parent rating is joined by each swimmer's CURRENT
+// coach, same as attendance/skills below — feedback left while the
+// swimmer had a different coach isn't separated out, since the app
+// doesn't record who the coach was at the time.
+function computeCoachPerformance(swimmers = [], coachId, feedback = []) {
+  const mine = swimmers.filter((s) => s.coachId === coachId);
+  const mineIds = new Set(mine.map((s) => String(s.id)));
+  let present = 0, absent = 0;
+  let masteredTotal = 0, skillsTotal = 0;
+  let makeupCreditsOwed = 0;
+
+  mine.forEach((s) => {
+    Object.values(s.attendance || {}).forEach((status) => {
+      if (status === "present") present++;
+      else if (status === "absent") absent++;
+    });
+    const levelSkills = LEVEL_SKILLS[s.level] || [];
+    if (levelSkills.length > 0) {
+      skillsTotal += levelSkills.length;
+      masteredTotal += levelSkills.filter((sk) => (s.skills?.[s.level]?.[sk] || 0) >= 5).length;
+    }
+    makeupCreditsOwed += Number(s.makeupCredits || 0);
+  });
+
+  const myFeedback = feedback.filter((f) => mineIds.has(String(f.swimmerId)));
+  const avgRating = myFeedback.length > 0
+    ? Math.round((myFeedback.reduce((sum, f) => sum + Number(f.rating || 0), 0) / myFeedback.length) * 10) / 10
+    : null;
+
+  return {
+    swimmerCount: mine.length,
+    attendanceRate: present + absent > 0 ? Math.round((present / (present + absent)) * 100) : null,
+    skillCompletionRate: skillsTotal > 0 ? Math.round((masteredTotal / skillsTotal) * 100) : null,
+    makeupCreditsOwed,
+    avgRating,
+    ratingCount: myFeedback.length,
+  };
 }
 
 function levelInMonth(swimmer, key) {
@@ -3922,7 +4036,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
               type="button"
               onClick={async () => {
                 if (onJoinWaitlist) {
-                  await onJoinWaitlist({ swimmerName: name, phone, coachId, day, time, sessionType, level });
+                  await onJoinWaitlist({ swimmerName: name, phone, coachId, day, time, sessionType, level, isExisting: !isNew });
                   setWaitlistJoined(true);
                 }
               }}
@@ -4043,6 +4157,439 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
   );
 }
 
+
+/* ============================================================
+   Core management layer — Family / Class / Enrollment / Ledger
+   Migrated from the existing swimmer-centric records without deleting
+   or replacing the legacy data. This is intentionally stored in the
+   academy-scoped app_storage table so the first rollout needs no risky
+   database migration. The four collections can later be promoted to
+   first-class Supabase tables after production testing.
+   ============================================================ */
+const CORE_KEYS = {
+  families: "families-all",
+  classes: "classes-all",
+  enrollments: "enrollments-all",
+  ledger: "family-ledger-all",
+  coreMigration: "core-model-migration-v1",
+};
+
+async function loadCoreCollection(key) {
+  try { return await loadCollection(key); } catch { return []; }
+}
+
+async function saveCoreCollection(key, list) {
+  return saveCollection(key, list);
+}
+
+function coreClassKey(s) {
+  return [s.branch || "", s.level || "", s.day || "", s.time || "", s.coachId || "", s.sessionType || "group"].join("|");
+}
+
+function buildCoreModelsFromSwimmers(swimmers) {
+  const familiesByPhone = new Map();
+  const classesByKey = new Map();
+  const enrollments = [];
+  const ledger = [];
+
+  (swimmers || []).forEach((s) => {
+    const phone = (s.phone || "").trim() || `no-phone-${s.id}`;
+    let family = familiesByPhone.get(phone);
+    if (!family) {
+      family = {
+        id: `fam-${phone.replace(/\\D/g, "") || genId()}`,
+        name: `${s.name || "Family"} Family`,
+        primaryPhone: s.phone || "",
+        altPhone: s.altPhone || "",
+        email: s.email || "",
+        address: s.address || "",
+        notes: "",
+        swimmerIds: [],
+        createdAt: s.createdAt || new Date().toISOString(),
+        migratedFrom: "swimmer.phone",
+      };
+      familiesByPhone.set(phone, family);
+    }
+    if (!family.swimmerIds.includes(s.id)) family.swimmerIds.push(s.id);
+
+    const schedule = getMonthlySchedule(s, s.scheduleMonth || monthKey()) || s;
+    if (schedule.day && schedule.time) {
+      const ck = coreClassKey({ ...s, ...schedule });
+      let cls = classesByKey.get(ck);
+      if (!cls) {
+        cls = {
+          id: `cls-${genId()}`,
+          name: `${s.level || "Class"} · ${schedule.day} · ${schedule.time}`,
+          branch: s.branch || BRANCHES[0]?.id || "",
+          level: s.level || "",
+          day: schedule.day,
+          time: schedule.time,
+          coachId: schedule.coachId || s.coachId || null,
+          sessionType: schedule.sessionType || s.sessionType || "group",
+          capacity: Number(s.sessionType === "private" ? 1 : s.level === "Baby" ? 1 : 3),
+          active: true,
+          createdAt: new Date().toISOString(),
+          migratedFrom: "swimmers.schedule",
+        };
+        classesByKey.set(ck, cls);
+      }
+      enrollments.push({
+        id: `enr-${genId()}`,
+        familyId: family.id,
+        swimmerId: s.id,
+        classId: cls.id,
+        status: "active",
+        startDate: (s.createdAt || todayISO()).slice(0,10),
+        scheduleMonth: s.scheduleMonth || monthKey(),
+        planId: s.planId || inferPlanId(s),
+        createdAt: new Date().toISOString(),
+        migratedFrom: "swimmers",
+      });
+    }
+
+    Object.entries(s.billingByMonth || {}).forEach(([month, b]) => {
+      ledger.push({
+        id: `led-${genId()}`,
+        familyId: family.id,
+        swimmerId: s.id,
+        type: "charge",
+        month,
+        description: b.planName || s.planName || "Membership",
+        amount: Number(b.finalAmount) || Number(b.originalPrice) || 0,
+        paidAmount: Number(b.paidAmount) || 0,
+        balance: Number(b.balance) || 0,
+        status: b.status || "unpaid",
+        createdAt: new Date().toISOString(),
+        migratedFrom: "billingByMonth",
+      });
+    });
+    (s.paymentLedger || []).forEach((pay) => {
+      ledger.push({
+        id: `ledpay-${genId()}`,
+        familyId: family.id,
+        swimmerId: s.id,
+        type: "payment",
+        month: pay.paidMonth || pay.month || monthKey(),
+        description: `Payment ${pay.receiptNo || ""}`.trim(),
+        amount: Number(pay.price ?? pay.amount) || 0,
+        method: pay.method || "instapay",
+        receiptNo: pay.receiptNo || "",
+        status: pay.status || "confirmed",
+        createdAt: pay.confirmedAt || pay.createdAt || new Date().toISOString(),
+        migratedFrom: "paymentLedger",
+      });
+    });
+  });
+
+  return {
+    families: [...familiesByPhone.values()],
+    classes: [...classesByKey.values()],
+    enrollments,
+    ledger,
+  };
+}
+
+async function migrateCoreModelsOnce() {
+  const done = await loadCoreCollection(CORE_KEYS.coreMigration);
+  if (done?.[0]?.version === 1) return { migrated: false, reason: "already-migrated" };
+
+  const existingFamilies = await loadCoreCollection(CORE_KEYS.families);
+  const existingClasses = await loadCoreCollection(CORE_KEYS.classes);
+  const existingEnrollments = await loadCoreCollection(CORE_KEYS.enrollments);
+  const existingLedger = await loadCoreCollection(CORE_KEYS.ledger);
+  if (existingFamilies.length || existingClasses.length || existingEnrollments.length || existingLedger.length) {
+    await saveCoreCollection(CORE_KEYS.coreMigration, [{ version: 1, at: new Date().toISOString(), mode: "preserved-existing" }]);
+    return { migrated: false, reason: "existing-data" };
+  }
+
+  const swimmers = await fetchAllSwimmers();
+  const models = buildCoreModelsFromSwimmers(swimmers);
+  await Promise.all([
+    saveCoreCollection(CORE_KEYS.families, models.families),
+    saveCoreCollection(CORE_KEYS.classes, models.classes),
+    saveCoreCollection(CORE_KEYS.enrollments, models.enrollments),
+    saveCoreCollection(CORE_KEYS.ledger, models.ledger),
+    saveCoreCollection(CORE_KEYS.coreMigration, [{ version: 1, at: new Date().toISOString(), counts: {
+      families: models.families.length,
+      classes: models.classes.length,
+      enrollments: models.enrollments.length,
+      ledger: models.ledger.length,
+    }}]),
+  ]);
+  return { migrated: true, counts: models };
+}
+
+// Creates a real, standalone Class record — used by the "+ New class"
+// form in Family & Billing, as opposed to the classes that get inferred
+// automatically from swimmers' existing schedules during migration.
+function createClassRecord({ name, branch, level, day, time, coachId, sessionType = "group", capacity, active = true }) {
+  const now = new Date().toISOString();
+  return {
+    id: `cls-${genId()}`,
+    name: (name || "").trim() || `${level || "Class"} · ${day || ""} · ${time || ""}`,
+    branch: branch || BRANCHES[0]?.id || "",
+    level: level || "",
+    day: day || "",
+    time: time || "",
+    coachId: coachId || null,
+    sessionType,
+    capacity: Number(capacity) || (sessionType === "private" ? 1 : sessionType === "semi-private" ? 2 : 3),
+    active,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+// How many *active* enrollments a class currently has — the number every
+// capacity check (new enrollment, class list badge) is based on.
+function activeEnrollmentCountForClass(enrollments = [], classId) {
+  return (enrollments || []).filter((e) => e.classId === classId && isEnrollmentCurrentlyActive(e)).length;
+}
+
+// Creates a real Enrollment record linking one swimmer to one class —
+// this is the entity that going forward should be the source of truth
+// for "who's in what class", separate from the swimmer record itself.
+function createEnrollmentRecord({ familyId = null, swimmerId, classId, planId = null, startDate, kind = "recurring", dropInDate }) {
+  const now = new Date().toISOString();
+  // A trial or drop-in is inherently a single visit, not an ongoing
+  // membership — its start and end date are the same day, so it never
+  // shows up as "still active" once that day passes, and never counts
+  // toward this swimmer already having a recurring spot in the class.
+  const isOneOff = kind === "trial" || kind === "dropin";
+  const visitDate = dropInDate || startDate || todayISO();
+  return {
+    id: `enr-${genId()}`,
+    familyId,
+    swimmerId,
+    classId,
+    kind,
+    status: "active",
+    startDate: isOneOff ? visitDate : startDate || todayISO(),
+    endDate: isOneOff ? visitDate : undefined,
+    scheduleMonth: monthKey(),
+    planId,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+// A trial/drop-in enrollment is only "active" on its own single day —
+// once that date has passed it's history, not an ongoing membership, so
+// it should never count against a class's recurring capacity or show up
+// as if the swimmer is still coming every week.
+function isEnrollmentCurrentlyActive(e) {
+  if (e.status !== "active") return false;
+  if ((e.kind === "trial" || e.kind === "dropin") && e.endDate) return e.endDate >= todayISO();
+  return true;
+}
+
+/* ============================================================
+   FAMILY LEDGER + BILLING ENGINE
+   Operates on the "charge" rows inside CORE_KEYS.ledger (coreLedger).
+   Payment rows in the same collection are left untouched by these —
+   see recordFamilyPayment in AdminView for how the two meet.
+   ============================================================ */
+const BILLING_STATUS = {
+  DUE: "due",
+  PARTIAL: "partial",
+  PAID: "paid",
+  OVERDUE: "overdue",
+  VOID: "void",
+  REFUNDED: "refunded",
+};
+
+function createFamilyCharge({
+  familyId,
+  swimmerId = null,
+  enrollmentId = null,
+  month,
+  description,
+  amount,
+  dueDate = null,
+  category = "tuition",
+}) {
+  const now = new Date().toISOString();
+  return {
+    id: `chg-${genId()}`,
+    familyId,
+    swimmerId,
+    enrollmentId,
+    type: "charge",
+    month,
+    description,
+    amount: Number(amount || 0),
+    paidAmount: 0,
+    balance: Number(amount || 0),
+    category,
+    dueDate,
+    status: Number(amount || 0) > 0 ? BILLING_STATUS.DUE : BILLING_STATUS.PAID,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+// Applies one payment amount FIFO across a family's oldest open charges
+// first. `charges` should already be filtered to that family's "charge"
+// rows only — callers merge the result back into the full ledger.
+function applyFamilyPayment(charges = [], {
+  familyId,
+  amount,
+  paymentId = null,
+  paidAt = new Date().toISOString(),
+}) {
+  let remaining = Math.max(0, Number(amount || 0));
+  const next = charges.map(c => ({ ...c }));
+
+  const familyCharges = next
+    .filter(c =>
+      c.familyId === familyId &&
+      ![BILLING_STATUS.VOID, BILLING_STATUS.REFUNDED].includes(c.status) &&
+      Number(c.balance || 0) > 0
+    )
+    .sort((a, b) => new Date(a.dueDate || a.createdAt || 0) -
+                    new Date(b.dueDate || b.createdAt || 0));
+
+  for (const charge of familyCharges) {
+    if (remaining <= 0) break;
+
+    const balance = Number(charge.balance || 0);
+    const applied = Math.min(balance, remaining);
+
+    charge.paidAmount = Number(charge.paidAmount || 0) + applied;
+    charge.balance = Math.max(0, balance - applied);
+    charge.status = charge.balance === 0
+      ? BILLING_STATUS.PAID
+      : BILLING_STATUS.PARTIAL;
+    charge.updatedAt = paidAt;
+    charge.lastPaymentId = paymentId;
+
+    remaining -= applied;
+  }
+
+  return {
+    charges: next,
+    unappliedAmount: remaining,
+  };
+}
+
+function getFamilyLedgerSummary(charges = [], familyId) {
+  const rows = charges.filter(c => c.familyId === familyId);
+
+  // Credits reduce what the family owes overall (like a discount or
+  // goodwill adjustment not tied to reversing a specific past charge);
+  // refunds reduce how much of what they were charged actually stayed
+  // collected. Both are their own ledger entry types, kept out of the
+  // "charge"/"payment" totals so a refund or credit is never mistaken for
+  // an actual new charge or a fresh payment coming in.
+  const totalCharges = rows.filter(c => c.type === "charge").reduce((s, c) => s + Number(c.amount || 0), 0);
+  const totalPaid = rows.filter(c => c.type === "charge").reduce((s, c) => s + Number(c.paidAmount || 0), 0);
+  const totalCredits = rows.filter(c => c.type === "credit").reduce((s, c) => s + Number(c.amount || 0), 0);
+  const totalRefunds = rows.filter(c => c.type === "refund").reduce((s, c) => s + Number(c.amount || 0), 0);
+  const balance = Math.max(0, totalCharges - totalPaid - totalCredits + totalRefunds);
+
+  const overdue = rows
+    .filter(c =>
+      c.type === "charge" &&
+      Number(c.balance || 0) > 0 &&
+      c.dueDate &&
+      new Date(c.dueDate).getTime() < Date.now() &&
+      ![BILLING_STATUS.VOID, BILLING_STATUS.REFUNDED].includes(c.status)
+    )
+    .reduce((s, c) => s + Number(c.balance || 0), 0);
+
+  return {
+    familyId,
+    totalCharges,
+    totalPaid,
+    totalCredits,
+    totalRefunds,
+    balance,
+    overdue,
+    openItems: rows.filter(c => c.type === "charge" && Number(c.balance || 0) > 0).length,
+  };
+}
+
+function markOverdueCharges(charges = [], today = new Date()) {
+  return charges.map(c => {
+    if (
+      c.type === "charge" &&
+      Number(c.balance || 0) > 0 &&
+      c.dueDate &&
+      new Date(c.dueDate).getTime() < today.getTime() &&
+      ![BILLING_STATUS.VOID, BILLING_STATUS.REFUNDED, BILLING_STATUS.OVERDUE].includes(c.status)
+    ) {
+      return { ...c, status: BILLING_STATUS.OVERDUE };
+    }
+    return c;
+  });
+}
+
+function buildEnrollmentBillingCharge({
+  familyId,
+  swimmerId,
+  enrollmentId,
+  month,
+  plan,
+  amount,
+  dueDate,
+}) {
+  return createFamilyCharge({
+    familyId,
+    swimmerId,
+    enrollmentId,
+    month,
+    description: plan ? `${plan} tuition` : "Monthly tuition",
+    amount,
+    dueDate,
+    category: "tuition",
+  });
+}
+
+/* ============================================================
+   NOTIFICATION AUTOMATION — daily reminders worklist
+   This app has no server-side cron and parents don't hold push
+   subscriptions (only staff/coach accounts do — see
+   notifyAccountByPush), so a message can't be *sent* unattended.
+   What this DOES automate: figuring out, on demand, exactly who
+   needs a message today and drafting it — turning "go search for
+   who's absent / who owes money / who's booked tomorrow" into a
+   one-click WhatsApp send per person, computed fresh every time
+   staff opens the tab.
+   ============================================================ */
+function buildDailyReminders({ classes = [], enrollments = [], swimmers = [], families = [], ledger = [] }) {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowDow = tomorrow.getDay();
+  const tomorrowDayGroup = Object.entries(DAY_GROUP_WEEKDAYS_LOOKUP).find(([, days]) => days.includes(tomorrowDow))?.[0] || null;
+
+  const swimmerById = new Map(swimmers.map((s) => [String(s.id), s]));
+
+  const classReminders = tomorrowDayGroup
+    ? enrollments
+        .filter((e) => e.status === "active")
+        .map((e) => {
+          const cls = classes.find((c) => c.id === e.classId);
+          if (!cls || cls.day !== tomorrowDayGroup || cls.active === false) return null;
+          const swimmer = swimmerById.get(String(e.swimmerId));
+          if (!swimmer?.phone) return null;
+          return { key: `class-${e.id}`, swimmer, cls };
+        })
+        .filter(Boolean)
+    : [];
+
+  const today = todayISO();
+  const makeupReminders = swimmers
+    .filter((s) => s.attendance?.[today] === "absent" && Number(s.makeupCredits || 0) > 0 && s.phone)
+    .map((s) => ({ key: `makeup-${s.id}`, swimmer: s }));
+
+  // Payment reminders live only on the Dashboard now (automated via
+  // WhatsApp Business API where connected, with a manual WhatsApp
+  // fallback there too) — having them appear here as well meant the same
+  // family could get nudged twice by two different paths. This panel
+  // keeps only the two reminder types that path doesn't cover.
+  return { classReminders, makeupReminders };
+}
+
 /* ============================================================
    Admin dashboard
    ============================================================ */
@@ -4074,6 +4621,361 @@ function SwimmerSearchInput({ onSearch }) {
 }
 
 function AdminView({ onExit, role = "admin", preAuthed = false, accountName, branchRestriction = null }) {
+
+  const [coreTab, setCoreTab] = useState("families");
+  const [coreFamilies, setCoreFamilies] = useState([]);
+  const [coreClasses, setCoreClasses] = useState([]);
+  const [coreEnrollments, setCoreEnrollments] = useState([]);
+  const [coreLedger, setCoreLedger] = useState([]);
+  const [coreSearch, setCoreSearch] = useState("");
+  const [coreLoading, setCoreLoading] = useState(false);
+  const [coreMigrationMessage, setCoreMigrationMessage] = useState("");
+  const [coreCoaches, setCoreCoaches] = useState([]);
+  const [coreSwimmersForEnroll, setCoreSwimmersForEnroll] = useState([]);
+  const [classModal, setClassModal] = useState(null); // null | { mode: "new"|"edit", classId?, form }
+  const [classSaving, setClassSaving] = useState(false);
+  const [classError, setClassError] = useState("");
+  const [enrollModal, setEnrollModal] = useState(null); // null | { form }
+  const [enrollSaving, setEnrollSaving] = useState(false);
+  const [enrollError, setEnrollError] = useState("");
+
+  const loadCoreModels = useCallback(async () => {
+    setCoreLoading(true);
+    try {
+      const [families, classes, enrollments, ledger, coachesList] = await Promise.all([
+        loadCoreCollection(CORE_KEYS.families),
+        loadCoreCollection(CORE_KEYS.classes),
+        loadCoreCollection(CORE_KEYS.enrollments),
+        loadCoreCollection(CORE_KEYS.ledger),
+        loadCollection(STORE_KEYS.coaches),
+      ]);
+      setCoreFamilies(families);
+      setCoreClasses(classes);
+      setCoreEnrollments(enrollments);
+      setCoreLedger(ledger);
+      setCoreCoaches(coachesList);
+    } finally { setCoreLoading(false); }
+  }, []);
+
+  const openNewClassModal = (prefill = {}) => {
+    setClassError("");
+    setClassModal({
+      mode: "new",
+      form: {
+        name: "",
+        branch: BRANCHES[0]?.id || "",
+        level: LEVELS[0] || "",
+        day: prefill.day || DAY_GROUPS[0]?.id || "",
+        time: prefill.time || "",
+        coachId: "",
+        sessionType: "group",
+        capacity: 3,
+        active: true,
+      },
+    });
+  };
+
+  const openEditClassModal = (cls) => {
+    setClassError("");
+    setClassModal({ mode: "edit", classId: cls.id, form: { ...cls } });
+  };
+
+  const closeClassModal = () => { if (!classSaving) setClassModal(null); };
+
+  const saveClassModal = async () => {
+    if (!classModal) return;
+    const f = classModal.form;
+    if (!f.level || !f.day || !f.time) {
+      setClassError("اختر المستوى واليوم والموعد على الأقل");
+      return;
+    }
+    setClassSaving(true);
+    setClassError("");
+    try {
+      let next;
+      if (classModal.mode === "new") {
+        next = [...coreClasses, createClassRecord(f)];
+      } else {
+        next = coreClasses.map((c) => (c.id === classModal.classId ? { ...c, ...f, capacity: Number(f.capacity) || 1, updatedAt: new Date().toISOString() } : c));
+      }
+      await saveCoreCollection(CORE_KEYS.classes, next);
+      setCoreClasses(next);
+      logActivity(accountName, role, classModal.mode === "new" ? "Created class" : "Edited class", f.name || `${f.level} · ${f.day} · ${f.time}`);
+      setClassModal(null);
+    } catch (e) {
+      setClassError(e?.message || "تعذر حفظ الفصل");
+    } finally {
+      setClassSaving(false);
+    }
+  };
+
+  const toggleClassActive = async (cls) => {
+    const next = coreClasses.map((c) => (c.id === cls.id ? { ...c, active: !c.active, updatedAt: new Date().toISOString() } : c));
+    setCoreClasses(next);
+    try {
+      await saveCoreCollection(CORE_KEYS.classes, next);
+      logActivity(accountName, role, cls.active ? "Deactivated class" : "Reactivated class", cls.name);
+    } catch (e) {
+      console.warn("Could not toggle class active state", e);
+      setCoreClasses(coreClasses); // revert on failure
+    }
+  };
+
+  const openNewEnrollModal = async () => {
+    setEnrollError("");
+    setEnrollModal({ form: { swimmerId: "", classId: "", planId: "", kind: "recurring", dropInAmount: "" } });
+    if (coreSwimmersForEnroll.length === 0) {
+      try {
+        const all = await fetchAllSwimmers();
+        setCoreSwimmersForEnroll(all);
+      } catch (e) {
+        console.warn("Could not load swimmers for enrollment", e);
+      }
+    }
+  };
+
+  const closeEnrollModal = () => { if (!enrollSaving) setEnrollModal(null); };
+
+  const saveEnrollModal = async () => {
+    if (!enrollModal) return;
+    const f = enrollModal.form;
+    const kind = f.kind || "recurring";
+    if (!f.swimmerId || !f.classId) {
+      setEnrollError("اختر السباح والفصل");
+      return;
+    }
+    if (kind === "dropin" && (!f.dropInAmount || Number(f.dropInAmount) <= 0)) {
+      setEnrollError("اكتب سعر الحصة الواحدة");
+      return;
+    }
+    const cls = coreClasses.find((c) => c.id === f.classId);
+    const activeCount = activeEnrollmentCountForClass(coreEnrollments, f.classId);
+    if (cls && activeCount >= Number(cls.capacity || 0)) {
+      setEnrollError("الفصل ده وصل للسعة القصوى بالفعل");
+      return;
+    }
+    // Trial and drop-in visits don't block a swimmer from also holding (or
+    // later starting) a real recurring spot — only one kind actually
+    // reserves an ongoing weekly place, so only recurring enrollments
+    // check for a duplicate.
+    if (kind === "recurring") {
+      const alreadyEnrolled = coreEnrollments.some(
+        (e) => e.swimmerId === f.swimmerId && e.classId === f.classId && isEnrollmentCurrentlyActive(e) && (e.kind || "recurring") === "recurring"
+      );
+      if (alreadyEnrolled) {
+        setEnrollError("السباح مسجل بالفعل في الفصل ده");
+        return;
+      }
+    }
+    setEnrollSaving(true);
+    setEnrollError("");
+    try {
+      const swimmer = coreSwimmersForEnroll.find((s) => String(s.id) === String(f.swimmerId));
+      const family = coreFamilies.find((fam) => fam.swimmerIds?.includes(f.swimmerId))
+        || (swimmer ? coreFamilies.find((fam) => fam.primaryPhone && fam.primaryPhone === swimmer.phone) : null);
+      const planId = f.planId || (swimmer ? inferPlanId(swimmer) : null);
+      const rec = createEnrollmentRecord({
+        familyId: family?.id || null,
+        swimmerId: f.swimmerId,
+        classId: f.classId,
+        planId,
+        kind,
+      });
+      const next = [...coreEnrollments, rec];
+      await saveCoreCollection(CORE_KEYS.enrollments, next);
+      setCoreEnrollments(next);
+
+      // Enrolling auto-creates a charge on the family ledger — a trial is
+      // free (no charge at all), a drop-in is a one-time charge for just
+      // that visit at whatever price was entered, and a real recurring
+      // enrollment charges the full monthly plan, same as before.
+      if (family?.id && kind !== "trial") {
+        const plan = PLANS.find((p) => p.id === planId);
+        const amount = kind === "dropin" ? Number(f.dropInAmount) : Number(plan?.price) || Number(PLAN_PRICES[planId]) || 0;
+        const description = kind === "dropin" ? `${cls?.name || "Class"} — drop-in visit` : plan?.name || cls?.name;
+        const charge = buildEnrollmentBillingCharge({
+          familyId: family.id,
+          swimmerId: f.swimmerId,
+          enrollmentId: rec.id,
+          month: monthKey(),
+          plan: description,
+          amount,
+          dueDate: todayISO(),
+        });
+        const nextLedger = [...coreLedger, charge];
+        await saveCoreCollection(CORE_KEYS.ledger, nextLedger);
+        setCoreLedger(nextLedger);
+      }
+
+      const kindLabel = kind === "trial" ? "trial" : kind === "dropin" ? "drop-in" : "";
+      logActivity(accountName, role, "Enrolled swimmer in class", `${swimmer?.name || f.swimmerId} → ${cls?.name || f.classId}${kindLabel ? ` (${kindLabel})` : ""}`);
+      setEnrollModal(null);
+    } catch (e) {
+      setEnrollError(e?.message || "تعذر إتمام التسجيل");
+    } finally {
+      setEnrollSaving(false);
+    }
+  };
+
+  const cancelCoreEnrollment = async (enr) => {
+    const next = coreEnrollments.map((e) => (e.id === enr.id ? { ...e, status: "cancelled", endDate: todayISO(), updatedAt: new Date().toISOString() } : e));
+    setCoreEnrollments(next);
+    try {
+      await saveCoreCollection(CORE_KEYS.enrollments, next);
+      logActivity(accountName, role, "Cancelled enrollment", enr.swimmerId);
+    } catch (e) {
+      console.warn("Could not cancel enrollment", e);
+      setCoreEnrollments(coreEnrollments); // revert on failure
+    }
+  };
+
+  // ---- Family ledger / billing ----
+  const [familyLedgerModal, setFamilyLedgerModal] = useState(null); // null | { familyId }
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("instapay");
+  const [paymentSaving, setPaymentSaving] = useState(false);
+  const [paymentError, setPaymentError] = useState("");
+
+  const openFamilyLedger = (familyId) => {
+    setPaymentAmount("");
+    setPaymentMethod("instapay");
+    setPaymentError("");
+    setFamilyLedgerModal({ familyId });
+  };
+  const closeFamilyLedger = () => { if (!paymentSaving) setFamilyLedgerModal(null); };
+
+  const recordFamilyPayment = async () => {
+    if (!familyLedgerModal) return;
+    const amount = Number(paymentAmount);
+    if (!amount || amount <= 0) {
+      setPaymentError("اكتب مبلغ صحيح");
+      return;
+    }
+    setPaymentSaving(true);
+    setPaymentError("");
+    try {
+      const familyId = familyLedgerModal.familyId;
+      const openCharges = coreLedger.filter((l) => l.type === "charge");
+      const paymentId = `ledpay-${genId()}`;
+      const { charges: updatedCharges, unappliedAmount } = applyFamilyPayment(openCharges, { familyId, amount, paymentId });
+      const chargeMap = new Map(updatedCharges.map((c) => [c.id, c]));
+      const mergedLedger = coreLedger.map((l) => (l.type === "charge" && chargeMap.has(l.id) ? chargeMap.get(l.id) : l));
+      const paymentRecord = {
+        id: paymentId,
+        familyId,
+        type: "payment",
+        month: monthKey(),
+        description: unappliedAmount > 0 ? `Payment (${unappliedAmount.toLocaleString()} unapplied — no open charges)` : "Payment",
+        amount,
+        method: paymentMethod,
+        status: "confirmed",
+        createdAt: new Date().toISOString(),
+      };
+      const nextLedger = [...mergedLedger, paymentRecord];
+      await saveCoreCollection(CORE_KEYS.ledger, nextLedger);
+      setCoreLedger(nextLedger);
+      logActivity(accountName, role, "Recorded family payment", `${familyId} — ${amount.toLocaleString()} EGP`);
+      setPaymentAmount("");
+    } catch (e) {
+      setPaymentError(e?.message || "تعذر تسجيل الدفعة");
+    } finally {
+      setPaymentSaving(false);
+    }
+  };
+
+  // ---- Refunds & credits ----
+  // A "credit" reduces what a family owes overall — a goodwill gesture or
+  // an adjustment not tied to reversing one specific past charge (e.g.
+  // "sorry for the pool closure, here's a discount on next month").
+  // A "refund" records money actually given back after it was collected
+  // (e.g. they cancelled and want their payment back) — it doesn't touch
+  // what they were charged, only how much of it is considered "kept".
+  // Both are their own ledger entry type (see getFamilyLedgerSummary),
+  // never a fake negative charge or payment, so the ledger's history stays
+  // an honest record of what actually happened.
+  const [adjustmentModal, setAdjustmentModal] = useState(null); // null | { familyId, kind: "credit" | "refund" }
+  const [adjustmentAmount, setAdjustmentAmount] = useState("");
+  const [adjustmentReason, setAdjustmentReason] = useState("");
+  const [adjustmentSaving, setAdjustmentSaving] = useState(false);
+  const [adjustmentError, setAdjustmentError] = useState("");
+
+  const openAdjustmentModal = (familyId, kind) => {
+    setAdjustmentAmount("");
+    setAdjustmentReason("");
+    setAdjustmentError("");
+    setAdjustmentModal({ familyId, kind });
+  };
+  const closeAdjustmentModal = () => { if (!adjustmentSaving) setAdjustmentModal(null); };
+
+  const saveAdjustment = async () => {
+    if (!adjustmentModal) return;
+    const amount = Number(adjustmentAmount);
+    if (!amount || amount <= 0) {
+      setAdjustmentError("اكتب مبلغ صحيح");
+      return;
+    }
+    setAdjustmentSaving(true);
+    setAdjustmentError("");
+    try {
+      const { familyId, kind } = adjustmentModal;
+      const record = {
+        id: `led${kind}-${genId()}`,
+        familyId,
+        type: kind,
+        month: monthKey(),
+        description: adjustmentReason.trim() || (kind === "credit" ? "Credit issued" : "Refund issued"),
+        amount,
+        status: "confirmed",
+        issuedBy: accountName,
+        createdAt: new Date().toISOString(),
+      };
+      const nextLedger = [...coreLedger, record];
+      await saveCoreCollection(CORE_KEYS.ledger, nextLedger);
+      setCoreLedger(nextLedger);
+      logActivity(accountName, role, kind === "credit" ? "Issued family credit" : "Issued family refund", `${familyId} — ${amount.toLocaleString()} EGP${adjustmentReason.trim() ? ` (${adjustmentReason.trim()})` : ""}`);
+      setAdjustmentModal(null);
+    } catch (e) {
+      setAdjustmentError(e?.message || "تعذر الحفظ");
+    } finally {
+      setAdjustmentSaving(false);
+    }
+  };
+
+  // Sweeps once per Family & Billing visit — flips any charge whose due
+  // date has passed into "overdue" so the ledger badges stay accurate
+  // without needing a manual refresh.
+  useEffect(() => {
+    if (!authed || tab !== "management" || coreLoading) return;
+    const swept = markOverdueCharges(coreLedger);
+    const changed = swept.some((c, i) => c.status !== coreLedger[i]?.status);
+    if (changed) {
+      setCoreLedger(swept);
+      saveCoreCollection(CORE_KEYS.ledger, swept).catch((e) => console.warn("Could not persist overdue sweep", e));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authed, tab, coreLoading, coreLedger.length]);
+
+  useEffect(() => {
+    if (!authed || tab !== "management") return;
+    (async () => {
+      try {
+        const result = await migrateCoreModelsOnce();
+        if (result?.migrated) {
+          setCoreMigrationMessage(`Core model created: ${result.counts.families.length} families, ${result.counts.classes.length} classes, ${result.counts.enrollments.length} enrollments.`);
+        }
+      } catch (e) {
+        setCoreMigrationMessage(e?.message || "Core migration could not complete");
+      }
+      await loadCoreModels();
+      try {
+        const all = await fetchAllSwimmers();
+        setCoreSwimmersForEnroll(all);
+      } catch (e) {
+        console.warn("Could not preload swimmers for Family & Billing", e);
+      }
+    })();
+  }, [authed, tab, loadCoreModels]);
+
   const { t, lang, setLang } = useLang();
   const [authed, setAuthed] = useState(preAuthed);
   const [checkingSession, setCheckingSession] = useState(!preAuthed);
@@ -4982,7 +5884,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   }, []);
 
   useEffect(() => {
-    if (tab === "feedback") loadFeedback();
+    if (tab === "feedback" || tab === "coaches") loadFeedback();
   }, [tab, loadFeedback]);
 
   const [incidentsLoading, setIncidentsLoading] = useState(false);
@@ -5087,6 +5989,23 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       logActivity(accountName, role, "Downloaded full backup", "");
     } finally {
       setBackupRunning(false);
+    }
+  };
+
+  const [indexRebuilding, setIndexRebuilding] = useState(false);
+  const [indexRebuildResult, setIndexRebuildResult] = useState("");
+  const rebuildSwimmersIndex = async () => {
+    setIndexRebuilding(true);
+    setIndexRebuildResult("");
+    try {
+      const all = await fetchAllSwimmers();
+      await syncSwimmersTable(all);
+      setIndexRebuildResult(`Done — ${all.length} swimmer${all.length === 1 ? "" : "s"} re-indexed.`);
+      logActivity(accountName, role, "Rebuilt swimmers search index", `${all.length} swimmers`);
+    } catch (e) {
+      setIndexRebuildResult(e?.message || "Could not rebuild — please try again.");
+    } finally {
+      setIndexRebuilding(false);
     }
   };
 
@@ -5510,7 +6429,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   }, []);
 
   useEffect(() => {
-    if (tab === "attendance") loadStaffAttendance();
+    if (tab === "attendance" || tab === "coachperformance") loadStaffAttendance();
   }, [tab, loadStaffAttendance]);
 
   const saveAttendanceEdit = async () => {
@@ -6061,22 +6980,33 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     setMakeupError("");
     if (!makeupDate) return setMakeupError("Choose a date");
     if (!makeupTime) return setMakeupError("Choose a time");
+    if (!makeupModal?.makeupCredits) return setMakeupError("No makeup credits available");
+
     setMakeupSaving(true);
     try {
+      // Guard against silently overbooking a makeup slot.
+      const all = await fetchAllSwimmers();
+      const mk = makeupDate.slice(0, 7);
+      const dt = new Date(`${makeupDate}T12:00:00`);
+      const dayNames = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+      const day = dayNames[dt.getDay()];
+      const available = getAvailableMakeupSlots(all, mk, makeupModal, day, makeupTime);
+      if (!available.length) {
+        return setMakeupError("No available class at this time. Choose another slot.");
+      }
+
       await updateSwimmerById(makeupModal.id, (s) => ({
         ...s,
         makeupSessions: [
           ...(s.makeupSessions || []),
-          { id: genId(), date: makeupDate, time: makeupTime, coachId: makeupCoachId || null, note: makeupNote.trim() },
+          { id: genId(), date: makeupDate, time: makeupTime, coachId: makeupCoachId || null, note: makeupNote.trim(), status: "booked" },
         ],
-        // Using a makeup session spends one credit, if they have any —
-        // doesn't block booking at zero, just keeps the balance accurate
-        // for whoever's tracking who's owed what.
         makeupCredits: Math.max(0, (s.makeupCredits || 0) - 1),
       }));
       setMakeupModal(null);
       loadSwimmersPage({ offset: 0 });
     } catch (e) {
+      console.warn("Could not save makeup", e);
       setMakeupError("Could not save, please try again");
     } finally {
       setMakeupSaving(false);
@@ -6114,7 +7044,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     setWaitlistLoading(true);
     try {
       const items = await loadCollection(STORE_KEYS.waitlist);
-      setWaitlist(items.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)));
+      setWaitlist(items.sort(sortWaitlistRows));
     } finally {
       setWaitlistLoading(false);
     }
@@ -6124,7 +7054,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     if (tab === "waitlist") loadWaitlist();
   }, [tab, loadWaitlist]);
 
-  const joinWaitlist = async ({ swimmerName, phone, coachId, day, time, sessionType, level }) => {
+  const joinWaitlist = async ({ swimmerName, phone, coachId, day, time, sessionType, level, isExisting = false }) => {
     const all = await loadCollection(STORE_KEYS.waitlist);
     const record = {
       id: genId(),
@@ -6135,6 +7065,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       time,
       sessionType,
       level,
+      classId: null,
+      priority: isExisting ? 1 : 4, // "Existing student" vs "New student" — see WAITLIST_PRIORITY_TIERS
       createdAt: new Date().toISOString(),
     };
     await saveCollection(STORE_KEYS.waitlist, [...all, record]);
@@ -6146,6 +7078,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     const all = await loadCollection(STORE_KEYS.waitlist);
     await saveCollection(STORE_KEYS.waitlist, all.filter((w) => w.id !== id));
     loadWaitlist();
+  };
+
+  const setWaitlistPriority = async (id, priority) => {
+    const all = await loadCollection(STORE_KEYS.waitlist);
+    const next = all.map((w) => (w.id === id ? { ...w, priority } : w));
+    await saveCollection(STORE_KEYS.waitlist, next);
+    setWaitlist(next.slice().sort(sortWaitlistRows));
   };
 
   const [cashAmount, setCashAmount] = useState("");
@@ -7260,12 +8199,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   const markAttendance = async (swimmer, date, status) => {
     try {
-      await updateSwimmerById(swimmer.id, (s) => {
-        const attendance = { ...(s.attendance || {}) };
-        if (attendance[date] === status) delete attendance[date]; // click again to clear
-        else attendance[date] = status;
-        return { ...s, attendance };
-      });
+      await updateSwimmerById(swimmer.id, (s) => applyAttendanceStatus(s, date, status));
       loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     } catch (e) {
       loadSwimmersPage({ offset: 0 });
@@ -7437,6 +8371,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     });
     return { coachLoadById: loadById, coachBookingsById: bookingsById };
   }, [swimmers, scheduleMonth]);
+
+  const coachPerformanceById = React.useMemo(() => {
+    const byId = {};
+    coaches.forEach((c) => { byId[c.id] = computeCoachPerformance(swimmers, c.id, feedback); });
+    return byId;
+  }, [swimmers, coaches, feedback]);
 
   if (checkingSession) {
     return (
@@ -7723,6 +8663,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         >
           <CalendarDays className="w-4 h-4" /> {t("schedule")}
         </button>
+        {canEditContent && (
+          <button
+            onClick={() => setTab("management")}
+            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
+              tab === "management" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+            }`}
+          >
+            <Users className="w-4 h-4" /> Family & Billing
+          </button>
+        )}
         {role !== "technical_director" && (canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && (
         <button
           onClick={() => setTab("reports")}
@@ -7933,18 +8883,20 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   {needsReminder.map((s) => (
                     <div key={s.id} className="flex items-center justify-between text-sm bg-slate-50 rounded-lg px-3 py-2">
                       <span className="text-slate-700">{s.name}</span>
-                      {waLink(s.phone) ? (
-                        <a
-                          href={waLink(s.phone, renewalWaMessage(s))}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-medium text-green-700 hover:bg-green-100"
-                        >
-                          <Send className="w-3 h-3" /> {t("remind")}
-                        </a>
-                      ) : (
-                        <span className="text-xs text-slate-300">{t("noPhoneOnFile")}</span>
-                      )}
+                      <span className="flex items-center gap-1.5 shrink-0">
+                        {waLink(s.phone) ? (
+                          <a
+                            href={waLink(s.phone, renewalWaMessage(s))}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-medium text-green-700 hover:bg-green-100"
+                          >
+                            <Send className="w-3 h-3" /> {t("remind")}
+                          </a>
+                        ) : (
+                          <span className="text-xs text-slate-300">{t("noPhoneOnFile")}</span>
+                        )}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -9174,6 +10126,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <div className="space-y-3">
             {coaches.map((c) => {
               const load = coachLoadById[c.id] || 0;
+              const perf = coachPerformanceById[c.id] || {};
               return (
                 <div key={c.id} className="bg-white rounded-2xl border border-slate-200 p-4">
                 <div className="flex flex-wrap items-center gap-4">
@@ -9190,6 +10143,26 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <div className="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 font-medium">
                     {load} swimmer{load === 1 ? "" : "s"} assigned
                   </div>
+                  {perf.attendanceRate !== null && (
+                    <div className={`text-xs px-2.5 py-1 rounded-full font-medium ${perf.attendanceRate >= 85 ? "bg-green-50 text-green-700" : perf.attendanceRate >= 70 ? "bg-amber-50 text-amber-700" : "bg-red-50 text-red-600"}`}>
+                      {perf.attendanceRate}% attendance
+                    </div>
+                  )}
+                  {perf.skillCompletionRate !== null && (
+                    <div className="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 font-medium">
+                      {perf.skillCompletionRate}% skills mastered
+                    </div>
+                  )}
+                  {perf.avgRating !== null && (
+                    <div className="text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 font-medium flex items-center gap-1">
+                      <span>★</span>{perf.avgRating} <span className="text-amber-400">({perf.ratingCount})</span>
+                    </div>
+                  )}
+                  {perf.makeupCreditsOwed > 0 && (
+                    <div className="text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 font-medium">
+                      {perf.makeupCreditsOwed} makeup{perf.makeupCreditsOwed === 1 ? "" : "s"} owed
+                    </div>
+                  )}
                   {(can("manageCoaches") || canEditContent || canEdit) && (
                     <div className="flex items-center gap-1">
                       {(can("manageCoaches") || canEditContent) && (
@@ -9211,6 +10184,479 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+
+      {tab === "management" && (
+        <div>
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+            <div>
+              <h2 className="text-xl font-bold text-slate-900">Family & Billing</h2>
+              <p className="text-sm text-slate-400">New core model built from your existing swimmer records — legacy data remains untouched.</p>
+            </div>
+            <button onClick={loadCoreModels} className="px-3 py-2 rounded-lg bg-slate-100 text-sm">Refresh</button>
+          </div>
+          {coreMigrationMessage && <div className="mb-4 bg-blue-50 border border-blue-100 text-blue-900 rounded-xl px-3 py-2 text-sm">{coreMigrationMessage}</div>}
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+            {[["Families", coreFamilies.length], ["Classes", coreClasses.length], ["Enrollments", coreEnrollments.length], ["Ledger entries", coreLedger.length]].map(([label, n]) => (
+              <div key={label} className="bg-white rounded-xl border border-slate-200 p-4"><div className="text-xs text-slate-400">{label}</div><div className="text-2xl font-bold mt-1">{n}</div></div>
+            ))}
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+            <div className="flex gap-1 p-2 border-b border-slate-100 overflow-x-auto">
+              {[["families","Families"],["classes","Classes"],["calendar","Calendar"],["enrollments","Enrollments"],["ledger","Ledger"],["reminders","Reminders"]].map(([id,label]) => (
+                <button key={id} onClick={() => setCoreTab(id)} className={`px-3 py-2 rounded-lg text-sm whitespace-nowrap ${coreTab === id ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50"}`}>{label}</button>
+              ))}
+              {coreTab !== "calendar" && coreTab !== "reminders" && (
+                <input value={coreSearch} onChange={e => setCoreSearch(e.target.value)} placeholder="Search..." className="ml-auto min-w-40 border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none" />
+              )}
+            </div>
+
+            {coreTab === "calendar" && (
+              <ClassCalendarGrid
+                classes={coreClasses}
+                enrollments={coreEnrollments}
+                coaches={coreCoaches}
+                onCellClick={(day, time) => openNewClassModal({ day, time })}
+                onClassClick={openEditClassModal}
+              />
+            )}
+
+            {coreTab === "reminders" && (
+              <DailyRemindersPanel
+                classes={coreClasses}
+                enrollments={coreEnrollments}
+                swimmers={coreSwimmersForEnroll}
+                families={coreFamilies}
+                ledger={coreLedger}
+              />
+            )}
+
+            {coreTab !== "calendar" && coreTab !== "reminders" && (
+            coreLoading ? <div className="py-12 text-center text-slate-400">Loading...</div> : (
+              <div className="p-3 space-y-2">
+                {coreTab === "families" && coreFamilies.filter(f => `${f.name} ${f.primaryPhone}`.toLowerCase().includes(coreSearch.toLowerCase())).map(f => {
+                  const bal = getFamilyLedgerSummary(coreLedger, f.id).balance;
+                  return (
+                    <button key={f.id} onClick={() => openFamilyLedger(f.id)} className="w-full text-left border border-slate-100 rounded-xl p-3 flex items-center justify-between gap-3 hover:bg-slate-50">
+                      <div><div className="font-semibold">{f.name}</div><div className="text-xs text-slate-400">{f.primaryPhone || "No phone"} · {f.swimmerIds?.length || 0} swimmer(s)</div></div>
+                      {bal > 0 ? (
+                        <span className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded-full whitespace-nowrap">{bal.toLocaleString()} EGP due</span>
+                      ) : (
+                        <span className="text-xs bg-slate-50 px-2 py-1 rounded-full">Family</span>
+                      )}
+                    </button>
+                  );
+                })}
+                {coreTab === "classes" && (
+                  <>
+                    <div className="flex justify-end mb-1">
+                      <button onClick={openNewClassModal} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold">
+                        <Plus className="w-4 h-4" /> New class
+                      </button>
+                    </div>
+                    {coreClasses.filter(c => `${c.name} ${c.level} ${c.day} ${c.time}`.toLowerCase().includes(coreSearch.toLowerCase())).map(c => {
+                      const count = activeEnrollmentCountForClass(coreEnrollments, c.id);
+                      const coachName = coreCoaches.find(co => co.id === c.coachId)?.name;
+                      const dayLabel = DAY_GROUPS.find(d => d.id === c.day)?.label || c.day;
+                      return (
+                        <div key={c.id} className={`border border-slate-100 rounded-xl p-3 flex items-center justify-between gap-3 ${c.active === false ? "opacity-50" : ""}`}>
+                          <div>
+                            <div className="font-semibold">{c.name}{c.active === false && <span className="ml-2 text-xs text-red-500 font-normal">(inactive)</span>}</div>
+                            <div className="text-xs text-slate-400">{dayLabel} · {c.time} · {c.level} · {c.sessionType}{coachName ? ` · ${coachName}` : ""}</div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className={`text-xs px-2 py-1 rounded-full ${count >= c.capacity ? "bg-red-50 text-red-600" : "bg-slate-50"}`}>{count}/{c.capacity}</span>
+                            <button onClick={() => openEditClassModal(c)} className="p-1.5 rounded-lg hover:bg-slate-100" title="Edit"><Pencil className="w-3.5 h-3.5 text-slate-500" /></button>
+                            <button onClick={() => toggleClassActive(c)} className="p-1.5 rounded-lg hover:bg-slate-100" title={c.active === false ? "Reactivate" : "Deactivate"}>
+                              {c.active === false ? <CheckCircle2 className="w-3.5 h-3.5 text-green-600" /> : <XCircle className="w-3.5 h-3.5 text-slate-400" />}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </>
+                )}
+                {coreTab === "enrollments" && (
+                  <>
+                    <div className="flex justify-end mb-1">
+                      <button onClick={openNewEnrollModal} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold">
+                        <Plus className="w-4 h-4" /> New enrollment
+                      </button>
+                    </div>
+                    {coreEnrollments.filter(e => `${e.swimmerId} ${e.classId} ${e.status}`.toLowerCase().includes(coreSearch.toLowerCase())).slice().reverse().map(e => {
+                      const swimmerName = coreSwimmersForEnroll.find(s => String(s.id) === String(e.swimmerId))?.name || e.swimmerId;
+                      const cls = coreClasses.find(c => c.id === e.classId);
+                      const kind = e.kind || "recurring";
+                      return (
+                        <div key={e.id} className="border border-slate-100 rounded-xl p-3 flex items-center justify-between gap-3">
+                          <div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-semibold">{swimmerName}</span>
+                              {kind !== "recurring" && (
+                                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${kind === "trial" ? "bg-purple-50 text-purple-700" : "bg-amber-50 text-amber-700"}`}>
+                                  {kind === "trial" ? "Trial" : "Drop-in"}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-xs text-slate-400">{cls?.name || e.classId} · Plan: {e.planId || "—"}</div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className={`text-xs px-2 py-1 rounded-full ${isEnrollmentCurrentlyActive(e) ? "bg-green-50 text-green-700" : "bg-slate-50 text-slate-500"}`}>
+                              {isEnrollmentCurrentlyActive(e) ? "active" : e.status}
+                            </span>
+                            {e.status === "active" && kind === "recurring" && (
+                              <button onClick={() => cancelCoreEnrollment(e)} className="p-1.5 rounded-lg hover:bg-slate-100" title="Cancel enrollment">
+                                <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </>
+                )}
+                {coreTab === "ledger" && coreLedger.filter(l => `${l.description} ${l.month} ${l.type}`.toLowerCase().includes(coreSearch.toLowerCase())).slice().reverse().map(l => (
+                  <div key={l.id} className="border border-slate-100 rounded-xl p-3 flex items-center justify-between gap-3"><div><div className="font-semibold">{l.description || l.type}</div><div className="text-xs text-slate-400">{l.month} · {l.type} · Swimmer {l.swimmerId}</div></div><div className="text-sm font-semibold">{Number(l.amount || 0).toLocaleString()} EGP</div></div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {classModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={closeClassModal}>
+          <div className="bg-white rounded-2xl p-5 max-w-md w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-slate-900">{classModal.mode === "new" ? "New class" : "Edit class"}</h3>
+              <button onClick={closeClassModal}><X className="w-5 h-5 text-slate-400" /></button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Name (optional — auto-generated if left blank)</label>
+                <input
+                  value={classModal.form.name}
+                  onChange={(e) => setClassModal({ ...classModal, form: { ...classModal.form, name: e.target.value } })}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  placeholder="e.g. Level 4 · Sunday 5:30"
+                />
+              </div>
+              {BRANCHES.length > 1 && (
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Branch</label>
+                  <select
+                    value={classModal.form.branch}
+                    onChange={(e) => setClassModal({ ...classModal, form: { ...classModal.form, branch: e.target.value } })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                  >
+                    {BRANCHES.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                </div>
+              )}
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Level</label>
+                <select
+                  value={classModal.form.level}
+                  onChange={(e) => setClassModal({ ...classModal, form: { ...classModal.form, level: e.target.value } })}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                >
+                  {LEVELS.map((lv) => <option key={lv} value={lv}>{lv}</option>)}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Day</label>
+                  <select
+                    value={classModal.form.day}
+                    onChange={(e) => setClassModal({ ...classModal, form: { ...classModal.form, day: e.target.value, time: "" } })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                  >
+                    {DAY_GROUPS.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Time</label>
+                  <select
+                    value={classModal.form.time}
+                    onChange={(e) => setClassModal({ ...classModal, form: { ...classModal.form, time: e.target.value } })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                  >
+                    <option value="">— Choose —</option>
+                    {(TIME_SLOTS[classModal.form.branch]?.[classModal.form.day] || []).map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Session type</label>
+                  <select
+                    value={classModal.form.sessionType}
+                    onChange={(e) => setClassModal({ ...classModal, form: { ...classModal.form, sessionType: e.target.value } })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                  >
+                    {SESSION_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Capacity</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={classModal.form.capacity}
+                    onChange={(e) => setClassModal({ ...classModal, form: { ...classModal.form, capacity: e.target.value } })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Coach (optional)</label>
+                <select
+                  value={classModal.form.coachId || ""}
+                  onChange={(e) => setClassModal({ ...classModal, form: { ...classModal.form, coachId: e.target.value || null } })}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                >
+                  <option value="">No coach assigned yet</option>
+                  {coreCoaches.filter((c) => c.branch === classModal.form.branch).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              {classError && <div className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">{classError}</div>}
+            </div>
+            <div className="flex gap-2 mt-5">
+              <button onClick={closeClassModal} className="flex-1 px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-sm font-semibold">Cancel</button>
+              <button onClick={saveClassModal} disabled={classSaving} className="flex-1 px-4 py-2.5 rounded-xl bg-blue-950 text-white text-sm font-semibold disabled:opacity-60">
+                {classSaving ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {enrollModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={closeEnrollModal}>
+          <div className="bg-white rounded-2xl p-5 max-w-md w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-slate-900">New enrollment</h3>
+              <button onClick={closeEnrollModal}><X className="w-5 h-5 text-slate-400" /></button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Swimmer</label>
+                <select
+                  value={enrollModal.form.swimmerId}
+                  onChange={(e) => setEnrollModal({ ...enrollModal, form: { ...enrollModal.form, swimmerId: e.target.value } })}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                >
+                  <option value="">— Choose a swimmer —</option>
+                  {coreSwimmersForEnroll.map((s) => <option key={s.id} value={s.id}>{s.name}{s.phone ? ` · ${s.phone}` : ""}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Class</label>
+                <select
+                  value={enrollModal.form.classId}
+                  onChange={(e) => setEnrollModal({ ...enrollModal, form: { ...enrollModal.form, classId: e.target.value } })}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                >
+                  <option value="">— Choose a class —</option>
+                  {coreClasses.filter((c) => c.active !== false).map((c) => {
+                    const count = activeEnrollmentCountForClass(coreEnrollments, c.id);
+                    const full = count >= Number(c.capacity || 0);
+                    return <option key={c.id} value={c.id} disabled={full}>{c.name} ({count}/{c.capacity}){full ? " — full" : ""}</option>;
+                  })}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Enrollment type</label>
+                <div className="flex gap-2">
+                  {[
+                    { id: "recurring", label: "Recurring" },
+                    { id: "trial", label: "Trial (free)" },
+                    { id: "dropin", label: "Drop-in" },
+                  ].map((k) => (
+                    <button
+                      key={k.id}
+                      type="button"
+                      onClick={() => setEnrollModal({ ...enrollModal, form: { ...enrollModal.form, kind: k.id } })}
+                      className={`flex-1 text-xs px-2 py-2 rounded-lg border ${
+                        (enrollModal.form.kind || "recurring") === k.id ? "border-blue-900 bg-blue-50 text-blue-950 font-medium" : "border-slate-200 text-slate-500"
+                      }`}
+                    >
+                      {k.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  {enrollModal.form.kind === "trial"
+                    ? "A single free visit — doesn't reserve an ongoing weekly spot or create any charge."
+                    : enrollModal.form.kind === "dropin"
+                    ? "A single paid visit — doesn't reserve an ongoing weekly spot, only charges for this one session."
+                    : "An ongoing weekly membership, billed at the class's monthly plan price."}
+                </p>
+              </div>
+              {enrollModal.form.kind === "dropin" && (
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Price for this visit (EGP)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={enrollModal.form.dropInAmount}
+                    onChange={(e) => setEnrollModal({ ...enrollModal, form: { ...enrollModal.form, dropInAmount: e.target.value } })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  />
+                </div>
+              )}
+              {enrollError && <div className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">{enrollError}</div>}
+            </div>
+            <div className="flex gap-2 mt-5">
+              <button onClick={closeEnrollModal} className="flex-1 px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-sm font-semibold">Cancel</button>
+              <button onClick={saveEnrollModal} disabled={enrollSaving} className="flex-1 px-4 py-2.5 rounded-xl bg-blue-950 text-white text-sm font-semibold disabled:opacity-60">
+                {enrollSaving ? "Saving..." : "Enroll"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {familyLedgerModal && (() => {
+        const family = coreFamilies.find((f) => f.id === familyLedgerModal.familyId);
+        const familyCharges = coreLedger.filter((l) => l.type === "charge" && l.familyId === familyLedgerModal.familyId);
+        const familyPayments = coreLedger.filter((l) => l.type === "payment" && l.familyId === familyLedgerModal.familyId);
+        const familyAdjustments = coreLedger.filter((l) => (l.type === "credit" || l.type === "refund") && l.familyId === familyLedgerModal.familyId);
+        const rows = [...familyCharges, ...familyPayments, ...familyAdjustments].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+        return (
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={closeFamilyLedger}>
+            <div className="bg-white rounded-2xl p-5 max-w-lg w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">{family?.name || "Family"}</h3>
+                  <p className="text-xs text-slate-400">{family?.primaryPhone || "No phone"}</p>
+                </div>
+                <button onClick={closeFamilyLedger}><X className="w-5 h-5 text-slate-400" /></button>
+              </div>
+
+              <FamilyLedgerSummaryCard charges={coreLedger} familyId={familyLedgerModal.familyId} />
+
+              <div className="mt-4 border border-slate-200 rounded-xl p-3">
+                <div className="text-sm font-semibold mb-2">Record a payment</div>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    min="1"
+                    value={paymentAmount}
+                    onChange={(e) => setPaymentAmount(e.target.value)}
+                    placeholder="Amount (EGP)"
+                    className="flex-1 border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  />
+                  <select
+                    value={paymentMethod}
+                    onChange={(e) => setPaymentMethod(e.target.value)}
+                    className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                  >
+                    <option value="instapay">Instapay</option>
+                    <option value="cash">Cash</option>
+                    <option value="fawry">Fawry</option>
+                    <option value="paymob">Paymob</option>
+                  </select>
+                </div>
+                {paymentError && <div className="text-xs text-red-600 mt-2">{paymentError}</div>}
+                <button
+                  onClick={recordFamilyPayment}
+                  disabled={paymentSaving}
+                  className="w-full mt-2 px-4 py-2.5 rounded-xl bg-blue-950 text-white text-sm font-semibold disabled:opacity-60"
+                >
+                  {paymentSaving ? "Saving..." : "Record payment"}
+                </button>
+                <p className="text-[11px] text-slate-400 mt-1.5">Applied automatically to the family's oldest open charges first.</p>
+              </div>
+
+              <div className="mt-3 flex gap-2">
+                <button
+                  onClick={() => openAdjustmentModal(familyLedgerModal.familyId, "credit")}
+                  className="flex-1 px-4 py-2.5 rounded-xl border border-blue-200 text-blue-700 text-sm font-semibold hover:bg-blue-50"
+                >
+                  Issue credit
+                </button>
+                <button
+                  onClick={() => openAdjustmentModal(familyLedgerModal.familyId, "refund")}
+                  className="flex-1 px-4 py-2.5 rounded-xl border border-amber-200 text-amber-700 text-sm font-semibold hover:bg-amber-50"
+                >
+                  Issue refund
+                </button>
+              </div>
+
+              <div className="mt-4">
+                <div className="text-sm font-semibold mb-2">History</div>
+                <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                  {rows.length === 0 && <div className="text-xs text-slate-400 py-4 text-center">No charges or payments yet.</div>}
+                  {rows.map((r) => (
+                    <div key={r.id} className="flex items-center justify-between gap-2 text-sm border-b border-slate-50 pb-1.5">
+                      <div>
+                        <div className="font-medium">{r.description || (r.type === "payment" ? "Payment" : r.type === "credit" ? "Credit" : r.type === "refund" ? "Refund" : "Charge")}</div>
+                        <div className="text-[11px] text-slate-400">{r.month} · {r.type}{r.type === "charge" ? ` · ${r.status}` : r.type === "payment" ? ` · ${r.method || ""}` : ""}</div>
+                      </div>
+                      <div className={`font-semibold whitespace-nowrap ${r.type === "payment" || r.type === "credit" ? "text-green-600" : r.type === "refund" ? "text-amber-600" : ""}`}>
+                        {r.type === "payment" || r.type === "credit" ? "-" : r.type === "refund" ? "+" : ""}{Number(r.amount || 0).toLocaleString()} EGP
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {adjustmentModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-[60]" onClick={closeAdjustmentModal}>
+          <div className="bg-white rounded-2xl p-5 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-lg font-bold text-slate-900">
+                {adjustmentModal.kind === "credit" ? "Issue credit" : "Issue refund"}
+              </h3>
+              <button onClick={closeAdjustmentModal}><X className="w-5 h-5 text-slate-400" /></button>
+            </div>
+            <p className="text-xs text-slate-400 mb-4">
+              {adjustmentModal.kind === "credit"
+                ? "Reduces this family's balance without reversing a specific payment — for goodwill adjustments or discounts."
+                : "Records money actually given back to this family — doesn't change what they were charged, only how much stays collected."}
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Amount (EGP)</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={adjustmentAmount}
+                  onChange={(e) => setAdjustmentAmount(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Reason (optional)</label>
+                <input
+                  value={adjustmentReason}
+                  onChange={(e) => setAdjustmentReason(e.target.value)}
+                  placeholder={adjustmentModal.kind === "credit" ? "e.g. Pool closure goodwill" : "e.g. Cancelled before month started"}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                />
+              </div>
+              {adjustmentError && <div className="text-xs text-red-600">{adjustmentError}</div>}
+              <button
+                onClick={saveAdjustment}
+                disabled={adjustmentSaving}
+                className={`w-full py-2.5 rounded-xl text-white text-sm font-semibold disabled:opacity-60 ${
+                  adjustmentModal.kind === "credit" ? "bg-blue-950" : "bg-amber-600"
+                }`}
+              >
+                {adjustmentSaving ? "Saving..." : adjustmentModal.kind === "credit" ? "Issue credit" : "Issue refund"}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -10190,7 +11636,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           const myStillWithMe = myActiveInPrevMonth.filter((s) => s.coachId === c.id && s.day && s.time);
           const coachRetention = myActiveInPrevMonth.length ? Math.round((myStillWithMe.length / myActiveInPrevMonth.length) * 100) : null;
 
-          const scoreParts = [attendanceRate, skillsCoverage, coachRetention].filter((v) => v !== null);
+          // The coach's OWN attendance as staff — separate from whether
+          // their swimmers showed up — matched to their check-in/out
+          // records by account name, since that's the only link between a
+          // coach profile and the staff attendance log. Only meaningful if
+          // they actually have a staff account with recorded days this
+          // month; coaches without one just show "—" rather than 0%.
+          const myOwnRecords = staffAttendance.filter((r) => r.accountName === c.name && r.date.slice(0, 7) === selectedMonthKey);
+          const ownAttendanceRate =
+            myOwnRecords.length > 0 ? Math.round((myOwnRecords.filter((r) => r.checkIn).length / myOwnRecords.length) * 100) : null;
+
+          const scoreParts = [attendanceRate, skillsCoverage, coachRetention, ownAttendanceRate].filter((v) => v !== null);
           const overallScore = scoreParts.length > 0 ? Math.round(scoreParts.reduce((a, b) => a + b, 0) / scoreParts.length) : null;
 
           return {
@@ -10198,6 +11654,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             activeCount: myActiveSwimmers.length,
             attendanceRate,
             attendanceTrend,
+            ownAttendanceRate,
             skillsCoverage,
             retention: coachRetention,
             overallScore,
@@ -10264,6 +11721,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       <th className="pb-2 pr-3">{t("coach")}</th>
                       <th className="pb-2 pr-3">{t("swimmersCol")}</th>
                       <th className="pb-2 pr-3">{t("attendanceCol")}</th>
+                      <th className="pb-2 pr-3">{t("ownAttendanceCol")}</th>
                       <th className="pb-2 pr-3">{t("skillsCoverageCol")}</th>
                       <th className="pb-2">{t("retentionCol")}</th>
                     </tr>
@@ -10291,6 +11749,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                     {row.attendanceTrend > 0 ? "↑" : "↓"}
                                   </span>
                                 )}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2 pr-3">
+                            {row.ownAttendanceRate === null ? (
+                              <span className="text-slate-300">—</span>
+                            ) : (
+                              <span className={row.ownAttendanceRate >= 90 ? "text-green-600" : row.ownAttendanceRate >= 75 ? "text-amber-600" : "text-red-500"}>
+                                {row.ownAttendanceRate}%
                               </span>
                             )}
                           </td>
@@ -10840,10 +12307,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <div className="text-center text-slate-400 py-16">No one on the waitlist right now</div>
           ) : (
             <div className="space-y-2">
-              {waitlist.map((w) => (
+              {waitlist.map((w) => {
+                const position = waitlistPosition(waitlist, w);
+                return (
                 <div key={w.id} className="bg-white rounded-xl border border-slate-200 p-4 flex items-center justify-between gap-3 flex-wrap">
                   <div>
-                    <div className="font-semibold text-slate-800 text-sm">{w.swimmerName}</div>
+                    <div className="font-semibold text-slate-800 text-sm flex items-center gap-2">
+                      {position && <span className="text-xs bg-slate-100 text-slate-500 rounded-full w-5 h-5 flex items-center justify-center shrink-0">{position}</span>}
+                      {w.swimmerName}
+                    </div>
                     <div className="text-xs text-slate-400 mt-0.5">
                       {DAY_GROUPS.find((d) => d.id === w.day)?.label || w.day} · {w.time} · {w.level}
                       {w.coachId && ` · ${coaches.find((c) => c.id === w.coachId)?.name || "—"}`}
@@ -10853,6 +12325,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    <select
+                      value={w.priority ?? 4}
+                      onChange={(e) => setWaitlistPriority(w.id, Number(e.target.value))}
+                      className="text-xs border border-slate-200 rounded-full px-2 py-1.5 outline-none bg-white text-slate-600"
+                      title="Priority — lower is offered a spot sooner"
+                    >
+                      {WAITLIST_PRIORITY_TIERS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                    </select>
                     {w.phone && (
                       <a
                         href={waLink(w.phone, `Hi! A spot just opened up for ${w.swimmerName} on ${DAY_GROUPS.find((d) => d.id === w.day)?.label || w.day} at ${w.time}. Would you like to take it?`)}
@@ -10871,7 +12351,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     </button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -12432,6 +13913,21 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               >
                 <FileDown className="w-4 h-4" /> {backupRunning ? "Preparing..." : "Download full backup"}
               </button>
+            </div>
+
+            <h3 className="font-bold text-slate-900 mb-1 mt-6">Rebuild search index</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              Search, session rosters, and the paginated swimmers list read from a separate fast lookup table. It updates automatically on every save going forward — run this once if it's ever out of sync (e.g. after importing swimmers a different way).
+            </p>
+            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <button
+                onClick={rebuildSwimmersIndex}
+                disabled={indexRebuilding}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-700 disabled:opacity-60"
+              >
+                <RefreshCw className={`w-4 h-4 ${indexRebuilding ? "animate-spin" : ""}`} /> {indexRebuilding ? "Rebuilding..." : "Rebuild now"}
+              </button>
+              {indexRebuildResult && <p className="text-xs text-slate-400 mt-2">{indexRebuildResult}</p>}
             </div>
           </div>
           )}
@@ -14468,11 +15964,9 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   const markAttendance = async (swimmer, status) => {
     try {
       const updated = await updateSwimmerById(swimmer.id, (s) => {
-        const attendance = { ...(s.attendance || {}) };
-        if (attendance[today] === status) delete attendance[today];
-        else attendance[today] = status;
+        const withAttendance = applyAttendanceStatus(s, today, status);
         const trainingDates = Array.from(new Set([...(s.trainingDates || []), today])).sort();
-        return { ...s, attendance, trainingDates };
+        return { ...withAttendance, trainingDates };
       });
       setSwimmers((prev) => prev.map((s) => (s.id === swimmer.id ? updated : s)));
     } catch (e) {
@@ -16730,6 +18224,7 @@ const TRANSLATIONS = {
     coach: "Coach",
     swimmersCol: "Swimmers",
     attendanceCol: "Attendance",
+    ownAttendanceCol: "Own attendance",
     skillsCoverageCol: "Skills coverage",
     retentionCol: "Retention",
     allCoaches: "All coaches",
@@ -16838,6 +18333,7 @@ const TRANSLATIONS = {
     coach: "الكابتن",
     swimmersCol: "السباحين",
     attendanceCol: "الحضور",
+    ownAttendanceCol: "حضور الكابتن",
     skillsCoverageCol: "تغطية التقييمات",
     retentionCol: "الاحتفاظ",
     allCoaches: "كل الكباتن",
@@ -19255,7 +20751,76 @@ class ErrorBoundary extends React.Component {
   }
 }
 
-export default function App() {
+/* ============================================================
+   SCHEDULE / MAKEUP / WAITLIST INTEGRATION
+   Additive helpers. Legacy monthlySchedules remain untouched.
+   ============================================================ */
+function integratedSessionCapacity(sessionType, level) {
+  if (sessionType === "private") return 1;
+  if (sessionType === "semi-private") return 2;
+  if (sessionType === "group" && ["Exp", "Exp 2", "Exp 3"].includes(level)) return 2;
+  return 4;
+}
+
+function getScheduleOccupancy(swimmers = [], month) {
+  const rows = [];
+  swimmers.forEach((s) => {
+    const ms = getMonthlySchedule(s, month);
+    if (!ms) return;
+    const entries = [
+      { day: ms.day, time: ms.time, coachId: ms.coachId, sessionType: ms.sessionType || s.sessionType || "group", classId: ms.classId || null },
+      { day: ms.day2, time: ms.time2, coachId: ms.coachId2, sessionType: ms.sessionType2 || "group", classId: ms.classId || null },
+    ];
+    entries.forEach((e) => {
+      if (!e.day || !e.time) return;
+      rows.push({ ...e, swimmer: s });
+    });
+  });
+  return rows;
+}
+
+function getAvailableMakeupSlots(swimmers = [], month, swimmer, day, time) {
+  const occupancy = getScheduleOccupancy(swimmers, month);
+  const matching = occupancy.filter((r) => (!day || r.day === day) && (!time || r.time === time));
+  const groups = {};
+  matching.forEach((r) => {
+    const key = [r.day, r.time, r.coachId || "", r.sessionType].join("|");
+    if (!groups[key]) groups[key] = { ...r, swimmers: [] };
+    groups[key].swimmers.push(r.swimmer);
+  });
+  return Object.values(groups).filter((g) => {
+    const capacity = Math.max(...g.swimmers.map((s) => integratedSessionCapacity(g.sessionType, s.level)), 1);
+    return g.swimmers.length < capacity && !g.swimmers.some((s) => String(s.id) === String(swimmer?.id));
+  });
+}
+
+// Priority tier first (lower value = offered a spot sooner), then who's
+// been waiting longest within the same tier.
+function sortWaitlistRows(a, b) {
+  const pa = a.priority ?? 4;
+  const pb = b.priority ?? 4;
+  if (pa !== pb) return pa - pb;
+  return new Date(a.createdAt || 0) - new Date(b.createdAt || 0);
+}
+
+function waitlistPosition(rows = [], item) {
+  const sorted = rows.filter((w) => w.day === item.day && w.time === item.time)
+    .sort(sortWaitlistRows);
+  const idx = sorted.findIndex((w) => w.id === item.id);
+  return idx < 0 ? null : idx + 1;
+}
+
+
+/* ============================================================
+   Billing flow:
+   1. Enrollment creates the monthly charge.
+   2. Payment applies FIFO to the family's oldest open charges.
+   3. Partial payments remain PARTIAL.
+   4. Past-due balances become OVERDUE.
+   5. Refunds/voids never silently erase ledger history.
+   ============================================================ */
+
+function App() {
   const [view, setView] = useState(
     secondPathSegment() === "parent"
       ? "parentportal"
@@ -19446,3 +21011,179 @@ export default function App() {
     </ErrorBoundary>
   );
 }
+
+
+// Week grid for the Family & Billing "Calendar" sub-tab — real classes
+// (day × time, from the Classes entity) laid out visually instead of as
+// a flat list. Clicking an empty cell opens "New class" pre-filled with
+// that day/time; clicking an existing class pill opens it for editing.
+// Renders the three reminder categories from buildDailyReminders as
+// simple worklists — each row is one WhatsApp click away from being
+// handled. See the comment above buildDailyReminders for why this is
+// "compute + one-click send" rather than fully unattended automation.
+function DailyRemindersPanel({ classes = [], enrollments = [], swimmers = [], families = [], ledger = [] }) {
+  const { classReminders, makeupReminders } = buildDailyReminders({ classes, enrollments, swimmers, families, ledger });
+  const totalCount = classReminders.length + makeupReminders.length;
+
+  return (
+    <div className="p-3 space-y-5">
+      <div className="text-xs text-slate-400 bg-slate-50 rounded-lg px-3 py-2">
+        Payment reminders now live on the Dashboard (automatic where WhatsApp Business API is connected, with a manual WhatsApp button otherwise) — so a family only gets nudged from one place, not two. This panel covers what that one doesn't: tomorrow's classes and today's makeup credits.
+      </div>
+
+      {totalCount === 0 && (
+        <div className="py-8 text-center text-slate-400 text-sm">Nothing needs a reminder right now — all caught up.</div>
+      )}
+
+      {classReminders.length > 0 && (
+        <div>
+          <div className="text-xs font-semibold text-slate-500 mb-2">Tomorrow's classes ({classReminders.length})</div>
+          <div className="space-y-1.5">
+            {classReminders.map(({ key, swimmer, cls }) => (
+              <div key={key} className="border border-slate-100 rounded-xl p-3 flex items-center justify-between gap-3">
+                <div>
+                  <div className="font-semibold text-sm">{swimmer.name}</div>
+                  <div className="text-xs text-slate-400">{cls.name} · {cls.time}</div>
+                </div>
+                <a
+                  href={waLink(swimmer.phone, `Hi! Reminder: ${swimmer.name} has swimming tomorrow at ${cls.time}. See you there!`)}
+                  target="_blank" rel="noreferrer"
+                  className="text-xs px-3 py-1.5 rounded-full font-medium bg-green-50 text-green-700 hover:bg-green-100 whitespace-nowrap"
+                >
+                  WhatsApp
+                </a>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {makeupReminders.length > 0 && (
+        <div>
+          <div className="text-xs font-semibold text-slate-500 mb-2">Makeup credits earned today ({makeupReminders.length})</div>
+          <div className="space-y-1.5">
+            {makeupReminders.map(({ key, swimmer }) => (
+              <div key={key} className="border border-slate-100 rounded-xl p-3 flex items-center justify-between gap-3">
+                <div>
+                  <div className="font-semibold text-sm">{swimmer.name}</div>
+                  <div className="text-xs text-slate-400">{swimmer.makeupCredits} makeup session{swimmer.makeupCredits === 1 ? "" : "s"} owed</div>
+                </div>
+                <a
+                  href={waLink(swimmer.phone, `Hi! ${swimmer.name} was marked absent today, so we've added a free makeup session to their account — just let us know which slot works.`)}
+                  target="_blank" rel="noreferrer"
+                  className="text-xs px-3 py-1.5 rounded-full font-medium bg-green-50 text-green-700 hover:bg-green-100 whitespace-nowrap"
+                >
+                  WhatsApp
+                </a>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ClassCalendarGrid({ classes = [], enrollments = [], coaches = [], onCellClick, onClassClick }) {
+  const branchId = BRANCHES[0]?.id;
+  const allTimes = Array.from(
+    new Set(DAY_GROUPS.flatMap((d) => TIME_SLOTS[branchId]?.[d.id] || []))
+  ).sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
+
+  if (allTimes.length === 0) {
+    return <div className="py-12 text-center text-slate-400 text-sm">No time slots configured yet — set them up in Settings.</div>;
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full border-collapse text-xs min-w-[560px]">
+        <thead>
+          <tr>
+            <th className="text-left text-slate-400 font-medium p-2 w-20 sticky left-0 bg-white">Time</th>
+            {DAY_GROUPS.map((d) => (
+              <th key={d.id} className="text-left text-slate-500 font-semibold p-2 border-b border-slate-100">{d.label}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {allTimes.map((t) => (
+            <tr key={t} className="border-t border-slate-50">
+              <td className="p-2 text-slate-400 whitespace-nowrap align-top sticky left-0 bg-white">{t}</td>
+              {DAY_GROUPS.map((d) => {
+                const offered = (TIME_SLOTS[branchId]?.[d.id] || []).includes(t);
+                if (!offered) return <td key={d.id} className="p-2 bg-slate-50/50"></td>;
+                const classesHere = classes.filter((c) => c.active !== false && c.day === d.id && c.time === t);
+                return (
+                  <td key={d.id} className="p-1.5 align-top border-l border-slate-50 min-w-[120px]">
+                    <div className="space-y-1">
+                      {classesHere.map((c) => {
+                        const count = activeEnrollmentCountForClass(enrollments, c.id);
+                        const full = count >= Number(c.capacity || 0);
+                        const coachName = coaches.find((co) => co.id === c.coachId)?.name;
+                        return (
+                          <button
+                            key={c.id}
+                            onClick={() => onClassClick(c)}
+                            className={`w-full text-left rounded-lg px-2 py-1.5 ${full ? "bg-red-50 hover:bg-red-100" : "bg-blue-50 hover:bg-blue-100"}`}
+                          >
+                            <div className="font-semibold text-slate-800">{c.level}</div>
+                            <div className="text-slate-400">{coachName || "No coach"} · {count}/{c.capacity}</div>
+                          </button>
+                        );
+                      })}
+                      <button
+                        onClick={() => onCellClick(d.id, t)}
+                        className="w-full text-slate-300 hover:text-blue-900 hover:bg-blue-50 rounded-lg py-1 flex items-center justify-center"
+                        title="New class at this slot"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function FamilyLedgerSummaryCard({ charges = [], familyId }) {
+  const s = getFamilyLedgerSummary(charges, familyId);
+
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="rounded-xl border border-slate-200 bg-white p-3">
+        <div className="text-xs text-slate-400">Charges</div>
+        <div className="font-bold">{s.totalCharges.toLocaleString()}</div>
+      </div>
+      <div className="rounded-xl border border-slate-200 bg-white p-3">
+        <div className="text-xs text-slate-400">Paid</div>
+        <div className="font-bold">{s.totalPaid.toLocaleString()}</div>
+      </div>
+      {(s.totalCredits > 0 || s.totalRefunds > 0) && (
+        <div className="rounded-xl border border-slate-200 bg-white p-3">
+          <div className="text-xs text-slate-400">Credits / Refunds</div>
+          <div className="font-bold">
+            {s.totalCredits > 0 && <span className="text-blue-700">-{s.totalCredits.toLocaleString()}</span>}
+            {s.totalCredits > 0 && s.totalRefunds > 0 && " / "}
+            {s.totalRefunds > 0 && <span className="text-amber-600">+{s.totalRefunds.toLocaleString()}</span>}
+          </div>
+        </div>
+      )}
+      <div className="rounded-xl border border-slate-200 bg-white p-3">
+        <div className="text-xs text-slate-400">Balance</div>
+        <div className="font-bold">{s.balance.toLocaleString()}</div>
+      </div>
+      <div className="rounded-xl border border-slate-200 bg-white p-3">
+        <div className="text-xs text-slate-400">Overdue</div>
+        <div className="font-bold">{s.overdue.toLocaleString()}</div>
+      </div>
+    </div>
+  );
+}
+
+export default App;
+
