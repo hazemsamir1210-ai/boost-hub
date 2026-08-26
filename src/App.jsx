@@ -1349,7 +1349,7 @@ async function setAdminPasswordOverride(newPassword) {
    and any save right after that can fail with "Couldn't save...".
    Instead, each data type now lives as a single array under one key, so
    loading or saving a whole collection is exactly one storage call. */
-const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all", incidents: "incidents-all", registrations: "registrations-all", feedback: "parent-feedback-all", waitlist: "waitlist-all", courses: "coach-courses-all", coursePayments: "course-payments-all", courseStudents: "course-students-all" };
+const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all", incidents: "incidents-all", registrations: "registrations-all", feedback: "parent-feedback-all", waitlist: "waitlist-all", courses: "coach-courses-all", coursePayments: "course-payments-all", courseStudents: "course-students-all", payrollAdjustments: "payroll-adjustments-all" };
 
 // The single latest announcement shown as a banner to every parent when
 // they open the Parent Portal — simple broadcast, not per-person messages.
@@ -2144,7 +2144,7 @@ function computeLateDeduction(record, expectedStartTime) {
 // salary divided by however many actual working days are in that month
 // (not a flat 30) — set once for the whole academy in the Attendance
 // tab (weekly day off + any extra holiday dates).
-function computePayroll(account, records, monthKeyStr, payrollSettings) {
+function computePayroll(account, records, monthKeyStr, payrollSettings, adjustments = []) {
   if (!account?.monthlySalary) return null;
   const workingDays = workingDaysInMonth(monthKeyStr, payrollSettings);
   const dailyRate = account.monthlySalary / workingDays;
@@ -2161,13 +2161,33 @@ function computePayroll(account, records, monthKeyStr, payrollSettings) {
     if (r.overtimeHours) totalOvertimeHours += Number(r.overtimeHours);
   });
   const overtimePay = totalOvertimeHours * (account.overtimeHourlyRate || 0);
+
+  // Bonuses/manual deductions/advances the admin added by hand for this
+  // person this month — on top of what's computed from attendance above.
+  const mine = adjustments.filter((a) => a.accountName === account.name && a.month === monthKeyStr);
+  const bonuses = mine.filter((a) => a.type === "bonus");
+  const manualDeductions = mine.filter((a) => a.type === "deduction");
+  const advances = mine.filter((a) => a.type === "advance");
+  const totalBonuses = bonuses.reduce((s, a) => s + Number(a.amount || 0), 0);
+  const totalManualDeductions = manualDeductions.reduce((s, a) => s + Number(a.amount || 0), 0);
+  const totalAdvances = advances.reduce((s, a) => s + Number(a.amount || 0), 0);
+
+  const approved = adjustments.some((a) => a.type === "approval" && a.accountName === account.name && a.month === monthKeyStr);
+
   return {
     base: account.monthlySalary,
     workingDays,
     totalDeduction,
     totalOvertimeHours,
     overtimePay,
-    net: account.monthlySalary - totalDeduction + overtimePay,
+    bonuses,
+    manualDeductions,
+    advances,
+    totalBonuses,
+    totalManualDeductions,
+    totalAdvances,
+    approved,
+    net: account.monthlySalary - totalDeduction + overtimePay + totalBonuses - totalManualDeductions - totalAdvances,
     deductionEvents,
   };
 }
@@ -6427,6 +6447,62 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   const removeHolidayDate = (date) => {
     updatePayrollSettings({ ...payrollSettings, extraHolidays: payrollSettings.extraHolidays.filter((d) => d !== date) });
+  };
+
+  // ---- Payroll adjustments: bonuses, manual deductions, advances, and
+  // the per-person "approved" flag for a given month. All stored as one
+  // flat list (STORE_KEYS.payrollAdjustments), one row per adjustment —
+  // computePayroll() filters this down to one account+month at a time. ----
+  const [payrollAdjustments, setPayrollAdjustments] = useState([]);
+  const [payrollAdjustmentFormFor, setPayrollAdjustmentFormFor] = useState(null); // account name, or null when closed
+  const [payrollAdjType, setPayrollAdjType] = useState("bonus");
+  const [payrollAdjAmount, setPayrollAdjAmount] = useState("");
+  const [payrollAdjNote, setPayrollAdjNote] = useState("");
+  const [payslipFor, setPayslipFor] = useState(null); // account, or null when closed
+
+  useEffect(() => {
+    if (tab === "attendance") loadCollection(STORE_KEYS.payrollAdjustments).then(setPayrollAdjustments);
+  }, [tab]);
+
+  const openAdjustmentForm = (accountName) => {
+    setPayrollAdjustmentFormFor(accountName);
+    setPayrollAdjType("bonus");
+    setPayrollAdjAmount("");
+    setPayrollAdjNote("");
+  };
+
+  const savePayrollAdjustment = async () => {
+    if (!payrollAdjustmentFormFor || !payrollAdjAmount) return;
+    const record = {
+      id: genId(),
+      accountName: payrollAdjustmentFormFor,
+      month: attendanceMonth,
+      type: payrollAdjType,
+      amount: Number(payrollAdjAmount),
+      note: payrollAdjNote.trim(),
+      createdAt: new Date().toISOString(),
+    };
+    const next = [...payrollAdjustments, record];
+    setPayrollAdjustments(next);
+    await saveCollection(STORE_KEYS.payrollAdjustments, next);
+    logActivity(accountName, role, "Added payroll adjustment", `${payrollAdjustmentFormFor} — ${payrollAdjType} ${payrollAdjAmount}`);
+    setPayrollAdjustmentFormFor(null);
+  };
+
+  const deletePayrollAdjustment = async (id) => {
+    const next = payrollAdjustments.filter((a) => a.id !== id);
+    setPayrollAdjustments(next);
+    await saveCollection(STORE_KEYS.payrollAdjustments, next);
+  };
+
+  const togglePayrollApproval = async (targetAccountName) => {
+    const existing = payrollAdjustments.find((a) => a.type === "approval" && a.accountName === targetAccountName && a.month === attendanceMonth);
+    const next = existing
+      ? payrollAdjustments.filter((a) => a.id !== existing.id)
+      : [...payrollAdjustments, { id: genId(), accountName: targetAccountName, month: attendanceMonth, type: "approval", amount: 0, note: "", createdAt: new Date().toISOString() }];
+    setPayrollAdjustments(next);
+    await saveCollection(STORE_KEYS.payrollAdjustments, next);
+    logActivity(accountName, role, existing ? "Unapproved payroll" : "Approved payroll", `${targetAccountName} — ${attendanceMonth}`);
   };
 
   const loadStaffAttendance = useCallback(async () => {
@@ -12160,19 +12236,43 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   .filter((a) => a.monthlySalary)
                   .map((a) => {
                     const records = staffAttendance.filter((r) => r.accountName === a.name && r.date.startsWith(attendanceMonth));
-                    const payroll = computePayroll(a, records, attendanceMonth, payrollSettings);
+                    const payroll = computePayroll(a, records, attendanceMonth, payrollSettings, payrollAdjustments);
                     if (!payroll) return null;
                     return (
                       <div key={a.id} className="bg-slate-50 rounded-xl px-4 py-3">
                         <div className="flex items-center justify-between">
-                          <span className="font-medium text-slate-800 text-sm">{a.name}</span>
+                          <span className="font-medium text-slate-800 text-sm flex items-center gap-1.5">
+                            {a.name}
+                            {payroll.approved && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-semibold">{t("payrollApproved")}</span>
+                            )}
+                          </span>
                           <span className="font-bold text-slate-900">{payroll.net.toFixed(0)} EGP</span>
                         </div>
                         <div className="text-xs text-slate-400 mt-0.5">
                           {payroll.base} base ({payroll.workingDays} working days)
                           {payroll.totalDeduction > 0 && ` − ${payroll.totalDeduction.toFixed(0)} deducted (${payroll.deductionEvents.length} late check-in${payroll.deductionEvents.length === 1 ? "" : "s"})`}
                           {payroll.overtimePay > 0 && ` + ${payroll.overtimePay.toFixed(0)} overtime (${payroll.totalOvertimeHours}h)`}
+                          {payroll.totalBonuses > 0 && ` + ${payroll.totalBonuses.toFixed(0)} ${t("payrollBonuses").toLowerCase()}`}
+                          {payroll.totalManualDeductions > 0 && ` − ${payroll.totalManualDeductions.toFixed(0)} ${t("payrollManualDeductions").toLowerCase()}`}
+                          {payroll.totalAdvances > 0 && ` − ${payroll.totalAdvances.toFixed(0)} ${t("payrollAdvances").toLowerCase()}`}
                         </div>
+                        {canEditStaffAttendance && (
+                          <div className="flex items-center gap-2 mt-2">
+                            <button onClick={() => openAdjustmentForm(a.name)} className="text-[11px] px-2 py-1 rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-100">
+                              + {t("payrollAddAdjustment")}
+                            </button>
+                            <button onClick={() => setPayslipFor(a)} className="text-[11px] px-2 py-1 rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-100">
+                              {t("payrollViewPayslip")}
+                            </button>
+                            <button
+                              onClick={() => togglePayrollApproval(a.name)}
+                              className={`text-[11px] px-2 py-1 rounded-lg ml-auto ${payroll.approved ? "bg-slate-200 text-slate-600 hover:bg-slate-300" : "bg-green-600 text-white hover:bg-green-700"}`}
+                            >
+                              {payroll.approved ? t("payrollUnapprove") : t("payrollApprovePayroll")}
+                            </button>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -12251,6 +12351,124 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           )}
         </div>
       )}
+
+      {payrollAdjustmentFormFor && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setPayrollAdjustmentFormFor(null)}>
+          <div className="bg-white rounded-2xl p-5 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-slate-900">{payrollAdjustmentFormFor}</h3>
+              <button onClick={() => setPayrollAdjustmentFormFor(null)}><X className="w-5 h-5 text-slate-400" /></button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">{t("payrollType")}</label>
+                <select
+                  value={payrollAdjType}
+                  onChange={(e) => setPayrollAdjType(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                >
+                  <option value="bonus">{t("payrollBonus")}</option>
+                  <option value="deduction">{t("payrollDeduction")}</option>
+                  <option value="advance">{t("payrollAdvance")}</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">{t("payrollAmount")}</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={payrollAdjAmount}
+                  onChange={(e) => setPayrollAdjAmount(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">{t("payrollNote")}</label>
+                <input
+                  value={payrollAdjNote}
+                  onChange={(e) => setPayrollAdjNote(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2 mt-5">
+              <button onClick={() => setPayrollAdjustmentFormFor(null)} className="flex-1 px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-sm font-semibold">
+                {t("payrollCancel")}
+              </button>
+              <button onClick={savePayrollAdjustment} disabled={!payrollAdjAmount} className="flex-1 px-4 py-2.5 rounded-xl bg-blue-950 text-white text-sm font-semibold disabled:opacity-60">
+                {t("payrollSave")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {payslipFor && (() => {
+        const records = staffAttendance.filter((r) => r.accountName === payslipFor.name && r.date.startsWith(attendanceMonth));
+        const payroll = computePayroll(payslipFor, records, attendanceMonth, payrollSettings, payrollAdjustments);
+        const mine = payrollAdjustments.filter((adj) => adj.accountName === payslipFor.name && adj.month === attendanceMonth && adj.type !== "approval");
+        if (!payroll) return null;
+        return (
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50 print:bg-white print:static" onClick={() => setPayslipFor(null)}>
+            <div className="bg-white rounded-2xl p-6 max-w-md w-full max-h-[90vh] overflow-y-auto print:shadow-none print:max-h-none" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-1 print:hidden">
+                <h3 className="text-lg font-bold text-slate-900">{t("payrollPayslipTitle")}</h3>
+                <button onClick={() => setPayslipFor(null)}><X className="w-5 h-5 text-slate-400" /></button>
+              </div>
+              <div className="text-sm text-slate-400 mb-4">{payslipFor.name} · {monthLabel(attendanceMonth)}</div>
+
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between"><span className="text-slate-500">{t("payrollBaseSalary")}</span><span className="font-medium">{payroll.base.toFixed(0)} EGP</span></div>
+                {payroll.overtimePay > 0 && (
+                  <div className="flex justify-between text-green-700"><span>{t("payrollOvertime")} ({payroll.totalOvertimeHours}h)</span><span className="font-medium">+{payroll.overtimePay.toFixed(0)} EGP</span></div>
+                )}
+                {payroll.totalBonuses > 0 && (
+                  <div className="flex justify-between text-green-700"><span>{t("payrollBonuses")}</span><span className="font-medium">+{payroll.totalBonuses.toFixed(0)} EGP</span></div>
+                )}
+                {payroll.totalDeduction > 0 && (
+                  <div className="flex justify-between text-red-600"><span>{t("payrollLateDeductions")} ({payroll.deductionEvents.length})</span><span className="font-medium">−{payroll.totalDeduction.toFixed(0)} EGP</span></div>
+                )}
+                {payroll.totalManualDeductions > 0 && (
+                  <div className="flex justify-between text-red-600"><span>{t("payrollManualDeductions")}</span><span className="font-medium">−{payroll.totalManualDeductions.toFixed(0)} EGP</span></div>
+                )}
+                {payroll.totalAdvances > 0 && (
+                  <div className="flex justify-between text-red-600"><span>{t("payrollAdvances")}</span><span className="font-medium">−{payroll.totalAdvances.toFixed(0)} EGP</span></div>
+                )}
+                <div className="border-t border-slate-200 pt-2 flex justify-between font-bold text-slate-900">
+                  <span>{t("payrollNetPay")}</span><span>{payroll.net.toFixed(0)} EGP</span>
+                </div>
+              </div>
+
+              {mine.length > 0 && (
+                <div className="mt-5 print:hidden">
+                  <div className="text-xs text-slate-400 font-medium mb-1.5">{t("payrollAddAdjustment")}</div>
+                  <div className="space-y-1.5">
+                    {mine.map((adj) => (
+                      <div key={adj.id} className="flex items-center justify-between text-xs bg-slate-50 rounded-lg px-3 py-1.5">
+                        <span>{t(adj.type === "bonus" ? "payrollBonus" : adj.type === "deduction" ? "payrollDeduction" : "payrollAdvance")} — {adj.amount} EGP{adj.note ? ` (${adj.note})` : ""}</span>
+                        {canEditStaffAttendance && (
+                          <button onClick={() => deletePayrollAdjustment(adj.id)} className="text-red-400 hover:text-red-600">
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-2 mt-5 print:hidden">
+                <button onClick={() => setPayslipFor(null)} className="flex-1 px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-sm font-semibold">
+                  {t("payrollClose")}
+                </button>
+                <button onClick={() => window.print()} className="flex-1 px-4 py-2.5 rounded-xl bg-blue-950 text-white text-sm font-semibold">
+                  {t("payrollPrint")}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {tab === "registrations" && canEditContent && (
         <div>
@@ -18239,6 +18457,31 @@ const TRANSLATIONS = {
     topCoachesSub: "Ranked by a combined score of attendance, retention and skills coverage",
     notEnoughData: "Not enough data yet for this month",
     overallScore: "Score",
+    payrollBonus: "Bonus",
+    payrollDeduction: "Deduction",
+    payrollAdvance: "Advance",
+    payrollAddAdjustment: "Add adjustment",
+    payrollApproved: "Approved",
+    payrollApprovePayroll: "Approve payroll",
+    payrollUnapprove: "Unapprove",
+    payrollViewPayslip: "View payslip",
+    payrollPayslipTitle: "Payslip",
+    payrollBaseSalary: "Base salary",
+    payrollOvertime: "Overtime",
+    payrollLateDeductions: "Late deductions",
+    payrollBonuses: "Bonuses",
+    payrollManualDeductions: "Deductions",
+    payrollAdvances: "Advances",
+    payrollNetPay: "Net pay",
+    payrollAmount: "Amount (EGP)",
+    payrollNote: "Note (optional)",
+    payrollSave: "Save",
+    payrollCancel: "Cancel",
+    payrollPrint: "Print",
+    payrollDelete: "Delete",
+    payrollType: "Type",
+    payrollNoAdjustments: "No adjustments added this month",
+    payrollClose: "Close",
   },
   ar: {
     newRegistration: "تسجيل سباح جديد",
@@ -18348,6 +18591,31 @@ const TRANSLATIONS = {
     topCoachesSub: "الترتيب حسب مجموع نسبة الحضور، الاحتفاظ، وتغطية التقييمات",
     notEnoughData: "لسه مفيش بيانات كفاية للشهر ده",
     overallScore: "التقييم",
+    payrollBonus: "مكافأة",
+    payrollDeduction: "خصم",
+    payrollAdvance: "سلفة",
+    payrollAddAdjustment: "إضافة تعديل",
+    payrollApproved: "معتمد",
+    payrollApprovePayroll: "اعتماد المرتب",
+    payrollUnapprove: "إلغاء الاعتماد",
+    payrollViewPayslip: "عرض قسيمة المرتب",
+    payrollPayslipTitle: "قسيمة المرتب",
+    payrollBaseSalary: "الراتب الأساسي",
+    payrollOvertime: "الوقت الإضافي",
+    payrollLateDeductions: "خصومات التأخير",
+    payrollBonuses: "المكافآت",
+    payrollManualDeductions: "الخصومات",
+    payrollAdvances: "السُّلف",
+    payrollNetPay: "صافي الراتب",
+    payrollAmount: "المبلغ (جنيه)",
+    payrollNote: "ملاحظة (اختياري)",
+    payrollSave: "حفظ",
+    payrollCancel: "إلغاء",
+    payrollPrint: "طباعة",
+    payrollDelete: "حذف",
+    payrollType: "النوع",
+    payrollNoAdjustments: "لم يتم إضافة أي تعديلات هذا الشهر",
+    payrollClose: "إغلاق",
   },
 };
 
