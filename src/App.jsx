@@ -359,6 +359,18 @@ async function saveSubscriptionPayments(list) {
 }
 
 /* ============================================================
+   Platform brand — the SaaS product's own name, distinct from any
+   individual academy's name/logo (that's CONFIG.academyName below,
+   which is overridden per-academy at runtime). This is what shows on
+   platform-level screens: the root gate page (before an academy is
+   chosen), Super Admin, the browser tab title.
+   ============================================================ */
+const PLATFORM_BRAND = {
+  name: "AquaCore",
+  tagline: "Swimming Academy Management System",
+};
+
+/* ============================================================
    Academy settings — edit these values easily
    ============================================================ */
 const CONFIG = {
@@ -11262,6 +11274,64 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           downloadReportHTML(`report-${reportType}-${reportAnchor}`, bodyHtml);
         };
 
+        // Raw data as a real spreadsheet — for whoever wants to pivot,
+        // filter, or hand it to an accountant, rather than read the
+        // formatted print-style PDF above. Separate sheet per section, so
+        // it opens straight into something a bookkeeper can use as-is.
+        const exportReportExcel = async () => {
+          const XLSX = await loadXLSX();
+          const wb = XLSX.utils.book_new();
+
+          const incomeAoa = [
+            ["Receipt #", "Date", "Swimmer", "Plan", "Method", "Amount (EGP)"],
+            ...incomeRows.map((r) => [
+              r.receiptNo || "",
+              (r.confirmedAt || r.createdAt || "").slice(0, 10),
+              r.name,
+              r.planName,
+              r.method === "cash" ? "Cash" : r.method === "card" ? "Card" : "Instapay",
+              netPrice(r),
+            ]),
+          ];
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(incomeAoa), "Income");
+
+          const expenseAoa = [
+            ["Date", "Note", "Amount (EGP)"],
+            ...expenseRows.map((e) => [e.date, e.note || "", Number(e.amount) || 0]),
+          ];
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(expenseAoa), "Expenses");
+
+          const attendanceAoa = [
+            ["Swimmer", "Present", "Absent"],
+            ...attendanceRows.map(({ s, present, absent }) => [s.name, present, absent]),
+          ];
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(attendanceAoa), "Attendance");
+
+          if (levelUpRows.length > 0) {
+            const levelUpAoa = [
+              ["Date", "Swimmer", "New level"],
+              ...levelUpRows.map((h) => [(h.date || "").slice(0, 10), h.swimmer.name, h.level]),
+            ];
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(levelUpAoa), "Level-ups");
+          }
+
+          if (coachPerformance.length > 0) {
+            const coachAoa = [
+              ["Coach", "Active swimmers", "Attendance %", "Skills coverage %", "Retention %"],
+              ...coachPerformance.map((cp) => [
+                cp.coach.name,
+                cp.activeCount,
+                cp.attendanceRate ?? "",
+                cp.skillsCoverage ?? "",
+                cp.retention ?? "",
+              ]),
+            ];
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(coachAoa), "Coach performance");
+          }
+
+          XLSX.writeFile(wb, `report-${reportType}-${reportAnchor}.xlsx`);
+        };
+
         return (
           <div className="space-y-8">
 
@@ -11303,6 +11373,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 className="ml-auto flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
               >
                 <FileDown className="w-4 h-4" /> Export PDF
+              </button>
+              <button
+                onClick={exportReportExcel}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50"
+              >
+                <FileDown className="w-4 h-4" /> {t("reportsExportExcel")}
               </button>
             </div>
             <div className="text-xs text-slate-400 -mt-4 print:hidden">
@@ -18482,6 +18558,12 @@ const TRANSLATIONS = {
     payrollType: "Type",
     payrollNoAdjustments: "No adjustments added this month",
     payrollClose: "Close",
+    reportsExportExcel: "Export Excel",
+    parentBalanceTitle: "Balance & payment history",
+    parentPayment: "Payment",
+    parentCharge: "Charge",
+    parentNoLedgerYet: "No charges or payments recorded yet",
+    parentNoPaymentsYet: "No payments recorded yet",
   },
   ar: {
     newRegistration: "تسجيل سباح جديد",
@@ -18616,6 +18698,12 @@ const TRANSLATIONS = {
     payrollType: "النوع",
     payrollNoAdjustments: "لم يتم إضافة أي تعديلات هذا الشهر",
     payrollClose: "إغلاق",
+    reportsExportExcel: "تصدير Excel",
+    parentBalanceTitle: "الرصيد وسجل المدفوعات",
+    parentPayment: "دفعة",
+    parentCharge: "فاتورة",
+    parentNoLedgerYet: "لا توجد فواتير أو مدفوعات مسجلة بعد",
+    parentNoPaymentsYet: "لا توجد مدفوعات مسجلة بعد",
   },
 };
 
@@ -18934,6 +19022,7 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
    hand to the parent). Shows the swimmer's level & skill progress and
    payment history, and lets them jump straight into renewing. */
 function ParentPortalView({ onRenew, onExit }) {
+  const { t, lang, setLang } = useLang();
   const [phone, setPhone] = useState("");
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
@@ -18941,10 +19030,36 @@ function ParentPortalView({ onRenew, onExit }) {
   const [siblings, setSiblings] = useState(null); // array of swimmer data once logged in
   const [selectedId, setSelectedId] = useState(null);
   const [broadcast, setBroadcast] = useState(null);
+  const [family, setFamily] = useState(null); // this phone's family record, once resolved
+  const [familyLedger, setFamilyLedger] = useState([]);
 
   useEffect(() => {
     loadBroadcast().then(setBroadcast);
   }, []);
+
+  // Resolve this phone number's family + ledger once logged in, so the
+  // "Balance" card below can show the SAME real charges/payments the
+  // academy sees on their side (Family & Billing → same getFamilyLedgerSummary),
+  // not just a bare list of paid months like before.
+  useEffect(() => {
+    if (!siblings) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [families, ledger] = await Promise.all([
+          loadCoreCollection(CORE_KEYS.families),
+          loadCoreCollection(CORE_KEYS.ledger),
+        ]);
+        if (cancelled) return;
+        const mine = families.find((f) => f.primaryPhone === phone.trim());
+        setFamily(mine || null);
+        setFamilyLedger(ledger);
+      } catch (e) {
+        console.warn("Could not load family ledger for parent portal", e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [siblings, phone]);
 
   const login = async () => {
     setError("");
@@ -18977,7 +19092,14 @@ function ParentPortalView({ onRenew, onExit }) {
 
   if (!siblings) {
     return (
-      <div className="min-h-screen flex items-center justify-center px-4 bg-slate-50">
+      <div dir={lang === "ar" ? "rtl" : "ltr"} className="min-h-screen flex items-center justify-center px-4 bg-slate-50">
+        <button
+          onClick={() => setLang(lang === "en" ? "ar" : "en")}
+          className="fixed top-4 z-50 px-3 py-1.5 rounded-full bg-white shadow-lg text-xs font-semibold text-blue-950 hover:bg-slate-50 transition"
+          style={lang === "ar" ? { left: "1rem" } : { right: "1rem" }}
+        >
+          {lang === "en" ? "العربية" : "English"}
+        </button>
         <div className="max-w-sm w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
           <img src={CONFIG.logoDataUri} alt={CONFIG.academyName} className="w-14 h-14 mx-auto mb-4 object-contain" />
           <h2 className="text-xl font-bold text-slate-900 mb-1 text-center">Parent Portal</h2>
@@ -19025,7 +19147,14 @@ function ParentPortalView({ onRenew, onExit }) {
   const paidThisMonth = (s.paidMonths || []).includes(monthKey());
 
   return (
-    <div className="min-h-screen bg-slate-50 px-4 py-10">
+    <div dir={lang === "ar" ? "rtl" : "ltr"} className="min-h-screen bg-slate-50 px-4 py-10">
+      <button
+        onClick={() => setLang(lang === "en" ? "ar" : "en")}
+        className="fixed top-4 z-50 px-3 py-1.5 rounded-full bg-white shadow-lg text-xs font-semibold text-blue-950 hover:bg-slate-50 transition"
+        style={lang === "ar" ? { left: "1rem" } : { right: "1rem" }}
+      >
+        {lang === "en" ? "العربية" : "English"}
+      </button>
       <div className="max-w-md mx-auto">
         <div className="flex items-center justify-between mb-6">
           <img src={CONFIG.logoDataUri} alt={CONFIG.academyName} className="w-10 h-10 object-contain" />
@@ -19108,15 +19237,44 @@ function ParentPortalView({ onRenew, onExit }) {
         )}
 
         <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-4">
-          <h3 className="font-bold text-slate-900 mb-3">Payment history</h3>
-          {paidMonths.length === 0 ? (
-            <p className="text-sm text-slate-400">No payments recorded yet</p>
+          <h3 className="font-bold text-slate-900 mb-3">{t("parentBalanceTitle")}</h3>
+          {family ? (
+            <>
+              <FamilyLedgerSummaryCard charges={familyLedger.filter((l) => l.type === "charge")} familyId={family.id} />
+              <div className="mt-4 space-y-1.5 max-h-56 overflow-y-auto">
+                {familyLedger
+                  .filter((l) => l.familyId === family.id)
+                  .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+                  .map((row) => (
+                    <div key={row.id} className="flex items-center justify-between gap-2 text-sm border-b border-slate-50 pb-1.5">
+                      <div>
+                        <div className="font-medium">{row.description || (row.type === "payment" ? t("parentPayment") : t("parentCharge"))}</div>
+                        <div className="text-[11px] text-slate-400">{row.month}</div>
+                      </div>
+                      <div className={`font-semibold whitespace-nowrap ${row.type === "payment" ? "text-green-600" : ""}`}>
+                        {row.type === "payment" ? "+" : ""}{Number(row.amount || 0).toLocaleString()} EGP
+                      </div>
+                    </div>
+                  ))}
+                {familyLedger.filter((l) => l.familyId === family.id).length === 0 && (
+                  <p className="text-sm text-slate-400">{t("parentNoLedgerYet")}</p>
+                )}
+              </div>
+            </>
           ) : (
-            <div className="flex flex-wrap gap-1.5">
-              {paidMonths.map((m) => (
-                <span key={m} className="text-xs px-2.5 py-1 rounded-full bg-green-50 text-green-700 font-medium">{monthLabel(m)}</span>
-              ))}
-            </div>
+            // No matching family record yet — this academy hasn't been
+            // through Family & Billing's one-time migration for this
+            // phone number, or this family predates it. Falls back to
+            // the simple paid-months list so parents still see something.
+            paidMonths.length === 0 ? (
+              <p className="text-sm text-slate-400">{t("parentNoPaymentsYet")}</p>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {paidMonths.map((m) => (
+                  <span key={m} className="text-xs px-2.5 py-1 rounded-full bg-green-50 text-green-700 font-medium">{monthLabel(m)}</span>
+                ))}
+              </div>
+            )
           )}
         </div>
 
@@ -19342,7 +19500,7 @@ function GatewayView() {
           <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-blue-950 flex items-center justify-center">
             <Waves className="w-7 h-7 text-white" />
           </div>
-          <h2 className="text-xl font-bold text-slate-900 mb-1 text-center">Swimming Academy Management</h2>
+          <h2 className="text-xl font-bold text-slate-900 mb-1 text-center">{PLATFORM_BRAND.name}</h2>
           <p className="text-sm text-slate-400 mb-1 text-center">Who's logging in?</p>
           {savedAcademy && (
             <p className="text-xs text-slate-400 mb-6 text-center">
@@ -19580,7 +19738,8 @@ function AcademyNameGateView() {
         <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-blue-950 flex items-center justify-center">
           <Waves className="w-7 h-7 text-white" />
         </div>
-        <h2 className="text-xl font-bold text-slate-900 mb-1 text-center">Swimming Academy Management</h2>
+        <h2 className="text-xl font-bold text-slate-900 mb-1 text-center">{PLATFORM_BRAND.name}</h2>
+        <p className="text-xs text-slate-400 mb-1 text-center">{PLATFORM_BRAND.tagline}</p>
         <p className="text-sm text-slate-400 mb-6 text-center">Enter your academy's name to continue</p>
         <input
           value={name}
@@ -19946,7 +20105,8 @@ function SignupView() {
           <Waves className="w-7 h-7 text-white" />
         </div>
         <h2 className="text-xl font-bold text-slate-900 mb-1 text-center">Register your academy</h2>
-        <p className="text-sm text-slate-400 mb-6 text-center">Start your {TRIAL_DAYS}-day free trial — no card required.</p>
+        <p className="text-xs text-slate-400 text-center">{PLATFORM_BRAND.name} — {PLATFORM_BRAND.tagline}</p>
+        <p className="text-sm text-slate-400 mb-6 text-center mt-1">Start your {TRIAL_DAYS}-day free trial — no card required.</p>
 
         <div className="space-y-3">
           <div>
@@ -20397,7 +20557,8 @@ function SuperAdminView() {
     return (
       <div className="min-h-screen flex items-center justify-center px-4 bg-white">
         <div className="max-w-sm w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
-          <h2 className="text-xl font-bold text-slate-900 mb-4 text-center">Super Admin</h2>
+          <h2 className="text-xl font-bold text-slate-900 mb-1 text-center">{PLATFORM_BRAND.name}</h2>
+          <p className="text-xs text-slate-400 mb-4 text-center">{PLATFORM_BRAND.tagline} — Super Admin</p>
           <input
             type="email"
             value={email}
@@ -20428,7 +20589,7 @@ function SuperAdminView() {
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-10">
-      <h2 className="text-2xl font-bold text-slate-900 mb-1">Super Admin — Academies</h2>
+      <h2 className="text-2xl font-bold text-slate-900 mb-1">{PLATFORM_BRAND.name} — Super Admin</h2>
       <p className="text-slate-500 mb-8 text-sm">Signed in as {session.email}</p>
 
       <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
