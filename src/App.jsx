@@ -8753,6 +8753,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <Award className="w-4 h-4" /> {t("coachPerformance")}
         </button>
         )}
+        {canViewFinancialReports && (
+        <button
+          onClick={() => setTab("reportscenter")}
+          className={navBtnClass("reportscenter")}
+        >
+          <TrendingUp className="w-4 h-4" /> Reports Center
+        </button>
+        )}
         {canEdit && role !== "technical_director" && (
           <button
             onClick={() => setTab("accounts")}
@@ -11968,6 +11976,185 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 </table>
               </div>
             </div>
+          </div>
+        );
+      })()}
+
+      {tab === "reportscenter" && canViewFinancialReports && (() => {
+        const activeSwimmersNow = swimmers.filter((s) => s.day && s.time);
+        const monthKeyNow = monthKey();
+
+        // Revenue by plan — inferred from each active swimmer's own plan
+        // (sessionType + level combination maps to a PLANS entry the same
+        // way subscribing does), counting only those paid for the month
+        // being viewed here.
+        const revenueByPlan = {};
+        activeSwimmersNow.forEach((s) => {
+          if (!(s.paidMonths || []).includes(monthKeyNow)) return;
+          const planId = inferPlanId(s) || "other";
+          const plan = PLANS.find((p) => p.id === planId);
+          const label = plan?.name || "Other";
+          revenueByPlan[label] = (revenueByPlan[label] || 0) + (Number(plan?.price) || 0);
+        });
+
+        const revenueByBranch = {};
+        activeSwimmersNow.forEach((s) => {
+          if (!(s.paidMonths || []).includes(monthKeyNow)) return;
+          const planId = inferPlanId(s);
+          const plan = PLANS.find((p) => p.id === planId);
+          const label = BRANCHES.find((b) => b.id === s.branch)?.name.split(" (")[0] || "No branch";
+          revenueByBranch[label] = (revenueByBranch[label] || 0) + (Number(plan?.price) || 0);
+        });
+
+        const revenueByCoach = {};
+        activeSwimmersNow.forEach((s) => {
+          if (!(s.paidMonths || []).includes(monthKeyNow) || !s.coachId) return;
+          const planId = inferPlanId(s);
+          const plan = PLANS.find((p) => p.id === planId);
+          const label = coaches.find((c) => c.id === s.coachId)?.name || "Unassigned";
+          revenueByCoach[label] = (revenueByCoach[label] || 0) + (Number(plan?.price) || 0);
+        });
+
+        const swimmersByLevel = {};
+        activeSwimmersNow.forEach((s) => {
+          swimmersByLevel[s.level] = (swimmersByLevel[s.level] || 0) + 1;
+        });
+
+        const frozenCount = swimmers.filter((s) => isFrozen(s)).length;
+        const droppedThisMonth = swimmers.filter((s) => !s.day && !s.time && (s.updatedAt || "").slice(0, 7) === monthKeyNow).length;
+
+        // Occupancy — how full each class is against its own capacity, for
+        // classes managed through the newer Family & Billing engine.
+        const occupancy = coreClasses
+          .filter((c) => c.active !== false)
+          .map((c) => ({
+            cls: c,
+            filled: activeEnrollmentCountForClass(coreEnrollments, c.id),
+            capacity: Number(c.capacity || 0),
+          }));
+
+        // Outstanding balances across every family with an open charge.
+        const chargesOnly = coreLedger.filter((l) => l.type === "charge");
+        const familyBalances = coreFamilies
+          .map((f) => ({ family: f, summary: getFamilyLedgerSummary(coreLedger, f.id) }))
+          .filter((r) => r.summary.balance > 0)
+          .sort((a, b) => b.summary.balance - a.summary.balance);
+        const totalOutstanding = familyBalances.reduce((sum, r) => sum + r.summary.balance, 0);
+        const totalOverdue = familyBalances.reduce((sum, r) => sum + r.summary.overdue, 0);
+
+        const barRow = (label, value, max, colorClass = "bg-blue-900") => (
+          <div key={label} className="flex items-center gap-2 mb-2">
+            <div className="w-28 text-xs text-slate-500 shrink-0 truncate" title={label}>{label}</div>
+            <div className="flex-1 bg-slate-100 rounded-full h-5 overflow-hidden">
+              <div className={`h-full rounded-full ${colorClass}`} style={{ width: `${max > 0 ? Math.max((value / max) * 100, value > 0 ? 4 : 0) : 0}%` }} />
+            </div>
+            <div className="w-20 text-xs text-slate-600 font-medium text-right shrink-0">{value.toLocaleString()}</div>
+          </div>
+        );
+
+        const maxPlanRevenue = Math.max(1, ...Object.values(revenueByPlan));
+        const maxBranchRevenue = Math.max(1, ...Object.values(revenueByBranch));
+        const maxCoachRevenue = Math.max(1, ...Object.values(revenueByCoach));
+        const maxLevelCount = Math.max(1, ...Object.values(swimmersByLevel));
+
+        return (
+          <div>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+              <div className="bg-white rounded-2xl border border-slate-200 p-4">
+                <div className="text-xs text-slate-400 mb-1">Active swimmers</div>
+                <div className="text-2xl font-bold text-slate-900">{activeSwimmersNow.length}</div>
+              </div>
+              <div className="bg-white rounded-2xl border border-slate-200 p-4">
+                <div className="text-xs text-slate-400 mb-1">Frozen</div>
+                <div className="text-2xl font-bold text-cyan-600">{frozenCount}</div>
+              </div>
+              <div className="bg-white rounded-2xl border border-slate-200 p-4">
+                <div className="text-xs text-slate-400 mb-1">Outstanding balance</div>
+                <div className="text-2xl font-bold text-red-500">{totalOutstanding.toLocaleString()} <span className="text-xs font-normal text-slate-400">EGP</span></div>
+              </div>
+              <div className="bg-white rounded-2xl border border-slate-200 p-4">
+                <div className="text-xs text-slate-400 mb-1">Of which overdue</div>
+                <div className="text-2xl font-bold text-amber-600">{totalOverdue.toLocaleString()} <span className="text-xs font-normal text-slate-400">EGP</span></div>
+              </div>
+            </div>
+
+            <div className="grid lg:grid-cols-2 gap-4 mb-4">
+              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+                <div className="text-sm font-semibold text-slate-800 mb-3">Revenue by plan — {monthLabel(monthKeyNow)}</div>
+                {Object.keys(revenueByPlan).length === 0 ? (
+                  <div className="text-xs text-slate-400 text-center py-6">No paid swimmers yet this month</div>
+                ) : (
+                  Object.entries(revenueByPlan).sort((a, b) => b[1] - a[1]).map(([label, value]) => barRow(label, value, maxPlanRevenue))
+                )}
+              </div>
+              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+                <div className="text-sm font-semibold text-slate-800 mb-3">Revenue by branch — {monthLabel(monthKeyNow)}</div>
+                {Object.keys(revenueByBranch).length === 0 ? (
+                  <div className="text-xs text-slate-400 text-center py-6">No paid swimmers yet this month</div>
+                ) : (
+                  Object.entries(revenueByBranch).sort((a, b) => b[1] - a[1]).map(([label, value]) => barRow(label, value, maxBranchRevenue, "bg-teal-700"))
+                )}
+              </div>
+            </div>
+
+            <div className="grid lg:grid-cols-2 gap-4 mb-4">
+              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+                <div className="text-sm font-semibold text-slate-800 mb-3">Revenue by coach — {monthLabel(monthKeyNow)}</div>
+                {Object.keys(revenueByCoach).length === 0 ? (
+                  <div className="text-xs text-slate-400 text-center py-6">No paid, coach-assigned swimmers yet this month</div>
+                ) : (
+                  Object.entries(revenueByCoach).sort((a, b) => b[1] - a[1]).map(([label, value]) => barRow(label, value, maxCoachRevenue, "bg-indigo-700"))
+                )}
+              </div>
+              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+                <div className="text-sm font-semibold text-slate-800 mb-3">Swimmers by level</div>
+                {Object.keys(swimmersByLevel).length === 0 ? (
+                  <div className="text-xs text-slate-400 text-center py-6">No active swimmers</div>
+                ) : (
+                  Object.entries(swimmersByLevel).sort((a, b) => b[1] - a[1]).map(([label, value]) => barRow(label, value, maxLevelCount, "bg-amber-600"))
+                )}
+              </div>
+            </div>
+
+            {occupancy.length > 0 && (
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-4">
+                <div className="text-sm font-semibold text-slate-800 mb-1">Class occupancy</div>
+                <p className="text-xs text-slate-400 mb-3">Classes managed through Family & Billing — how full each one is against its own capacity.</p>
+                <div className="space-y-2">
+                  {occupancy.map(({ cls, filled, capacity }) => {
+                    const pct = capacity > 0 ? Math.round((filled / capacity) * 100) : 0;
+                    return (
+                      <div key={cls.id} className="flex items-center gap-2">
+                        <div className="w-32 text-xs text-slate-500 shrink-0 truncate" title={cls.name}>{cls.name}</div>
+                        <div className="flex-1 bg-slate-100 rounded-full h-5 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${pct >= 100 ? "bg-red-500" : pct >= 75 ? "bg-amber-500" : "bg-green-600"}`}
+                            style={{ width: `${Math.min(pct, 100)}%` }}
+                          />
+                        </div>
+                        <div className="w-16 text-xs text-slate-600 font-medium text-right shrink-0">{filled}/{capacity}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {familyBalances.length > 0 && (
+              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+                <div className="text-sm font-semibold text-slate-800 mb-3">Families with an outstanding balance ({familyBalances.length})</div>
+                <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                  {familyBalances.map(({ family, summary }) => (
+                    <div key={family.id} className="flex items-center justify-between text-sm border-b border-slate-50 pb-1.5">
+                      <span className="text-slate-700">{family.name}</span>
+                      <span className={`font-semibold ${summary.overdue > 0 ? "text-red-500" : "text-slate-600"}`}>
+                        {summary.balance.toLocaleString()} EGP{summary.overdue > 0 ? ` (${summary.overdue.toLocaleString()} overdue)` : ""}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         );
       })()}
