@@ -4513,6 +4513,56 @@ function generateSwimmerProgressInsights(activeSwimmers) {
   return insights;
 }
 
+// Coach performance insights — each coach's own numbers (already computed
+// on the Coach Performance tab) compared to the ACADEMY'S OWN average
+// across all coaches, not an external benchmark, since what's "normal"
+// here depends entirely on this academy's swimmers, schedule, and levels.
+// Only flags a gap wide enough (15+ points) to likely be a real pattern
+// rather than everyday noise, in both directions — standout strengths get
+// named just as much as areas that could use support.
+function generateCoachInsights(allCoachStats) {
+  const withData = allCoachStats.filter((c) => c.overallScore !== null);
+  if (withData.length < 2) return [];
+
+  const avg = (key) => {
+    const vals = withData.map((c) => c[key]).filter((v) => v !== null);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  };
+  const avgAttendance = avg("attendanceRate");
+  const avgSkills = avg("skillsCoverage");
+  const avgRetention = avg("retention");
+
+  const insights = [];
+  const GAP = 15;
+
+  withData.forEach((c) => {
+    const name = c.coach.name;
+    if (c.attendanceRate !== null && avgAttendance !== null) {
+      if (c.attendanceRate - avgAttendance >= GAP) {
+        insights.push({ type: "strength", text: `${name}'s swimmers have notably better attendance (${c.attendanceRate}%) than the academy average (${Math.round(avgAttendance)}%).` });
+      } else if (avgAttendance - c.attendanceRate >= GAP) {
+        insights.push({ type: "attention", text: `${name}'s swimmer attendance (${c.attendanceRate}%) is below the academy average (${Math.round(avgAttendance)}%) — might be worth a conversation.` });
+      }
+    }
+    if (c.skillsCoverage !== null && avgSkills !== null) {
+      if (c.skillsCoverage - avgSkills >= GAP) {
+        insights.push({ type: "strength", text: `${name} is ahead on recording skill ratings (${c.skillsCoverage}% coverage vs. average ${Math.round(avgSkills)}%).` });
+      } else if (avgSkills - c.skillsCoverage >= GAP) {
+        insights.push({ type: "attention", text: `${name} has recorded fewer skill ratings (${c.skillsCoverage}%) than the academy average (${Math.round(avgSkills)}%) — parents may not be seeing progress updates.` });
+      }
+    }
+    if (c.retention !== null && avgRetention !== null) {
+      if (c.retention - avgRetention >= GAP) {
+        insights.push({ type: "strength", text: `${name} retains swimmers noticeably better (${c.retention}%) than the academy average (${Math.round(avgRetention)}%).` });
+      } else if (avgRetention - c.retention >= GAP) {
+        insights.push({ type: "attention", text: `${name}'s retention (${c.retention}%) is below the academy average (${Math.round(avgRetention)}%) — worth understanding why.` });
+      }
+    }
+  });
+
+  return insights;
+}
+
 const CORE_KEYS = {
   families: "families-all",
   classes: "classes-all",
@@ -12978,6 +13028,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           .sort((a, b) => b.overallScore - a.overallScore)
           .slice(0, 3);
         const medals = ["🥇", "🥈", "🥉"];
+        const coachInsights = coachPerfCoachFilter === "all" ? generateCoachInsights(allCoachStats) : [];
 
         return (
           <div>
@@ -13021,6 +13072,21 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     ))}
                   </div>
                 )}
+              </div>
+            )}
+
+            {coachInsights.length > 0 && (
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+                <h3 className="font-bold text-slate-900 mb-1">Coach performance insights</h3>
+                <p className="text-xs text-slate-400 mb-4">Each coach compared to this academy's own average — not an outside benchmark.</p>
+                <div className="space-y-2">
+                  {coachInsights.map((insight, i) => (
+                    <div key={i} className={`text-sm rounded-lg px-3 py-2 flex items-start gap-2 ${insight.type === "strength" ? "bg-green-50" : "bg-amber-50"}`}>
+                      <span className="shrink-0">{insight.type === "strength" ? "✓" : "⚠️"}</span>
+                      <span className={insight.type === "strength" ? "text-green-800" : "text-amber-800"}>{insight.text}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
