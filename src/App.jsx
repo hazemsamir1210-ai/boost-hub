@@ -9974,7 +9974,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             </div>
 
             {needsReminder.length > 0 && (
-              <div className="bg-white rounded-2xl border border-amber-200 p-5 mb-6">
+              <div className="bg-amber-50 rounded-2xl p-5 mb-6">
                 <div className="flex items-center gap-2 mb-1">
                   <Send className="w-4 h-4 text-amber-600" />
                   <h3 className="font-semibold text-slate-900">
@@ -9986,7 +9986,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 </p>
                 <div className="space-y-1.5 max-h-64 overflow-y-auto">
                   {needsReminder.map((s) => (
-                    <div key={s.id} className="flex items-center justify-between text-sm bg-slate-50 rounded-lg px-3 py-2">
+                    <div key={s.id} className="flex items-center justify-between text-sm bg-white rounded-lg px-3 py-2">
                       <span className="text-slate-700">{s.name}</span>
                       <span className="flex items-center gap-1.5 shrink-0">
                         {waLink(s.phone) ? (
@@ -10013,7 +10013,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 {pendingRegistrations.length > 0 && (
                   <button
                     onClick={() => setTab("registrations")}
-                    className="flex items-center gap-2.5 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-left hover:bg-amber-100 transition"
+                    className="flex items-center gap-2.5 bg-amber-50 rounded-xl px-4 py-3 text-left hover:bg-amber-100 transition"
                   >
                     <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
                     <div>
@@ -10027,7 +10027,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 {pendingPaymentRequests > 0 && (
                   <button
                     onClick={() => setTab("requests")}
-                    className="flex items-center gap-2.5 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-left hover:bg-blue-100 transition"
+                    className="flex items-center gap-2.5 bg-blue-50 rounded-xl px-4 py-3 text-left hover:bg-blue-100 transition"
                   >
                     <Bell className="w-5 h-5 text-blue-700 shrink-0" />
                     <div>
@@ -10041,47 +10041,36 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </div>
             )}
 
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-              <div className="bg-white rounded-2xl border border-slate-200 p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-slate-400 font-medium">{t("activeSwimmers")}</span>
-                  <Users className="w-4 h-4 text-slate-300" />
-                </div>
-                <div className="text-2xl font-bold text-slate-900">{activeNow.length}</div>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6 pb-6 border-b border-slate-200">
+              <div>
+                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-1.5">{t("activeSwimmers")}</div>
+                <div className="text-3xl font-bold text-slate-900 tracking-tight">{activeNow.length}</div>
               </div>
-              <div className="bg-white rounded-2xl border border-slate-200 p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-slate-400 font-medium">{t("unpaidThisMonth")}</span>
-                  <AlertCircle className="w-4 h-4 text-slate-300" />
-                </div>
-                <div className={`text-2xl font-bold ${unpaidCount > 0 ? "text-red-500" : "text-slate-900"}`}>{unpaidCount}</div>
+              <div>
+                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-1.5">{t("unpaidThisMonth")}</div>
+                <div className={`text-3xl font-bold tracking-tight ${unpaidCount > 0 ? "text-red-500" : "text-slate-900"}`}>{unpaidCount}</div>
               </div>
-              <div className="bg-white rounded-2xl border border-slate-200 p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-slate-400 font-medium">{t("revenueThisMonth")}</span>
-                  <TrendingUp className="w-4 h-4 text-slate-300" />
-                </div>
-                <div className="text-2xl font-bold text-slate-900">
+              <div>
+                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-1.5">{t("revenueThisMonth")}</div>
+                <div className="text-3xl font-bold text-slate-900 tracking-tight">
                   {revenueThisMonth.toLocaleString()}
-                  <span className="text-xs font-normal text-slate-400"> EGP</span>
                 </div>
-                {revenueDelta !== null && (
-                  <div className={`text-xs mt-0.5 ${revenueDelta >= 0 ? "text-green-600" : "text-red-500"}`}>
+                {revenueDelta !== null ? (
+                  <div className={`text-xs mt-1 font-medium ${revenueDelta >= 0 ? "text-green-600" : "text-red-500"}`}>
                     {revenueDelta >= 0 ? "↑" : "↓"} {Math.abs(revenueDelta)}% {t("vsLastMonth")}
                   </div>
+                ) : (
+                  <div className="text-xs mt-1 text-slate-300">EGP</div>
                 )}
               </div>
-              <div className="bg-white rounded-2xl border border-slate-200 p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-slate-400 font-medium">{t("newThisWeek")}</span>
-                  <UserPlus className="w-4 h-4 text-slate-300" />
-                </div>
-                <div className="text-2xl font-bold text-slate-900">{newThisWeek}</div>
+              <div>
+                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-1.5">{t("newThisWeek")}</div>
+                <div className="text-3xl font-bold text-slate-900 tracking-tight">{newThisWeek}</div>
               </div>
             </div>
 
             <div className="grid lg:grid-cols-2 gap-4 mb-6">
-              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <div className="bg-slate-50 rounded-2xl p-5">
                 <div className="text-sm font-semibold text-slate-800 mb-4">{t("revenueLast6Months")}</div>
                 <div className="flex items-end gap-3 h-24">
                   {miniTrend.map((m, i) => (
@@ -10097,11 +10086,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 </div>
               </div>
 
-              <div className="bg-white rounded-2xl border border-slate-200 p-5">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="text-sm font-semibold text-slate-800">{t("recentAchievements")}</div>
-                  <GraduationCap className="w-4 h-4 text-slate-300" />
-                </div>
+              <div className="bg-slate-50 rounded-2xl p-5">
+                <div className="text-sm font-semibold text-slate-800 mb-4">{t("recentAchievements")}</div>
                 {recentlyLeveledUp.length === 0 ? (
                   <div className="text-xs text-slate-400 py-6 text-center">{t("noLevelUpsYet")}</div>
                 ) : (
@@ -10130,7 +10116,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <button
                   key={action.label}
                   onClick={action.onClick}
-                  className="flex flex-col items-center gap-2 bg-white rounded-2xl border border-slate-200 p-4 hover:border-blue-200 hover:bg-blue-50/40 transition"
+                  className="flex flex-col items-center gap-2 bg-slate-50 rounded-2xl p-4 hover:bg-blue-50 transition"
                 >
                   <action.icon className="w-5 h-5 text-blue-900" />
                   <span className="text-xs font-medium text-slate-600">{action.label}</span>
