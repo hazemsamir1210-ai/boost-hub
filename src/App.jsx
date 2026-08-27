@@ -13406,27 +13406,27 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
         return (
           <div>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-              <div className="bg-white rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs text-slate-400 mb-1">Active swimmers</div>
-                <div className="text-2xl font-bold text-slate-900">{activeSwimmersNow.length}</div>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6 pb-6 border-b border-slate-200">
+              <div>
+                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-1.5">Active swimmers</div>
+                <div className="text-3xl font-bold text-slate-900 tracking-tight">{activeSwimmersNow.length}</div>
               </div>
-              <div className="bg-white rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs text-slate-400 mb-1">Frozen</div>
-                <div className="text-2xl font-bold text-cyan-600">{frozenCount}</div>
+              <div>
+                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-1.5">Frozen</div>
+                <div className="text-3xl font-bold text-cyan-600 tracking-tight">{frozenCount}</div>
               </div>
-              <div className="bg-white rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs text-slate-400 mb-1">Outstanding balance</div>
-                <div className="text-2xl font-bold text-red-500">{totalOutstanding.toLocaleString()} <span className="text-xs font-normal text-slate-400">EGP</span></div>
+              <div>
+                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-1.5">Outstanding balance</div>
+                <div className="text-3xl font-bold text-red-500 tracking-tight">{totalOutstanding.toLocaleString()}</div>
               </div>
-              <div className="bg-white rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs text-slate-400 mb-1">Of which overdue</div>
-                <div className="text-2xl font-bold text-amber-600">{totalOverdue.toLocaleString()} <span className="text-xs font-normal text-slate-400">EGP</span></div>
+              <div>
+                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-1.5">Of which overdue</div>
+                <div className="text-3xl font-bold text-amber-600 tracking-tight">{totalOverdue.toLocaleString()}</div>
               </div>
             </div>
 
             <div className="grid lg:grid-cols-2 gap-4 mb-4">
-              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <div className="bg-slate-50 rounded-2xl p-5">
                 <div className="text-sm font-semibold text-slate-800 mb-3">Revenue by plan — {monthLabel(monthKeyNow)}</div>
                 {Object.keys(revenueByPlan).length === 0 ? (
                   <div className="text-xs text-slate-400 text-center py-6">No paid swimmers yet this month</div>
@@ -13434,7 +13434,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   Object.entries(revenueByPlan).sort((a, b) => b[1] - a[1]).map(([label, value]) => barRow(label, value, maxPlanRevenue))
                 )}
               </div>
-              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <div className="bg-slate-50 rounded-2xl p-5">
                 <div className="text-sm font-semibold text-slate-800 mb-3">Revenue by branch — {monthLabel(monthKeyNow)}</div>
                 {Object.keys(revenueByBranch).length === 0 ? (
                   <div className="text-xs text-slate-400 text-center py-6">No paid swimmers yet this month</div>
@@ -13445,7 +13445,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             </div>
 
             <div className="grid lg:grid-cols-2 gap-4 mb-4">
-              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <div className="bg-slate-50 rounded-2xl p-5">
                 <div className="text-sm font-semibold text-slate-800 mb-3">Revenue by coach — {monthLabel(monthKeyNow)}</div>
                 {Object.keys(revenueByCoach).length === 0 ? (
                   <div className="text-xs text-slate-400 text-center py-6">No paid, coach-assigned swimmers yet this month</div>
@@ -13453,7 +13453,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   Object.entries(revenueByCoach).sort((a, b) => b[1] - a[1]).map(([label, value]) => barRow(label, value, maxCoachRevenue, "bg-indigo-700"))
                 )}
               </div>
-              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <div className="bg-slate-50 rounded-2xl p-5">
                 <div className="text-sm font-semibold text-slate-800 mb-3">Swimmers by level</div>
                 {Object.keys(swimmersByLevel).length === 0 ? (
                   <div className="text-xs text-slate-400 text-center py-6">No active swimmers</div>
@@ -13464,7 +13464,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             </div>
 
             {occupancy.length > 0 && (
-              <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-4">
+              <div className="bg-slate-50 rounded-2xl p-5 mb-4">
                 <div className="text-sm font-semibold text-slate-800 mb-1">Class occupancy</div>
                 <p className="text-xs text-slate-400 mb-3">Classes managed through Family & Billing — how full each one is against its own capacity.</p>
                 <div className="space-y-2">
@@ -13488,7 +13488,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             )}
 
             {familyBalances.length > 0 && (
-              <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <div className="bg-slate-50 rounded-2xl p-5">
                 <div className="text-sm font-semibold text-slate-800 mb-3">Families with an outstanding balance ({familyBalances.length})</div>
                 <div className="space-y-1.5 max-h-72 overflow-y-auto">
                   {familyBalances.map(({ family, summary }) => (
@@ -13503,7 +13503,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </div>
             )}
 
-            <div className="bg-white rounded-2xl border border-slate-200 p-5 mt-4">
+            <div className="bg-slate-50 rounded-2xl p-5 mt-4">
               <div className="flex items-center gap-2 mb-1">
                 <AlertCircle className="w-4 h-4 text-amber-500" />
                 <div className="text-sm font-semibold text-slate-800">At risk of leaving ({churnRisks.length})</div>
@@ -13546,7 +13546,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               )}
             </div>
 
-            <div className="bg-white rounded-2xl border border-slate-200 p-5 mt-4">
+            <div className="bg-slate-50 rounded-2xl p-5 mt-4">
               <div className="flex items-center justify-between mb-1">
                 <div className="text-sm font-semibold text-slate-800">Revenue forecast — next 3 months</div>
                 {revenueForecast.forecasts.length > 0 && (
@@ -13591,7 +13591,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             </div>
 
             {familyRetentionScores.length > 0 && (
-              <div className="bg-white rounded-2xl border border-slate-200 p-5 mt-4">
+              <div className="bg-slate-50 rounded-2xl p-5 mt-4">
                 <div className="text-sm font-semibold text-slate-800 mb-1">Parent retention scores</div>
                 <p className="text-xs text-slate-400 mb-3">
                   For families with more than one swimmer — a loyalty/health score from attendance, payment, and tenure, not a "chance of leaving" number.
@@ -13616,7 +13616,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             )}
 
             {progressInsights.length > 0 && (
-              <div className="bg-white rounded-2xl border border-slate-200 p-5 mt-4">
+              <div className="bg-slate-50 rounded-2xl p-5 mt-4">
                 <div className="text-sm font-semibold text-slate-800 mb-1">Swimmer progress insights</div>
                 <p className="text-xs text-slate-400 mb-3">
                   Each swimmer compared to their own peers in the same level — not a fixed benchmark, since normal pace differs level to level.
