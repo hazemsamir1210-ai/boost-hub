@@ -3020,6 +3020,73 @@ function inRange(dateStr, startISO, endISO) {
   return !!dateStr && dateStr >= startISO && dateStr <= endISO;
 }
 
+// Churn risk scoring — not machine learning, just a weighted checklist of
+// the same warning signs an experienced admin would notice by eye
+// (attendance dropping off, payment slipping, no progress for a while,
+// recently frozen) turned into a 0-100 score so the whole roster can be
+// sorted by who needs attention first, instead of relying on catching it
+// swimmer by swimmer. Every point on the score traces back to a concrete,
+// named reason, so it's always explainable, never a mystery number.
+function calculateChurnRisk(swimmer) {
+  const reasons = [];
+  let score = 0;
+  const today = new Date();
+  const attendance = swimmer.attendance || {};
+  const dates = Object.keys(attendance).sort();
+
+  // Recent attendance trend — last 30 days vs the 30 days before that.
+  const last30Start = new Date(today); last30Start.setDate(today.getDate() - 30);
+  const prev30Start = new Date(today); prev30Start.setDate(today.getDate() - 60);
+  const inWindow = (d, start, end) => { const dt = new Date(d); return dt >= start && dt <= end; };
+  const last30 = dates.filter((d) => inWindow(d, last30Start, today));
+  const prev30 = dates.filter((d) => inWindow(d, prev30Start, last30Start));
+  const rate = (list) => (list.length ? list.filter((d) => attendance[d] === "present").length / list.length : null);
+  const recentRate = rate(last30);
+  const priorRate = rate(prev30);
+
+  if (recentRate !== null && recentRate < 0.5) {
+    score += 30;
+    reasons.push(`Attendance dropped to ${Math.round(recentRate * 100)}% in the last 30 days`);
+  }
+  if (recentRate !== null && priorRate !== null && recentRate < priorRate - 0.2) {
+    score += 20;
+    reasons.push(`Attendance falling — was ${Math.round(priorRate * 100)}%, now ${Math.round(recentRate * 100)}%`);
+  }
+  if (last30.length === 0 && dates.length > 0) {
+    score += 15;
+    reasons.push("No sessions attended in the last 30 days");
+  }
+
+  // Payment — not paid this month, or a history of paying late/overdue.
+  if (!(swimmer.paidMonths || []).includes(monthKey())) {
+    score += 15;
+    reasons.push("Hasn't paid this month yet");
+  }
+
+  // Frozen recently — may or may not come back once it ends.
+  if (isFrozen(swimmer)) {
+    score += 10;
+    reasons.push("Subscription currently frozen");
+  }
+
+  // Stalled skill progress — been in the same level a while with no
+  // ratings improving, while everything else about them still looks
+  // "active" (they're not just new).
+  const levelSkills = LEVEL_SKILLS[swimmer.level] || [];
+  if (levelSkills.length > 0) {
+    const anyProgress = levelSkills.some((sk) => (swimmer.skills?.[swimmer.level]?.[sk] || 0) > 0);
+    const monthsSinceJoined = swimmer.createdAt
+      ? Math.floor((today - new Date(swimmer.createdAt)) / (1000 * 60 * 60 * 24 * 30))
+      : 0;
+    if (!anyProgress && monthsSinceJoined >= 2) {
+      score += 15;
+      reasons.push(`No skill progress recorded in ${monthsSinceJoined} months at this level`);
+    }
+  }
+
+  return { score: Math.min(100, score), reasons };
+}
+
 /* Sunday/Tuesday, Monday/Wednesday, Friday/Saturday — Thursday has no group */
 function dayGroupForToday() {
   const dow = new Date().getDay(); // 0=Sun..6=Sat
@@ -12873,6 +12940,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
       {tab === "reportscenter" && canViewFinancialReports && (() => {
         const activeSwimmersNow = swimmers.filter((s) => s.day && s.time);
+        const churnRisks = activeSwimmersNow
+          .map((s) => ({ swimmer: s, ...calculateChurnRisk(s) }))
+          .filter((r) => r.score >= 40)
+          .sort((a, b) => b.score - a.score);
         const monthKeyNow = monthKey();
 
         // Revenue by plan — inferred from each active swimmer's own plan
@@ -13041,6 +13112,45 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       <span className={`font-semibold ${summary.overdue > 0 ? "text-red-500" : "text-slate-600"}`}>
                         {summary.balance.toLocaleString()} EGP{summary.overdue > 0 ? ` (${summary.overdue.toLocaleString()} overdue)` : ""}
                       </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {churnRisks.length > 0 && (
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 mt-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <AlertCircle className="w-4 h-4 text-amber-500" />
+                  <div className="text-sm font-semibold text-slate-800">At risk of leaving ({churnRisks.length})</div>
+                </div>
+                <p className="text-xs text-slate-400 mb-3">
+                  Flagged from attendance, payment, and progress patterns — not a guarantee, just worth a proactive check-in.
+                </p>
+                <div className="space-y-2 max-h-96 overflow-y-auto">
+                  {churnRisks.map(({ swimmer: s, score, reasons }) => (
+                    <div key={s.id} className="border border-slate-100 rounded-xl p-3">
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <span className="font-semibold text-sm">{s.name}</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${score >= 70 ? "bg-red-50 text-red-600" : "bg-amber-50 text-amber-700"}`}>
+                          {score}% risk
+                        </span>
+                      </div>
+                      <ul className="text-xs text-slate-500 space-y-0.5 mb-2">
+                        {reasons.map((r, i) => (
+                          <li key={i}>• {r}</li>
+                        ))}
+                      </ul>
+                      {waLink(s.phone) && (
+                        <a
+                          href={waLink(s.phone, `مرحباً، معاك ${CONFIG.academyName}. حبينا نطمن على "${s.name}" ونشوف لو محتاجين أي مساعدة أو في حاجة تقدروا تقولولنا عليها.`)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs px-2.5 py-1 rounded-full font-medium text-green-700 hover:bg-green-50 inline-flex items-center gap-1"
+                        >
+                          <Send className="w-3 h-3" /> Check in
+                        </a>
+                      )}
                     </div>
                   ))}
                 </div>
