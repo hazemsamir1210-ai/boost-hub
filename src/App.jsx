@@ -5102,6 +5102,31 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   const [tab, setTab] = useState("dashboard");
 
+  // Shared by every sidebar nav button (defined once here rather than
+  // repeating the same ternary 19+ times) — active state uses a left
+  // accent bar plus the tint, the same "current section" language most
+  // SaaS admin panels (iClassPro's Office Portal included) use, instead
+  // of relying on background color alone.
+  const navBtnClass = (id) =>
+    `flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left border-l-[3px] ${
+      tab === id
+        ? "bg-blue-50 text-blue-950 font-semibold border-blue-900"
+        : "border-transparent text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+    }`;
+
+  // Small uppercase group label above each cluster of nav buttons — only
+  // shown in the vertical (desktop) sidebar; hidden in the horizontal
+  // scrolling mobile row where a label sitting inline with buttons would
+  // just be visual noise. This is what turns 19 flat buttons into
+  // scannable sections (People / Classes / Money / ...), the same way
+  // most SaaS admin panels — iClassPro's Office Portal included —
+  // organize a sidebar this long.
+  const navSection = (label) => (
+    <div key={`navsection-${label}`} className="hidden sm:block px-3 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 first:pt-1">
+      {label}
+    </div>
+  );
+
   // Sweeps once per Family & Billing visit — flips any charge whose due
   // date has passed into "overdue" so the ledger badges stay accurate
   // without needing a manual refresh. (Placed here, after `tab` and
@@ -8686,30 +8711,75 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       {/* main tabs — vertical sidebar on the left, content on the right (stacks on narrow/mobile screens) */}
       <div className="flex flex-col sm:flex-row gap-6 items-start">
       <div className="w-full sm:w-52 shrink-0 flex flex-row sm:flex-col gap-0.5 overflow-x-auto sm:overflow-visible pb-1 sm:pb-0">
+        {navSection(t("navOverview"))}
         <button
           onClick={() => setTab("dashboard")}
-          className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-            tab === "dashboard" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-          }`}
+          className={navBtnClass("dashboard")}
         >
           <LayoutGrid className="w-4 h-4" /> {t("dashboard")}
         </button>
+
+        {navSection(t("navPeople"))}
+        {can("viewSwimmers") && (
+        <button
+          onClick={() => setTab("swimmers")}
+          className={navBtnClass("swimmers")}
+        >
+          <Users className="w-4 h-4" /> {t("swimmers")}
+        </button>
+        )}
+        {role !== "technical_director" && (
+        <button
+          onClick={() => setTab("coaches")}
+          className={navBtnClass("coaches")}
+        >
+          <Award className="w-4 h-4" /> {t("coaches")}
+        </button>
+        )}
         {canAssignCoaches && (
           <button
             onClick={() => setTab("coachassign")}
-            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-              tab === "coachassign" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-            }`}
+            className={navBtnClass("coachassign")}
           >
             <Users className="w-4 h-4" /> {t("coachAssignments")}
+          </button>
+        )}
+        {(canViewFinancialReports || can("viewCoachReports")) && (
+        <button
+          onClick={() => setTab("coachperformance")}
+          className={navBtnClass("coachperformance")}
+        >
+          <Award className="w-4 h-4" /> {t("coachPerformance")}
+        </button>
+        )}
+        {canEdit && role !== "technical_director" && (
+          <button
+            onClick={() => setTab("accounts")}
+            className={navBtnClass("accounts")}
+          >
+            <Lock className="w-4 h-4" /> {t("accounts")}
+          </button>
+        )}
+
+        {navSection(t("navClasses"))}
+        <button
+          onClick={() => setTab("schedule")}
+          className={navBtnClass("schedule")}
+        >
+          <CalendarDays className="w-4 h-4" /> {t("schedule")}
+        </button>
+        {canEditContent && (
+          <button
+            onClick={() => setTab("management")}
+            className={navBtnClass("management")}
+          >
+            <Users className="w-4 h-4" /> Family & Billing
           </button>
         )}
         {canEditContent && role !== "technical_director" && (
           <button
             onClick={() => setTab("registrations")}
-            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-              tab === "registrations" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-            }`}
+            className={navBtnClass("registrations")}
           >
             <User className="w-4 h-4" /> {t("registrations")}
             {pendingRegistrations.length > 0 && (
@@ -8719,150 +8789,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             )}
           </button>
         )}
-        {role !== "technical_director" && canViewPayments && (
-        <button
-          onClick={() => setTab("requests")}
-          className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-            tab === "requests" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-          }`}
-        >
-          <Bell className="w-4 h-4" /> {t("paymentRequests")}
-        </button>
-        )}
-        {can("viewSwimmers") && (
-        <button
-          onClick={() => setTab("swimmers")}
-          className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-            tab === "swimmers" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-          }`}
-        >
-          <Users className="w-4 h-4" /> {t("swimmers")}
-        </button>
-        )}
-        {role !== "technical_director" && (
-        <button
-          onClick={() => setTab("coaches")}
-          className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-            tab === "coaches" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-          }`}
-        >
-          <Award className="w-4 h-4" /> {t("coaches")}
-        </button>
-        )}
-        <button
-          onClick={() => setTab("schedule")}
-          className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-            tab === "schedule" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-          }`}
-        >
-          <CalendarDays className="w-4 h-4" /> {t("schedule")}
-        </button>
-        {canEditContent && (
-          <button
-            onClick={() => setTab("management")}
-            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-              tab === "management" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-            }`}
-          >
-            <Users className="w-4 h-4" /> Family & Billing
-          </button>
-        )}
-        {role !== "technical_director" && (canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && (
-        <button
-          onClick={() => setTab("reports")}
-          className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-            tab === "reports" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-          }`}
-        >
-          <CalendarCheck className="w-4 h-4" /> {t("reports")}
-        </button>
-        )}
-        {(canViewFinancialReports || can("viewCoachReports")) && (
-        <button
-          onClick={() => setTab("coachperformance")}
-          className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-            tab === "coachperformance" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-          }`}
-        >
-          <Award className="w-4 h-4" /> {t("coachPerformance")}
-        </button>
-        )}
-        {canViewPayroll && role !== "technical_director" && (
-          <button
-            onClick={() => setTab("attendance")}
-            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-              tab === "attendance" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-            }`}
-          >
-            <Clock className="w-4 h-4" /> {t("attendance")}
-          </button>
-        )}
-        {canEdit && role !== "technical_director" && (
-          <button
-            onClick={() => setTab("accounts")}
-            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-              tab === "accounts" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-            }`}
-          >
-            <Lock className="w-4 h-4" /> {t("accounts")}
-          </button>
-        )}
-        {canEdit && role !== "technical_director" && (
-          <button
-            onClick={() => setTab("activity")}
-            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-              tab === "activity" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-            }`}
-          >
-            <Clock className="w-4 h-4" /> {t("activityLog")}
-          </button>
-        )}
-        {canEdit && role !== "technical_director" && (
-          <button
-            onClick={() => setTab("settings")}
-            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-              tab === "settings" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-            }`}
-          >
-            <ShieldCheck className="w-4 h-4" /> {t("settings")}
-          </button>
-        )}
-        {canEditContent && role !== "technical_director" && (
-          <button
-            onClick={() => setTab("incidents")}
-            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-              tab === "incidents" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-            }`}
-          >
-            <ShieldCheck className="w-4 h-4" /> {t("incidents")}
-          </button>
-        )}
-        {canEditContent && role !== "technical_director" && (
-          <button
-            onClick={() => setTab("feedback")}
-            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-              tab === "feedback" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-            }`}
-          >
-            <Star className="w-4 h-4" /> {t("feedback")}
-          </button>
-        )}
-        {(canEditContent || role === "technical_director") && (
-          <button
-            onClick={() => setTab("courses")}
-            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-              tab === "courses" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-            }`}
-          >
-            <GraduationCap className="w-4 h-4" /> {t("courses")}
-          </button>
-        )}
         {(can("manageWaitlist") || canEditContent) && role !== "technical_director" && (
           <button
             onClick={() => setTab("waitlist")}
-            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-              tab === "waitlist" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-            }`}
+            className={navBtnClass("waitlist")}
           >
             <Clock className="w-4 h-4" /> {t("waitlist")}
             {waitlist.length > 0 && (
@@ -8872,15 +8802,85 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             )}
           </button>
         )}
+
+        {navSection(t("navOperations"))}
+        {canViewPayroll && role !== "technical_director" && (
+          <button
+            onClick={() => setTab("attendance")}
+            className={navBtnClass("attendance")}
+          >
+            <Clock className="w-4 h-4" /> {t("attendance")}
+          </button>
+        )}
+        {canEditContent && role !== "technical_director" && (
+          <button
+            onClick={() => setTab("incidents")}
+            className={navBtnClass("incidents")}
+          >
+            <ShieldCheck className="w-4 h-4" /> {t("incidents")}
+          </button>
+        )}
+
+        {navSection(t("navMoney"))}
+        {role !== "technical_director" && canViewPayments && (
+        <button
+          onClick={() => setTab("requests")}
+          className={navBtnClass("requests")}
+        >
+          <Bell className="w-4 h-4" /> {t("paymentRequests")}
+        </button>
+        )}
+        {role !== "technical_director" && (canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && (
+        <button
+          onClick={() => setTab("reports")}
+          className={navBtnClass("reports")}
+        >
+          <CalendarCheck className="w-4 h-4" /> {t("reports")}
+        </button>
+        )}
+
+        {navSection(t("navEngage"))}
+        {canEditContent && role !== "technical_director" && (
+          <button
+            onClick={() => setTab("feedback")}
+            className={navBtnClass("feedback")}
+          >
+            <Star className="w-4 h-4" /> {t("feedback")}
+          </button>
+        )}
+        {(canEditContent || role === "technical_director") && (
+          <button
+            onClick={() => setTab("courses")}
+            className={navBtnClass("courses")}
+          >
+            <GraduationCap className="w-4 h-4" /> {t("courses")}
+          </button>
+        )}
         {(accountName || role === "admin") && (
           <button
             onClick={() => setTab("chat")}
-            className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left ${
-              tab === "chat" ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
-            }`}
+            className={navBtnClass("chat")}
           >
             <Send className="w-4 h-4" /> {t("chat")}
           </button>
+        )}
+
+        {canEdit && role !== "technical_director" && (
+          <>
+            {navSection(t("navSystem"))}
+            <button
+              onClick={() => setTab("activity")}
+              className={navBtnClass("activity")}
+            >
+              <Clock className="w-4 h-4" /> {t("activityLog")}
+            </button>
+            <button
+              onClick={() => setTab("settings")}
+              className={navBtnClass("settings")}
+            >
+              <ShieldCheck className="w-4 h-4" /> {t("settings")}
+            </button>
+          </>
         )}
       </div>
 
@@ -18564,6 +18564,13 @@ const TRANSLATIONS = {
     parentCharge: "Charge",
     parentNoLedgerYet: "No charges or payments recorded yet",
     parentNoPaymentsYet: "No payments recorded yet",
+    navOverview: "Overview",
+    navPeople: "People",
+    navClasses: "Classes & enrollment",
+    navOperations: "Operations",
+    navMoney: "Money",
+    navEngage: "Engage",
+    navSystem: "System",
   },
   ar: {
     newRegistration: "تسجيل سباح جديد",
@@ -18704,6 +18711,13 @@ const TRANSLATIONS = {
     parentCharge: "فاتورة",
     parentNoLedgerYet: "لا توجد فواتير أو مدفوعات مسجلة بعد",
     parentNoPaymentsYet: "لا توجد مدفوعات مسجلة بعد",
+    navOverview: "نظرة عامة",
+    navPeople: "الأشخاص",
+    navClasses: "الفصول والتسجيل",
+    navOperations: "العمليات اليومية",
+    navMoney: "الماليات",
+    navEngage: "التواصل",
+    navSystem: "النظام",
   },
 };
 
