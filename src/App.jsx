@@ -11113,7 +11113,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   </>
                 )}
                 {coreTab === "ledger" && coreLedger.filter(l => `${l.description} ${l.month} ${l.type}`.toLowerCase().includes(coreSearch.toLowerCase())).slice().reverse().map(l => (
-                  <div key={l.id} className="border border-slate-100 rounded-xl p-3 flex items-center justify-between gap-3"><div><div className="font-semibold">{l.description || l.type}</div><div className="text-xs text-slate-400">{l.month} · {l.type} · Swimmer {l.swimmerId}</div></div><div className="text-sm font-semibold">{Number(l.amount || 0).toLocaleString()} EGP</div></div>
+                  <div key={l.id} className="border border-slate-100 rounded-xl p-3 flex items-center justify-between gap-3"><div><div className="font-semibold flex items-center gap-1.5">{l.description || l.type}{l.autoRenewed && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 font-medium">Auto-renewed</span>}</div><div className="text-xs text-slate-400">{l.month} · {l.type} · Swimmer {l.swimmerId}</div></div><div className="text-sm font-semibold">{Number(l.amount || 0).toLocaleString()} EGP</div></div>
                 ))}
               </div>
             ))}
