@@ -13171,15 +13171,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </div>
             )}
 
-            {churnRisks.length > 0 && (
-              <div className="bg-white rounded-2xl border border-slate-200 p-5 mt-4">
-                <div className="flex items-center gap-2 mb-1">
-                  <AlertCircle className="w-4 h-4 text-amber-500" />
-                  <div className="text-sm font-semibold text-slate-800">At risk of leaving ({churnRisks.length})</div>
+            <div className="bg-white rounded-2xl border border-slate-200 p-5 mt-4">
+              <div className="flex items-center gap-2 mb-1">
+                <AlertCircle className="w-4 h-4 text-amber-500" />
+                <div className="text-sm font-semibold text-slate-800">At risk of leaving ({churnRisks.length})</div>
+              </div>
+              <p className="text-xs text-slate-400 mb-3">
+                Flagged from attendance, payment, and progress patterns — not a guarantee, just worth a proactive check-in.
+              </p>
+              {churnRisks.length === 0 ? (
+                <div className="text-sm text-slate-400 text-center py-6">
+                  Nobody's flagged right now — everyone's attendance, payment, and progress look healthy. ✓
                 </div>
-                <p className="text-xs text-slate-400 mb-3">
-                  Flagged from attendance, payment, and progress patterns — not a guarantee, just worth a proactive check-in.
-                </p>
+              ) : (
                 <div className="space-y-2 max-h-96 overflow-y-auto">
                   {churnRisks.map(({ swimmer: s, score, reasons }) => (
                     <div key={s.id} className="border border-slate-100 rounded-xl p-3">
@@ -13207,8 +13211,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     </div>
                   ))}
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         );
       })()}
