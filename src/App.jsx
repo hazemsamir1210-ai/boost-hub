@@ -317,6 +317,39 @@ async function savePlatformInstapay(info) {
   return true;
 }
 
+// The platform's own name/logo (shown top-left across every academy's
+// interface) and the admin sidebar's accent color — both controlled by
+// the super admin from /_admin, applying everywhere at once rather than
+// per academy, since this is branding for the software itself.
+const DEFAULT_PLATFORM_BRANDING = { name: "Swim Junior", logoDataUri: "", sidebarColor: "" };
+
+async function loadPlatformBranding() {
+  try {
+    const { data, error } = await supabase.from("platform_settings").select("platform_name, platform_logo_data_uri, sidebar_color").eq("id", true).maybeSingle();
+    if (error || !data) return DEFAULT_PLATFORM_BRANDING;
+    return {
+      name: data.platform_name || DEFAULT_PLATFORM_BRANDING.name,
+      logoDataUri: data.platform_logo_data_uri || "",
+      sidebarColor: data.sidebar_color || "",
+    };
+  } catch {
+    return DEFAULT_PLATFORM_BRANDING;
+  }
+}
+
+async function savePlatformBranding(branding) {
+  const { error } = await supabase
+    .from("platform_settings")
+    .update({
+      platform_name: branding.name || null,
+      platform_logo_data_uri: branding.logoDataUri || null,
+      sidebar_color: branding.sidebarColor || null,
+    })
+    .eq("id", true);
+  if (error) throw error;
+  return true;
+}
+
 // Lets the super admin turn a payment method's button on or off across the
 // whole platform from /_admin — separate from whether the underlying Vercel
 // environment variables are configured, so a gateway can be wired up and
@@ -4852,6 +4885,23 @@ function SwimmerSearchInput({ onSearch }) {
 
 function AdminView({ onExit, role = "admin", preAuthed = false, accountName, branchRestriction = null }) {
 
+  // Platform branding (name/logo top-left, sidebar accent color) — set by
+  // the super admin from /_admin, applying across every academy's admin
+  // dashboard rather than being something each academy configures itself.
+  const [platformBrandingLive, setPlatformBrandingLive] = useState(() => window.__platformBranding || DEFAULT_PLATFORM_BRANDING);
+  useEffect(() => {
+    loadPlatformBranding().then(setPlatformBrandingLive);
+  }, []);
+  // A custom sidebar color needs its own text/hover colors picked to stay
+  // readable — decided from the color's own perceived brightness rather
+  // than assuming either way.
+  const sidebarIsDark = (() => {
+    const hex = (platformBrandingLive.sidebarColor || "").replace("#", "");
+    if (hex.length !== 6) return false;
+    const r = parseInt(hex.slice(0, 2), 16), g = parseInt(hex.slice(2, 4), 16), b = parseInt(hex.slice(4, 6), 16);
+    return (r * 299 + g * 587 + b * 114) / 1000 < 140;
+  })();
+
   const [coreTab, setCoreTab] = useState("families");
   const [coreFamilies, setCoreFamilies] = useState([]);
   const [coreClasses, setCoreClasses] = useState([]);
@@ -5333,7 +5383,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const navBtnClass = (id) =>
     `flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition whitespace-nowrap text-left border-l-[3px] ${
       tab === id
-        ? "bg-blue-50 text-blue-950 font-semibold border-blue-900"
+        ? sidebarIsDark
+          ? "bg-white/10 text-white font-semibold border-white"
+          : "bg-blue-50 text-blue-950 font-semibold border-blue-900"
+        : sidebarIsDark
+        ? "border-transparent text-white/70 hover:bg-white/10 hover:text-white"
         : "border-transparent text-slate-500 hover:bg-slate-50 hover:text-slate-700"
     }`;
 
@@ -8936,7 +8990,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
       {/* main tabs — vertical sidebar on the left, content on the right (stacks on narrow/mobile screens) */}
       <div className="flex flex-col sm:flex-row gap-6 items-start">
-      <div className="w-full sm:w-52 shrink-0 flex flex-row sm:flex-col gap-0.5 overflow-x-auto sm:overflow-visible pb-1 sm:pb-0">
+      <div
+        className={`w-full sm:w-52 shrink-0 flex flex-row sm:flex-col gap-0.5 overflow-x-auto sm:overflow-visible pb-1 sm:pb-0 ${
+          platformBrandingLive.sidebarColor ? "rounded-2xl p-2 sm:sticky sm:top-4" : ""
+        }`}
+        style={platformBrandingLive.sidebarColor ? { backgroundColor: platformBrandingLive.sidebarColor } : {}}
+      >
+        {platformBrandingLive.sidebarColor && (
+          <div className={`hidden sm:flex items-center gap-2 px-2 pb-3 mb-1 border-b ${sidebarIsDark ? "border-white/10" : "border-black/10"}`}>
+            {platformBrandingLive.logoDataUri && <img src={platformBrandingLive.logoDataUri} alt="" className="w-6 h-6 rounded object-contain" />}
+            <span className={`text-sm font-bold ${sidebarIsDark ? "text-white" : "text-slate-900"}`}>{platformBrandingLive.name}</span>
+          </div>
+        )}
         {navSection(t("navOverview"))}
         <button
           onClick={() => setTab("dashboard")}
@@ -19212,6 +19277,10 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
   const [menuOpen, setMenuOpen] = useState(false);
   const [loginPickerOpen, setLoginPickerOpen] = useState(false);
   const [achievements, setAchievements] = useState([]);
+  const [platformBrandingLive, setPlatformBrandingLive] = useState(() => window.__platformBranding || DEFAULT_PLATFORM_BRANDING);
+  useEffect(() => {
+    loadPlatformBranding().then(setPlatformBrandingLive);
+  }, []);
   useEffect(() => {
     let cancelled = false;
     loadCollection(STORE_KEYS.achievements).then((items) => {
@@ -19245,10 +19314,11 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
         {lang === "en" ? "العربية" : "English"}
       </button>
       {menuOpen && <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />}
-      <div className="fixed top-4 left-4 z-50">
+      <div className="fixed top-4 left-4 z-50 flex items-start gap-2">
+        <div>
         <button
           onClick={() => setMenuOpen((v) => !v)}
-          className="w-11 h-11 rounded-full bg-white/95 shadow-lg flex items-center justify-center text-blue-950 hover:bg-white transition"
+          className="w-11 h-11 rounded-full bg-white/95 shadow-lg flex items-center justify-center text-blue-950 hover:bg-white transition shrink-0"
         >
           <Menu className="w-5 h-5" />
         </button>
@@ -19270,6 +19340,11 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
             ))}
           </div>
         )}
+        </div>
+        <div className="h-11 flex items-center gap-2 px-3 rounded-full bg-white/95 shadow-lg">
+          {platformBrandingLive.logoDataUri && <img src={platformBrandingLive.logoDataUri} alt="" className="w-5 h-5 rounded object-contain" />}
+          <span className="text-sm font-bold text-blue-950">{platformBrandingLive.name}</span>
+        </div>
       </div>
 
       {loginPickerOpen && (
@@ -20696,12 +20771,37 @@ function SuperAdminView() {
   const [subscriptionPaymentsLoading, setSubscriptionPaymentsLoading] = useState(false);
   const [gatewaysEnabled, setGatewaysEnabled] = useState(DEFAULT_PAYMENT_GATEWAYS);
   const [gatewaysSaving, setGatewaysSaving] = useState(false);
+  const [platformBranding, setPlatformBranding] = useState(DEFAULT_PLATFORM_BRANDING);
+  const [brandingSaving, setBrandingSaving] = useState(false);
+  const [brandingSaved, setBrandingSaved] = useState(false);
+  const [brandingError, setBrandingError] = useState("");
+
+  const saveBranding = async () => {
+    setBrandingError("");
+    setBrandingSaved(false);
+    setBrandingSaving(true);
+    try {
+      await savePlatformBranding(platformBranding);
+      setBrandingSaved(true);
+      setTimeout(() => setBrandingSaved(false), 2000);
+    } catch (e) {
+      setBrandingError(e?.message || "Could not save — please try again");
+    } finally {
+      setBrandingSaving(false);
+    }
+  };
 
   const loadSubscriptionSettings = async () => {
-    const [plans, instapay, gateways] = await Promise.all([loadSubscriptionPlans(), loadPlatformInstapay(), loadPaymentGatewaysEnabled()]);
+    const [plans, instapay, gateways, branding] = await Promise.all([
+      loadSubscriptionPlans(),
+      loadPlatformInstapay(),
+      loadPaymentGatewaysEnabled(),
+      loadPlatformBranding(),
+    ]);
     setSubscriptionPlans(plans);
     setPlatformInstapay(instapay);
     setGatewaysEnabled(gateways);
+    setPlatformBranding(branding);
   };
 
   const toggleGateway = async (key) => {
@@ -21332,6 +21432,72 @@ function SuperAdminView() {
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+        <h3 className="font-bold text-slate-900 mb-1">Platform branding</h3>
+        <p className="text-xs text-slate-400 mb-4">
+          The name and logo shown top-left across every academy's interface, and the admin sidebar's accent color — applies everywhere at once, not per academy.
+        </p>
+        {brandingError && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-3">{brandingError}</div>}
+        <div className="grid sm:grid-cols-2 gap-3 mb-3">
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Platform name</label>
+            <input
+              value={platformBranding.name}
+              onChange={(e) => setPlatformBranding({ ...platformBranding, name: e.target.value })}
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+              placeholder="Swim Junior"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Sidebar color</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={platformBranding.sidebarColor || "#ffffff"}
+                onChange={(e) => setPlatformBranding({ ...platformBranding, sidebarColor: e.target.value })}
+                className="w-11 h-10 rounded-lg border border-slate-200 cursor-pointer"
+              />
+              <input
+                value={platformBranding.sidebarColor}
+                onChange={(e) => setPlatformBranding({ ...platformBranding, sidebarColor: e.target.value })}
+                className="flex-1 border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                placeholder="Leave blank for default (white)"
+              />
+            </div>
+          </div>
+        </div>
+        <div className="mb-4">
+          <label className="text-xs text-slate-500 mb-1 block">Logo</label>
+          <div className="flex items-center gap-3">
+            {platformBranding.logoDataUri && (
+              <img src={platformBranding.logoDataUri} alt="" className="w-12 h-12 rounded-lg object-contain border border-slate-200 bg-white" />
+            )}
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) compressImage(file, 200, 0.9).then((uri) => setPlatformBranding({ ...platformBranding, logoDataUri: uri }));
+              }}
+              className="text-sm"
+            />
+            {platformBranding.logoDataUri && (
+              <button onClick={() => setPlatformBranding({ ...platformBranding, logoDataUri: "" })} className="text-xs text-red-500 hover:underline">
+                Remove
+              </button>
+            )}
+          </div>
+        </div>
+        <button
+          onClick={saveBranding}
+          disabled={brandingSaving}
+          className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+        >
+          {brandingSaving ? "Saving..." : "Save"}
+        </button>
+        {brandingSaved && <span className="ml-2 text-sm text-green-700">Saved.</span>}
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
         <h3 className="font-bold text-slate-900 mb-1">Online payment gateways</h3>
         <p className="text-xs text-slate-400 mb-4">
           Switch these on once you've tested a gateway end-to-end — until then, academies only see Instapay, even if the Vercel environment variables are already set.
@@ -21766,6 +21932,12 @@ function App() {
 
   useEffect(() => {
     if (isSuperAdminRoute || isLoginGatewayRoute || isSignupRoute || isRootGateRoute) return;
+    // Platform branding (name/logo/sidebar color) applies everywhere, not
+    // just this one academy, so it's loaded once here alongside academy
+    // resolution rather than duplicated inside every view that needs it.
+    loadPlatformBranding().then((branding) => {
+      window.__platformBranding = branding;
+    });
     resolveAcademy().then((academy) => {
       if (!academy) {
         setAcademyStatus("not-found");
