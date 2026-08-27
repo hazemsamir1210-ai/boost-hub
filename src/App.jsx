@@ -11698,9 +11698,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <div className="flex flex-wrap items-end gap-3 print:hidden">
               <div className="flex gap-1 bg-slate-100 rounded-lg p-1">
                 {[
-                  { id: "day", label: "Daily" },
-                  { id: "week", label: "Weekly" },
-                  { id: "month", label: "Monthly" },
+                  { id: "day", label: t("daily") },
+                  { id: "week", label: t("weekly") },
+                  { id: "month", label: t("monthly") },
                 ].map((t) => (
                   <button
                     key={t.id}
@@ -11731,7 +11731,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 onClick={exportReport}
                 className="ml-auto flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
               >
-                <FileDown className="w-4 h-4" /> Export PDF
+                <FileDown className="w-4 h-4" /> {t("exportPDF")}
               </button>
               <button
                 onClick={exportReportExcel}
@@ -11741,13 +11741,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </button>
             </div>
             <div className="text-xs text-slate-400 -mt-4 print:hidden">
-              Downloads a report file — open it and use your browser's Print → Save as PDF.
+              {t("downloadsReportHint")}
             </div>
 
             <div className="print:hidden bg-white rounded-2xl border border-slate-200 p-5">
-              <h3 className="font-bold text-slate-900 mb-1">Session roster & attendance</h3>
+              <h3 className="font-bold text-slate-900 mb-1">{t("sessionRosterTitle")}</h3>
               <p className="text-xs text-slate-400 mb-3">
-                One coach at a time, with every swimmer's plan and a present/absent mark for each session date that month.
+                {t("sessionRosterSub")}
               </p>
               <div className="flex items-center gap-2 flex-wrap">
                 <select
@@ -19130,6 +19130,13 @@ const TRANSLATIONS = {
     planLabel: "Plan",
     trialLabel: "Trial",
     dropinLabel: "Drop-in",
+    daily: "Daily",
+    weekly: "Weekly",
+    monthly: "Monthly",
+    exportPDF: "Export PDF",
+    downloadsReportHint: "Downloads a report file — open it and use your browser's Print → Save as PDF.",
+    sessionRosterTitle: "Session roster & attendance",
+    sessionRosterSub: "One coach at a time, with every swimmer's plan and a present/absent mark for each session date that month.",
   },
   ar: {
     newRegistration: "تسجيل سباح جديد",
@@ -19298,6 +19305,13 @@ const TRANSLATIONS = {
     planLabel: "الخطة",
     trialLabel: "تجريبي",
     dropinLabel: "حصة واحدة",
+    daily: "يومي",
+    weekly: "أسبوعي",
+    monthly: "شهري",
+    exportPDF: "تصدير PDF",
+    downloadsReportHint: "بيحمّل ملف تقرير — افتحيه واستخدمي خاصية الطباعة → حفظ كـ PDF من المتصفح.",
+    sessionRosterTitle: "جدول الحضور والانصراف",
+    sessionRosterSub: "كابتن واحد في المرة، مع خطة كل سباح وعلامة حضور/غياب لكل تاريخ حصة في الشهر.",
   },
 };
 
