@@ -5367,6 +5367,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [classSaving, setClassSaving] = useState(false);
   const [classError, setClassError] = useState("");
   const [enrollModal, setEnrollModal] = useState(null); // null | { form }
+  const [enrollSwimmerSearch, setEnrollSwimmerSearch] = useState("");
+  const [enrollSwimmerDropdownOpen, setEnrollSwimmerDropdownOpen] = useState(false);
   const [enrollSaving, setEnrollSaving] = useState(false);
   const [enrollError, setEnrollError] = useState("");
 
@@ -5618,6 +5620,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   const openNewEnrollModal = async () => {
     setEnrollError("");
+    setEnrollSwimmerSearch("");
+    setEnrollSwimmerDropdownOpen(false);
     setEnrollModal({ form: { swimmerId: "", classId: "", planId: "", kind: "recurring", dropInAmount: "" } });
     if (coreSwimmersForEnroll.length === 0) {
       try {
@@ -11379,6 +11383,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   classes={coreClasses}
                   enrollments={coreEnrollments}
                   coaches={coreCoaches}
+                  swimmers={coreSwimmersForEnroll}
                   onCellClick={(day, time) => openNewClassModal({ day, time })}
                   onClassClick={openEditClassModal}
                 />
@@ -11847,14 +11852,63 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <div className="space-y-3">
               <div>
                 <label className="text-xs text-slate-500 mb-1 block">Swimmer</label>
-                <select
-                  value={enrollModal.form.swimmerId}
-                  onChange={(e) => setEnrollModal({ ...enrollModal, form: { ...enrollModal.form, swimmerId: e.target.value } })}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
-                >
-                  <option value="">— Choose a swimmer —</option>
-                  {coreSwimmersForEnroll.map((s) => <option key={s.id} value={s.id}>{s.name}{s.phone ? ` · ${s.phone}` : ""}</option>)}
-                </select>
+                {enrollModal.form.swimmerId ? (
+                  <div className="w-full border border-slate-200 rounded-lg py-2.5 px-3 bg-white flex items-center justify-between">
+                    <span className="text-sm text-slate-800">
+                      {coreSwimmersForEnroll.find((s) => String(s.id) === String(enrollModal.form.swimmerId))?.name || "Selected"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEnrollModal({ ...enrollModal, form: { ...enrollModal.form, swimmerId: "" } });
+                        setEnrollSwimmerSearch("");
+                      }}
+                      className="text-slate-400 hover:text-red-500"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <input
+                      value={enrollSwimmerSearch}
+                      onChange={(e) => { setEnrollSwimmerSearch(e.target.value); setEnrollSwimmerDropdownOpen(true); }}
+                      onFocus={() => setEnrollSwimmerDropdownOpen(true)}
+                      onBlur={() => setTimeout(() => setEnrollSwimmerDropdownOpen(false), 150)}
+                      placeholder="Type a swimmer's name..."
+                      className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    />
+                    {enrollSwimmerDropdownOpen && (
+                      <div className="absolute z-10 mt-1 w-full max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-lg">
+                        {(() => {
+                          const q = enrollSwimmerSearch.trim().toLowerCase();
+                          const matches = coreSwimmersForEnroll
+                            .filter((s) => !q || `${s.name} ${s.phone || ""}`.toLowerCase().includes(q))
+                            .slice(0, 30);
+                          if (matches.length === 0) {
+                            return <div className="px-3 py-2 text-sm text-slate-400">No swimmers match</div>;
+                          }
+                          return matches.map((s) => (
+                            <button
+                              key={s.id}
+                              type="button"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => {
+                                setEnrollModal({ ...enrollModal, form: { ...enrollModal.form, swimmerId: s.id } });
+                                setEnrollSwimmerSearch("");
+                                setEnrollSwimmerDropdownOpen(false);
+                              }}
+                              className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 flex items-center justify-between gap-2"
+                            >
+                              <span className="text-slate-800">{s.name}</span>
+                              {s.phone && <span className="text-xs text-slate-400 shrink-0">{s.phone}</span>}
+                            </button>
+                          ));
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
               <div>
                 <label className="text-xs text-slate-500 mb-1 block">Class</label>
@@ -23576,7 +23630,7 @@ function DailyRemindersPanel({ classes = [], enrollments = [], swimmers = [], fa
   );
 }
 
-function ClassCalendarGrid({ classes = [], enrollments = [], coaches = [], onCellClick, onClassClick }) {
+function ClassCalendarGrid({ classes = [], enrollments = [], coaches = [], swimmers = [], onCellClick, onClassClick }) {
   const branchId = BRANCHES[0]?.id;
   const allTimes = Array.from(
     new Set(DAY_GROUPS.flatMap((d) => TIME_SLOTS[branchId]?.[d.id] || []))
@@ -23612,6 +23666,12 @@ function ClassCalendarGrid({ classes = [], enrollments = [], coaches = [], onCel
                         const count = activeEnrollmentCountForClass(enrollments, c.id);
                         const full = count >= Number(c.capacity || 0);
                         const coachName = coaches.find((co) => co.id === c.coachId)?.name;
+                        const agesHere = enrollments
+                          .filter((e) => e.classId === c.id && isEnrollmentCurrentlyActive(e))
+                          .map((e) => swimmers.find((s) => String(s.id) === String(e.swimmerId))?.age)
+                          .filter((a) => a != null && a !== "")
+                          .map((a) => Number(a))
+                          .sort((a, b) => a - b);
                         return (
                           <button
                             key={c.id}
@@ -23620,6 +23680,9 @@ function ClassCalendarGrid({ classes = [], enrollments = [], coaches = [], onCel
                           >
                             <div className="font-semibold text-slate-800">{c.level}</div>
                             <div className="text-slate-400">{coachName || "No coach"} · {count}/{c.capacity}</div>
+                            {agesHere.length > 0 && (
+                              <div className="text-slate-400">Ages: {agesHere.join(", ")}</div>
+                            )}
                           </button>
                         );
                       })}
