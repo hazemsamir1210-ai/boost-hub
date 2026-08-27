@@ -4460,6 +4460,59 @@ function calculateFamilyRetentionScore(family, allSwimmers) {
   return { score, monthsWithAcademy, swimmerCount: mySwimmers.length, topReasons };
 }
 
+// Swimmer progress insights — compares each swimmer's time-in-level and
+// skill mastery against the AVERAGE of their own peers (same level, same
+// academy) rather than some fixed universal benchmark, since "normal
+// pace" genuinely differs level to level and academy to academy. Flags
+// two directions: notably slower than peers (worth a check-in or extra
+// practice) and notably faster (worth considering an early level-up) —
+// both stated as plain comparisons to the peer average, never phrased as
+// a verdict on the swimmer.
+function generateSwimmerProgressInsights(activeSwimmers) {
+  const byLevel = {};
+  activeSwimmers.forEach((s) => {
+    if (!byLevel[s.level]) byLevel[s.level] = [];
+    byLevel[s.level].push(s);
+  });
+
+  const insights = [];
+  Object.entries(byLevel).forEach(([level, group]) => {
+    if (group.length < 3) return; // need enough peers for the comparison to mean anything
+    const levelSkills = LEVEL_SKILLS[level] || [];
+    if (levelSkills.length === 0) return;
+
+    const withProgress = group.map((s) => {
+      const lastCert = (s.certificates || [])[(s.certificates || []).length - 1];
+      const enteredAt = lastCert?.date || s.createdAt;
+      const monthsInLevel = enteredAt ? Math.max(0, Math.floor((new Date() - new Date(enteredAt)) / (1000 * 60 * 60 * 24 * 30))) : 0;
+      const mastered = levelSkills.filter((sk) => (s.skills?.[level]?.[sk] || 0) >= 5).length;
+      const masteryRate = mastered / levelSkills.length;
+      return { swimmer: s, monthsInLevel, masteryRate };
+    });
+
+    const avgMonths = withProgress.reduce((sum, x) => sum + x.monthsInLevel, 0) / withProgress.length;
+    const avgMastery = withProgress.reduce((sum, x) => sum + x.masteryRate, 0) / withProgress.length;
+
+    withProgress.forEach((x) => {
+      if (x.monthsInLevel >= 2 && x.monthsInLevel > avgMonths * 1.5 && x.masteryRate < avgMastery) {
+        insights.push({
+          swimmer: x.swimmer,
+          type: "slower",
+          text: `${x.swimmer.name} has been in ${level} for ${x.monthsInLevel} months (peer average is ${Math.round(avgMonths)}) — might be worth extra practice or a check-in.`,
+        });
+      } else if (x.monthsInLevel >= 1 && x.masteryRate >= 0.8 && x.monthsInLevel < avgMonths * 0.7) {
+        insights.push({
+          swimmer: x.swimmer,
+          type: "faster",
+          text: `${x.swimmer.name} mastered ${level} skills faster than peers (${x.monthsInLevel} months vs. average ${Math.round(avgMonths)}) — worth considering an early level-up.`,
+        });
+      }
+    });
+  });
+
+  return insights;
+}
+
 const CORE_KEYS = {
   families: "families-all",
   classes: "classes-all",
@@ -13089,6 +13142,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           .filter((r) => r.score !== null)
           .sort((a, b) => a.score - b.score);
 
+        const progressInsights = generateSwimmerProgressInsights(activeSwimmersNow);
+
         // Revenue by plan — inferred from each active swimmer's own plan
         // (sessionType + level combination maps to a PLANS entry the same
         // way subscribing does), counting only those paid for the month
@@ -13367,6 +13422,23 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       <span className={`text-sm font-bold shrink-0 ${score >= 80 ? "text-green-600" : score >= 60 ? "text-amber-600" : "text-red-500"}`}>
                         {score}
                       </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {progressInsights.length > 0 && (
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 mt-4">
+                <div className="text-sm font-semibold text-slate-800 mb-1">Swimmer progress insights</div>
+                <p className="text-xs text-slate-400 mb-3">
+                  Each swimmer compared to their own peers in the same level — not a fixed benchmark, since normal pace differs level to level.
+                </p>
+                <div className="space-y-2 max-h-80 overflow-y-auto">
+                  {progressInsights.map((insight, i) => (
+                    <div key={i} className={`text-sm rounded-lg px-3 py-2 flex items-start gap-2 ${insight.type === "faster" ? "bg-green-50" : "bg-amber-50"}`}>
+                      <span className="shrink-0">{insight.type === "faster" ? "🚀" : "🐢"}</span>
+                      <span className={insight.type === "faster" ? "text-green-800" : "text-amber-800"}>{insight.text}</span>
                     </div>
                   ))}
                 </div>
