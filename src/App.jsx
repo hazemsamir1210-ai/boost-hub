@@ -10546,42 +10546,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               const perf = coachPerformanceById[c.id] || {};
               return (
                 <div key={c.id} className="bg-white rounded-2xl border border-slate-200 p-4">
-                <div className="flex flex-wrap items-center gap-4">
-                  <div className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center flex-shrink-0">
-                    <Award className="w-5 h-5 text-indigo-700" />
-                  </div>
-                  <div className="min-w-[140px] flex-1">
-                    <div className="font-semibold text-slate-900">{c.name}</div>
-                    <div className="text-xs text-slate-400">{c.phone || "No phone on file"}</div>
-                  </div>
-                  <div className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-800 font-medium">
-                    {BRANCHES.find((b) => b.id === c.branch)?.name || "No branch"}
-                  </div>
-                  <div className="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 font-medium">
-                    {load} swimmer{load === 1 ? "" : "s"} assigned
-                  </div>
-                  {perf.attendanceRate !== null && (
-                    <div className={`text-xs px-2.5 py-1 rounded-full font-medium ${perf.attendanceRate >= 85 ? "bg-green-50 text-green-700" : perf.attendanceRate >= 70 ? "bg-amber-50 text-amber-700" : "bg-red-50 text-red-600"}`}>
-                      {perf.attendanceRate}% attendance
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-[160px]">
+                    <div className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center flex-shrink-0">
+                      <Award className="w-5 h-5 text-indigo-700" />
                     </div>
-                  )}
-                  {perf.skillCompletionRate !== null && (
-                    <div className="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 font-medium">
-                      {perf.skillCompletionRate}% skills mastered
+                    <div>
+                      <div className="font-semibold text-slate-900 text-sm">{c.name}</div>
+                      <div className="text-xs text-slate-400">{c.phone || "No phone on file"}</div>
                     </div>
-                  )}
-                  {perf.avgRating !== null && (
-                    <div className="text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 font-medium flex items-center gap-1">
-                      <span>★</span>{perf.avgRating} <span className="text-amber-400">({perf.ratingCount})</span>
-                    </div>
-                  )}
-                  {perf.makeupCreditsOwed > 0 && (
-                    <div className="text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 font-medium">
-                      {perf.makeupCreditsOwed} makeup{perf.makeupCreditsOwed === 1 ? "" : "s"} owed
-                    </div>
-                  )}
+                  </div>
                   {(can("manageCoaches") || canEditContent || canEdit) && (
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1 shrink-0">
                       {(can("manageCoaches") || canEditContent) && (
                         <button
                           onClick={() => { setEditingCoach(c); setShowCoachForm(true); }}
@@ -10596,6 +10572,38 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         </button>
                       )}
                     </div>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500 border-t border-slate-100 mt-3 pt-2.5">
+                  <span>{BRANCHES.find((b) => b.id === c.branch)?.name || "No branch"}</span>
+                  <span className="text-slate-300">·</span>
+                  <span>{load} swimmer{load === 1 ? "" : "s"} assigned</span>
+                  {perf.attendanceRate !== null && (
+                    <>
+                      <span className="text-slate-300">·</span>
+                      <span className={perf.attendanceRate >= 85 ? "text-green-600" : perf.attendanceRate >= 70 ? "text-amber-600" : "text-red-500"}>
+                        {perf.attendanceRate}% attendance
+                      </span>
+                    </>
+                  )}
+                  {perf.skillCompletionRate !== null && (
+                    <>
+                      <span className="text-slate-300">·</span>
+                      <span>{perf.skillCompletionRate}% skills mastered</span>
+                    </>
+                  )}
+                  {perf.avgRating !== null && (
+                    <>
+                      <span className="text-slate-300">·</span>
+                      <span className="flex items-center gap-0.5">★ {perf.avgRating} <span className="text-slate-400">({perf.ratingCount})</span></span>
+                    </>
+                  )}
+                  {perf.makeupCreditsOwed > 0 && (
+                    <>
+                      <span className="text-slate-300">·</span>
+                      <span className="text-amber-600 font-medium">{perf.makeupCreditsOwed} makeup{perf.makeupCreditsOwed === 1 ? "" : "s"} owed</span>
+                    </>
                   )}
                 </div>
                 </div>
