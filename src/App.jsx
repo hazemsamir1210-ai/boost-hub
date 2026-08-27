@@ -4563,6 +4563,93 @@ function generateCoachInsights(allCoachStats) {
   return insights;
 }
 
+// Automatic class optimization — looks for pairs of active classes that
+// are similar enough to genuinely merge (same level, same session type,
+// same branch) where both are under-filled and their combined swimmers
+// would fit in ONE class's capacity, freeing up a coach/time slot instead
+// of running two half-empty sessions. Also flags classes sitting nearly
+// empty on their own, as a candidate to either promote harder or retire.
+// These are suggestions to review, never applied automatically — merging
+// swimmers into a different class/coach is a real change worth a human
+// decision, not something this should just do on its own.
+function suggestClassOptimizations(classes, enrollments) {
+  const activeClasses = classes.filter((c) => c.active !== false);
+  const withOccupancy = activeClasses.map((c) => ({
+    cls: c,
+    filled: activeEnrollmentCountForClass(enrollments, c.id),
+    capacity: Number(c.capacity || 0),
+  }));
+
+  const suggestions = [];
+
+  // Nearly-empty classes on their own.
+  withOccupancy.forEach(({ cls, filled, capacity }) => {
+    if (capacity > 0 && filled <= 1 && filled < capacity) {
+      suggestions.push({
+        type: "empty",
+        text: `"${cls.name}" has only ${filled} swimmer${filled === 1 ? "" : "s"} enrolled — consider promoting this slot or moving them into a similar class.`,
+        classIds: [cls.id],
+      });
+    }
+  });
+
+  // Mergeable pairs — same level, session type, and branch; both under
+  // 70% full; combined swimmers still fit in the larger of the two.
+  for (let i = 0; i < withOccupancy.length; i++) {
+    for (let j = i + 1; j < withOccupancy.length; j++) {
+      const a = withOccupancy[i];
+      const b = withOccupancy[j];
+      if (a.cls.level !== b.cls.level || a.cls.sessionType !== b.cls.sessionType || a.cls.branch !== b.cls.branch) continue;
+      if (a.capacity === 0 || b.capacity === 0) continue;
+      const aOccupancy = a.filled / a.capacity;
+      const bOccupancy = b.filled / b.capacity;
+      if (aOccupancy >= 0.7 || bOccupancy >= 0.7) continue;
+      const targetCapacity = Math.max(a.capacity, b.capacity);
+      if (a.filled + b.filled <= targetCapacity) {
+        suggestions.push({
+          type: "merge",
+          text: `"${a.cls.name}" (${a.filled}/${a.capacity}) and "${b.cls.name}" (${b.filled}/${b.capacity}) are both under-filled and could merge into one ${targetCapacity}-capacity class.`,
+          classIds: [a.cls.id, b.cls.id],
+        });
+      }
+    }
+  }
+
+  return suggestions;
+}
+
+// Automatic coach assignment — suggests the best-fit coach for a swimmer
+// who needs one, from the coaches actually available (right branch, not
+// closed at that day/time — the same filter the manual picker already
+// uses). Ranks by experience with this specific level (a coach who
+// already teaches several Level 3 swimmers has more relevant practice
+// than one who's never had one) and, as a tiebreaker, a lighter current
+// roster (spreads new swimmers out rather than always suggesting
+// whoever's already busiest). Always a suggestion to accept or override
+// from the picker — never assigns anything by itself.
+function suggestBestCoach(candidateCoaches, swimmer, allSwimmers) {
+  if (candidateCoaches.length === 0) return null;
+
+  const scored = candidateCoaches.map((c) => {
+    const myLoad = allSwimmers.filter((s) => s.coachId === c.id || s.coachId2 === c.id).length;
+    const myLevelExperience = allSwimmers.filter((s) => (s.coachId === c.id || s.coachId2 === c.id) && s.level === swimmer.level).length;
+    // Experience matters most; a lighter overall load breaks ties between
+    // similarly-experienced coaches, rather than dominating the ranking.
+    const score = myLevelExperience * 10 - myLoad * 0.5;
+    return { coach: c, myLoad, myLevelExperience, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  const top = scored[0];
+
+  const reason =
+    top.myLevelExperience > 0
+      ? `Already teaches ${top.myLevelExperience} swimmer${top.myLevelExperience === 1 ? "" : "s"} at ${swimmer.level}`
+      : `Lightest current roster (${top.myLoad} swimmers) among available coaches`;
+
+  return { coach: top.coach, reason };
+}
+
 const CORE_KEYS = {
   families: "families-all",
   classes: "classes-all",
@@ -10090,6 +10177,21 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           </select>
         );
 
+        const CoachSuggestion = ({ s }) => {
+          const candidates = coaches.filter((c) => c.branch === s.branch && !isCoachClosedAt(c, s.day, s.time));
+          const suggestion = suggestBestCoach(candidates, s, swimmers);
+          if (!suggestion) return null;
+          return (
+            <button
+              onClick={() => assignCoach(s, suggestion.coach.id)}
+              className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-800 hover:bg-blue-100 font-medium flex items-center gap-1 whitespace-nowrap"
+              title={suggestion.reason}
+            >
+              ✨ Suggest: {suggestion.coach.name}
+            </button>
+          );
+        };
+
         return (
           <div>
             <div className="mb-6">
@@ -10115,7 +10217,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                           {DAY_GROUPS.find((d) => d.id === s.day)?.label || s.day} · {s.time} · {s.level}
                         </div>
                       </div>
-                      <CoachPicker s={s} />
+                      <div className="flex items-center gap-2">
+                        <CoachSuggestion s={s} />
+                        <CoachPicker s={s} />
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -11330,6 +11435,22 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         <Plus className="w-4 h-4" /> {t("newClass")}
                       </button>
                     </div>
+                    {(() => {
+                      const optimizations = suggestClassOptimizations(coreClasses, coreEnrollments);
+                      return optimizations.length > 0 ? (
+                        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-3">
+                          <div className="text-xs font-semibold text-amber-800 mb-2">Class optimization suggestions</div>
+                          <div className="space-y-1.5">
+                            {optimizations.map((s, i) => (
+                              <div key={i} className="text-xs text-amber-800 flex items-start gap-1.5">
+                                <span className="shrink-0">{s.type === "merge" ? "🔀" : "💡"}</span>
+                                <span>{s.text}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null;
+                    })()}
                     {coreClasses.filter(c => `${c.name} ${c.level} ${c.day} ${c.time}`.toLowerCase().includes(coreSearch.toLowerCase())).map(c => {
                       const count = activeEnrollmentCountForClass(coreEnrollments, c.id);
                       const coachName = coreCoaches.find(co => co.id === c.coachId)?.name;
