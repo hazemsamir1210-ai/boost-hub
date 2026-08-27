@@ -10618,8 +10618,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         <div>
           <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
             <div>
-              <h2 className="text-xl font-bold text-slate-900">Family & Billing</h2>
-              <p className="text-sm text-slate-400">New core model built from your existing swimmer records — legacy data remains untouched.</p>
+              <h2 className="text-xl font-bold text-slate-900">{t("familyBilling")}</h2>
+              <p className="text-sm text-slate-400">{t("familyBillingSub")}</p>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -10628,7 +10628,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 className="px-3 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold disabled:opacity-60"
                 title="Fills in classes/enrollments for any swimmer added or edited before this page existed"
               >
-                {backfillRunning ? "Syncing..." : "Sync all swimmers now"}
+                {backfillRunning ? t("syncing") : t("syncAllSwimmers")}
               </button>
               <button
                 onClick={async () => {
@@ -10640,7 +10640,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-100 text-sm"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${coreLoading ? "animate-spin" : ""}`} />
-                {refreshedFlash ? "Refreshed ✓" : "Refresh"}
+                {refreshedFlash ? t("refreshed") : t("refresh")}
               </button>
             </div>
           </div>
@@ -10655,7 +10655,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
           <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
             <div className="flex gap-1 p-2 border-b border-slate-100 overflow-x-auto">
-              {[["families","Families"],["classes","Classes"],["calendar","Calendar"],["enrollments","Enrollments"],["ledger","Ledger"],["reminders","Reminders"]].map(([id,label]) => (
+              {[["families",t("coreFamilies")],["classes",t("coreClasses")],["calendar",t("coreCalendar")],["enrollments",t("coreEnrollments")],["ledger",t("coreLedger")],["reminders",t("coreReminders")]].map(([id,label]) => (
                 <button key={id} onClick={() => setCoreTab(id)} className={`px-3 py-2 rounded-lg text-sm whitespace-nowrap ${coreTab === id ? "bg-blue-50 text-blue-950 font-semibold" : "text-slate-500 hover:bg-slate-50"}`}>{label}</button>
               ))}
               {coreTab !== "calendar" && coreTab !== "reminders" && (
@@ -10696,11 +10696,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   const bal = getFamilyLedgerSummary(coreLedger, f.id).balance;
                   return (
                     <button key={f.id} onClick={() => openFamilyLedger(f.id)} className="w-full text-left border border-slate-100 rounded-xl p-3 flex items-center justify-between gap-3 hover:bg-slate-50">
-                      <div><div className="font-semibold">{f.name}</div><div className="text-xs text-slate-400">{f.primaryPhone || "No phone"} · {f.swimmerIds?.length || 0} swimmer(s)</div></div>
+                      <div><div className="font-semibold">{f.name}</div><div className="text-xs text-slate-400">{f.primaryPhone || "No phone"} · {f.swimmerIds?.length || 0} {t("swimmersCount")}</div></div>
                       {bal > 0 ? (
-                        <span className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded-full whitespace-nowrap">{bal.toLocaleString()} EGP due</span>
+                        <span className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded-full whitespace-nowrap">{bal.toLocaleString()} {t("dueLabel")}</span>
                       ) : (
-                        <span className="text-xs bg-slate-50 px-2 py-1 rounded-full">Family</span>
+                        <span className="text-xs bg-slate-50 px-2 py-1 rounded-full">{t("familyLabel")}</span>
                       )}
                     </button>
                   );
@@ -10709,7 +10709,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <>
                     <div className="flex justify-end mb-1">
                       <button onClick={openNewClassModal} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold">
-                        <Plus className="w-4 h-4" /> New class
+                        <Plus className="w-4 h-4" /> {t("newClass")}
                       </button>
                     </div>
                     {coreClasses.filter(c => `${c.name} ${c.level} ${c.day} ${c.time}`.toLowerCase().includes(coreSearch.toLowerCase())).map(c => {
@@ -10719,7 +10719,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       return (
                         <div key={c.id} className={`border border-slate-100 rounded-xl p-3 flex items-center justify-between gap-3 ${c.active === false ? "opacity-50" : ""}`}>
                           <div>
-                            <div className="font-semibold">{c.name}{c.active === false && <span className="ml-2 text-xs text-red-500 font-normal">(inactive)</span>}</div>
+                            <div className="font-semibold">{c.name}{c.active === false && <span className="ml-2 text-xs text-red-500 font-normal">({t("inactiveLabel")})</span>}</div>
                             <div className="text-xs text-slate-400">{dayLabel} · {c.time} · {c.level} · {c.sessionType}{coachName ? ` · ${coachName}` : ""}</div>
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
@@ -10738,7 +10738,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <>
                     <div className="flex justify-end mb-1">
                       <button onClick={openNewEnrollModal} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold">
-                        <Plus className="w-4 h-4" /> New enrollment
+                        <Plus className="w-4 h-4" /> {t("newEnrollment")}
                       </button>
                     </div>
                     {coreEnrollments.filter(e => `${e.swimmerId} ${e.classId} ${e.status}`.toLowerCase().includes(coreSearch.toLowerCase())).slice().reverse().map(e => {
@@ -10752,11 +10752,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               <span className="font-semibold">{swimmerName}</span>
                               {kind !== "recurring" && (
                                 <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${kind === "trial" ? "bg-purple-50 text-purple-700" : "bg-amber-50 text-amber-700"}`}>
-                                  {kind === "trial" ? "Trial" : "Drop-in"}
+                                  {kind === "trial" ? t("trialLabel") : t("dropinLabel")}
                                 </span>
                               )}
                             </div>
-                            <div className="text-xs text-slate-400">{cls?.name || e.classId} · Plan: {e.planId || "—"}</div>
+                            <div className="text-xs text-slate-400">{cls?.name || e.classId} · {t("planLabel")}: {e.planId || "—"}</div>
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
                             <span className={`text-xs px-2 py-1 rounded-full ${isEnrollmentCurrentlyActive(e) ? "bg-green-50 text-green-700" : "bg-slate-50 text-slate-500"}`}>
@@ -19109,6 +19109,27 @@ const TRANSLATIONS = {
     navMoney: "Money",
     navEngage: "Engage",
     navSystem: "System",
+    familyBilling: "Family & Billing",
+    familyBillingSub: "New core model built from your existing swimmer records — legacy data remains untouched.",
+    syncAllSwimmers: "Sync all swimmers now",
+    syncing: "Syncing...",
+    refresh: "Refresh",
+    refreshed: "Refreshed ✓",
+    coreFamilies: "Families",
+    coreClasses: "Classes",
+    coreCalendar: "Calendar",
+    coreEnrollments: "Enrollments",
+    coreLedger: "Ledger",
+    coreReminders: "Reminders",
+    newClass: "New class",
+    newEnrollment: "New enrollment",
+    swimmersCount: "swimmer(s)",
+    familyLabel: "Family",
+    dueLabel: "EGP due",
+    inactiveLabel: "inactive",
+    planLabel: "Plan",
+    trialLabel: "Trial",
+    dropinLabel: "Drop-in",
   },
   ar: {
     newRegistration: "تسجيل سباح جديد",
@@ -19256,6 +19277,27 @@ const TRANSLATIONS = {
     navMoney: "الماليات",
     navEngage: "التواصل",
     navSystem: "النظام",
+    familyBilling: "الأسر والفواتير",
+    familyBillingSub: "نظام جديد مبني على بيانات السباحين الحالية — البيانات القديمة فضلت زي ما هي من غير تعديل.",
+    syncAllSwimmers: "مزامنة كل السباحين دلوقتي",
+    syncing: "بيتزامن...",
+    refresh: "تحديث",
+    refreshed: "اتحدّث ✓",
+    coreFamilies: "الأسر",
+    coreClasses: "الفصول",
+    coreCalendar: "الكالندر",
+    coreEnrollments: "التسجيلات",
+    coreLedger: "كشف الحساب",
+    coreReminders: "التذكيرات",
+    newClass: "فصل جديد",
+    newEnrollment: "تسجيل جديد",
+    swimmersCount: "سباح",
+    familyLabel: "أسرة",
+    dueLabel: "جنيه مستحق",
+    inactiveLabel: "غير نشط",
+    planLabel: "الخطة",
+    trialLabel: "تجريبي",
+    dropinLabel: "حصة واحدة",
   },
 };
 
