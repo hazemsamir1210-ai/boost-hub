@@ -5964,6 +5964,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   };
 
   const [tab, setTab] = useState("dashboard");
+  const [reportsSubTab, setReportsSubTab] = useState("ops");
 
   useEffect(() => {
     if (tab === "pos") loadPosData();
@@ -6017,7 +6018,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   }, [authed, tab, coreLoading, coreLedger.length]);
 
   useEffect(() => {
-    if (!authed || tab !== "management") return;
+    if (!authed || (tab !== "management" && !(tab === "reports" && reportsSubTab === "insights"))) return;
     (async () => {
       try {
         const result = await migrateCoreModelsOnce();
@@ -9754,14 +9755,6 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <Award className="w-4 h-4" /> {t("coachPerformance")}
         </button>
         )}
-        {canViewFinancialReports && (
-        <button
-          onClick={() => setTab("reportscenter")}
-          className={navBtnClass("reportscenter")}
-        >
-          <TrendingUp className="w-4 h-4" /> Reports Center
-        </button>
-        )}
         {canEdit && role !== "technical_director" && (
           <button
             onClick={() => setTab("accounts")}
@@ -12365,7 +12358,28 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "reports" && (canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && (() => {
+      {tab === "reports" && (canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && (
+        <div className="flex gap-2 mb-4">
+          <button
+            onClick={() => setReportsSubTab("ops")}
+            className={`text-sm px-4 py-2 rounded-lg font-medium transition ${
+              reportsSubTab === "ops" ? "bg-blue-950 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+            }`}
+          >
+            Daily Ops
+          </button>
+          <button
+            onClick={() => setReportsSubTab("insights")}
+            className={`text-sm px-4 py-2 rounded-lg font-medium transition ${
+              reportsSubTab === "insights" ? "bg-blue-950 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+            }`}
+          >
+            Analytics & Insights
+          </button>
+        </div>
+      )}
+
+      {tab === "reports" && reportsSubTab === "ops" && (canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && (() => {
         const { startISO, endISO, label } = periodRange(reportType, reportAnchor);
 
         // Revenue: confirmed payment requests dated (by confirmation time) within the period
@@ -13287,7 +13301,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         );
       })()}
 
-      {tab === "reportscenter" && canViewFinancialReports && (() => {
+      {tab === "reports" && reportsSubTab === "insights" && canViewFinancialReports && (() => {
         const activeSwimmersNow = swimmers.filter((s) => s.day && s.time);
         const churnRisks = activeSwimmersNow
           .map((s) => ({ swimmer: s, ...calculateChurnRisk(s) }))
