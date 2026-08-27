@@ -5142,10 +5142,6 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     } finally { setPosLoading(false); }
   }, []);
 
-  useEffect(() => {
-    if (tab === "pos") loadPosData();
-  }, [tab, loadPosData]);
-
   // ---- POS: product catalog management ----
   const [productModal, setProductModal] = useState(null); // null | { mode: "new"|"edit", form }
   const [productError, setProductError] = useState("");
@@ -5710,6 +5706,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   };
 
   const [tab, setTab] = useState("dashboard");
+
+  useEffect(() => {
+    if (tab === "pos") loadPosData();
+  }, [tab, loadPosData]);
 
   // Shared by every sidebar nav button (defined once here rather than
   // repeating the same ternary 19+ times) — active state uses a left
