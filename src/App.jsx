@@ -5470,6 +5470,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [showPricesModal, setShowPricesModal] = useState(false);
   const [showAchievementsModal, setShowAchievementsModal] = useState(false);
   const [settingsSubTab, setSettingsSubTab] = useState("general");
+  const [showMoreFilters, setShowMoreFilters] = useState(false);
   const [coachPerfMonth, setCoachPerfMonth] = useState("");
   const [coachPerfCoachFilter, setCoachPerfCoachFilter] = useState("all");
 
@@ -9421,21 +9422,134 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
       {tab === "swimmers" && (
         <div>
-          <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
-            <div className="flex items-center gap-2 flex-1 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap mb-3">
+            <div className="flex-1 min-w-[200px]">
               <SwimmerSearchInput onSearch={setSearch} />
-              {BRANCHES.length > 1 && (
-                <select
-                  value={branchFilter}
-                  onChange={(e) => setBranchFilter(e.target.value)}
-                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+            </div>
+            <button
+              onClick={() => {
+                loadSwimmers();
+                loadSwimmersPage({ offset: 0 });
+              }}
+              className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"
+              title="Refresh"
+            >
+              <RefreshCw className={`w-4 h-4 ${swimmersLoading || swimmersPageLoading ? "animate-spin" : ""}`} />
+            </button>
+            {canEditContent && (
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  className="hidden"
+                  onChange={(e) => handleImportFile(e.target.files?.[0])}
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"
+                  title="Import Excel"
                 >
-                  <option value="all">All branches</option>
-                  {BRANCHES.map((b) => (
-                    <option key={b.id} value={b.id}>{b.name}</option>
-                  ))}
-                </select>
-              )}
+                  <FileUp className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={exportSwimmersToExcel}
+                  disabled={exportingSwimmers}
+                  className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 disabled:opacity-60"
+                  title={exportingSwimmers ? "Exporting..." : "Export Excel"}
+                >
+                  {exportingSwimmers ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
+                </button>
+              </>
+            )}
+            {canEdit && (
+              <button
+                onClick={() => setDeleteAllModalOpen(true)}
+                className="p-2 rounded-lg hover:bg-red-50 text-red-500"
+                title="Delete all swimmers"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
+            {canEditContent && (
+              <button
+                onClick={() => { setEditingSwimmer(null); setPendingActivationId(null); setShowForm(true); }}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 whitespace-nowrap"
+              >
+                <Plus className="w-4 h-4" /> Add swimmer
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap mb-4">
+            {BRANCHES.length > 1 && (
+              <select
+                value={branchFilter}
+                onChange={(e) => setBranchFilter(e.target.value)}
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+              >
+                <option value="all">All branches</option>
+                {BRANCHES.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+            )}
+            <select
+              value={paymentStatusFilter}
+              onChange={(e) => setPaymentStatusFilter(e.target.value)}
+              className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+            >
+              <option value="all">Any payment status</option>
+              <option value="paid">Paid</option>
+              <option value="unpaid">Not paid</option>
+            </select>
+            <div className="flex items-center gap-1.5 border border-slate-200 rounded-lg py-1 pl-3 pr-1 bg-white">
+              <span className="text-xs text-slate-400 whitespace-nowrap">Acting on:</span>
+              <input
+                type="month"
+                value={paymentMonthFilter}
+                onChange={(e) => setPaymentMonthFilter(e.target.value)}
+                className="text-sm outline-none bg-white"
+                title="Payment status, and the Cash payment / Mark paid only / Undo buttons below, all apply to this month"
+              />
+            </div>
+            <button
+              onClick={() => setShowMoreFilters((v) => !v)}
+              className={`text-sm px-3 py-2 rounded-lg font-medium transition ${
+                showMoreFilters ? "bg-blue-50 text-blue-950" : "text-slate-500 hover:bg-slate-100"
+              }`}
+            >
+              {showMoreFilters ? "Fewer filters ▲" : "More filters ▼"}
+            </button>
+            {(branchFilter !== "all" || levelFilter !== "all" || dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || paymentStatusFilter !== "paid" || showUnscheduled || search) && (
+              <button
+                onClick={() => {
+                  setBranchFilter("all");
+                  setLevelFilter("all");
+                  setDayFilter("all");
+                  setTimeFilter("all");
+                  setSessionTypeFilter("all");
+                  setPaymentStatusFilter("all");
+                  setShowUnscheduled(true);
+                  setSearch("");
+                }}
+                className="text-xs text-slate-400 hover:text-slate-600 underline whitespace-nowrap"
+                title="Shows everyone, including unscheduled and unpaid swimmers"
+              >
+                Clear filters
+              </button>
+            )}
+            <div className="flex-1" />
+            <div className="flex items-center gap-2.5 text-[11px] text-slate-300">
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm inline-block" style={{ background: "#2563eb" }} />Private</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm inline-block" style={{ background: "#9333ea" }} />Semi</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm inline-block" style={{ background: "#0d9488" }} />Group</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm inline-block bg-red-600" />Owes 2+</span>
+            </div>
+          </div>
+
+          {showMoreFilters && (
+            <div className="flex items-center gap-2 flex-wrap mb-4 bg-slate-50 rounded-xl p-3">
               <select
                 value={levelFilter}
                 onChange={(e) => setLevelFilter(e.target.value)}
@@ -9476,25 +9590,6 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <option key={t.id} value={t.id}>{t.label} ({t.capacity})</option>
                 ))}
               </select>
-              <select
-                value={paymentStatusFilter}
-                onChange={(e) => setPaymentStatusFilter(e.target.value)}
-                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
-              >
-                <option value="all">Any payment status</option>
-                <option value="paid">Paid</option>
-                <option value="unpaid">Not paid</option>
-              </select>
-              <div className="flex items-center gap-1.5 border border-slate-200 rounded-lg py-1 pl-3 pr-1 bg-white">
-                <span className="text-xs text-slate-400 whitespace-nowrap">Acting on:</span>
-                <input
-                  type="month"
-                  value={paymentMonthFilter}
-                  onChange={(e) => setPaymentMonthFilter(e.target.value)}
-                  className="text-sm outline-none bg-white"
-                  title="Payment status, and the Cash payment / Mark paid only / Undo buttons below, all apply to this month"
-                />
-              </div>
               <label className="flex items-center gap-1.5 text-sm text-slate-500 select-none cursor-pointer">
                 <input
                   type="checkbox"
@@ -9504,84 +9599,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 />
                 Include unscheduled
               </label>
-              {(branchFilter !== "all" || levelFilter !== "all" || dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || paymentStatusFilter !== "paid" || showUnscheduled || search) && (
-                <button
-                  onClick={() => {
-                    setBranchFilter("all");
-                    setLevelFilter("all");
-                    setDayFilter("all");
-                    setTimeFilter("all");
-                    setSessionTypeFilter("all");
-                    setPaymentStatusFilter("all");
-                    setShowUnscheduled(true);
-                    setSearch("");
-                  }}
-                  className="text-xs text-slate-400 hover:text-slate-600 underline whitespace-nowrap"
-                  title="Shows everyone, including unscheduled and unpaid swimmers"
-                >
-                  Clear filters (show everyone)
-                </button>
-              )}
             </div>
-            <div className="flex items-center gap-3 text-xs text-slate-400">
-              <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: "#2563eb" }} />Private</span>
-              <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: "#9333ea" }} />Semi</span>
-              <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: "#0d9488" }} />Group</span>
-              <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm inline-block bg-red-600" />Owes 2+ months</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => {
-                  loadSwimmers();
-                  loadSwimmersPage({ offset: 0 });
-                }}
-                className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"
-              >
-                <RefreshCw className={`w-4 h-4 ${swimmersLoading || swimmersPageLoading ? "animate-spin" : ""}`} />
-              </button>
-              {canEditContent && (
-                <>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".xlsx,.xls,.csv"
-                    className="hidden"
-                    onChange={(e) => handleImportFile(e.target.files?.[0])}
-                  />
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-slate-200 text-slate-600 text-sm font-semibold hover:bg-slate-50"
-                  >
-                    <FileUp className="w-4 h-4" /> Import Excel
-                  </button>
-                  <button
-                    onClick={exportSwimmersToExcel}
-                    disabled={exportingSwimmers}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-slate-200 text-slate-600 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60"
-                  >
-                    {exportingSwimmers ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
-                    {exportingSwimmers ? "Exporting..." : "Export Excel"}
-                  </button>
-                </>
-              )}
-              {canEdit && (
-                <button
-                  onClick={() => setDeleteAllModalOpen(true)}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-white border border-red-200 text-red-600 text-sm font-semibold hover:bg-red-50"
-                >
-                  <Trash2 className="w-4 h-4" /> Delete all swimmers
-                </button>
-              )}
-              {canEditContent && (
-                <button
-                  onClick={() => { setEditingSwimmer(null); setPendingActivationId(null); setShowForm(true); }}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
-                >
-                  <Plus className="w-4 h-4" /> Add swimmer
-                </button>
-              )}
-            </div>
-          </div>
+          )}
 
           {importError && !importPreview && (
             <div className="text-red-500 text-sm mb-4 bg-red-50 rounded-lg px-4 py-2.5">{importError}</div>
@@ -9643,74 +9662,47 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               return (
               <div
                 key={s.id}
-                className="bg-white rounded-2xl border border-slate-200 p-3"
+                className="bg-white rounded-2xl border border-slate-200 p-4"
                 style={{ borderLeftWidth: "4px", borderLeftColor: isOverdue ? "#dc2626" : typeColor }}
               >
-                <div className="flex flex-wrap items-center gap-3">
-                  <div className="min-w-[120px]">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-[160px]">
                     <div className="font-semibold text-slate-900 text-sm flex items-center gap-1.5">
-                      {rowView.level === "Baby" && (
-                        <span className="inline-flex items-center gap-0.5 bg-amber-100 text-amber-700 rounded-full px-1.5 py-0.5">
-                          <Baby className="w-3 h-3" />
-                        </span>
-                      )}
+                      {rowView.level === "Baby" && <Baby className="w-3.5 h-3.5 text-amber-600 shrink-0" />}
                       {s.name}
-                    </div>
-                    <div className="text-xs text-slate-400 flex items-center gap-1.5">
-                      {s.age} yrs · {s.phone}
-                      {s.altPhone && <span title="Second number">/ {s.altPhone}</span>}
                       {waLink(s.phone) && (
                         <a
                           href={waLink(s.phone)}
                           target="_blank"
                           rel="noopener noreferrer"
                           onClick={(e) => e.stopPropagation()}
-                          className="text-green-600 hover:text-green-700"
+                          className="text-slate-300 hover:text-green-600 transition"
                           title="Message on WhatsApp"
                         >
                           <Send className="w-3.5 h-3.5" />
                         </a>
                       )}
                     </div>
-                    {isFrozen(s) && (
-                      <div className="text-xs px-2 py-0.5 mt-1 inline-flex items-center rounded-full bg-cyan-50 text-cyan-700 font-medium">
-                        ❄️ Frozen until {new Date(s.frozenUntil).toLocaleDateString("en-GB")}
-                      </div>
-                    )}
-                    {isOverdue && !isFrozen(s) && (
-                      <div className="text-xs px-2 py-0.5 mt-1 inline-flex items-center rounded-full bg-red-100 text-red-700 font-semibold">
-                        ⚠️ Owes 2+ months
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-800 font-medium">
-                    {BRANCHES.find((b) => b.id === s.branch)?.name.split(" (")[0] || "No branch"}
-                  </div>
-                  <div className="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 font-medium">{rowView.level}</div>
-                  {(LEVEL_SKILLS[rowView.level] || []).length > 0 && (() => {
-                    const total = LEVEL_SKILLS[rowView.level].length;
-                    const mastered = LEVEL_SKILLS[rowView.level].filter((sk) => (s.skills?.[rowView.level]?.[sk] || 0) >= 5).length;
-                    return (
-                      <div className={`text-xs px-2.5 py-1 rounded-full font-medium flex items-center gap-1 ${mastered === total ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>
-                        <Star className="w-3 h-3 fill-current" /> {mastered}/{total}
-                      </div>
-                    );
-                  })()}
-
-                  {rowView.coachId && (
-                    <div className="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 font-medium flex items-center gap-1">
-                      <Award className="w-3 h-3" />
-                      {coaches.find((c) => c.id === rowView.coachId)?.name || "Coach"} · {sessionTypeInfo(rowView.sessionType).label}
+                    <div className="text-xs text-slate-400 mt-0.5">
+                      {s.age} yrs · {s.phone}{s.altPhone ? ` / ${s.altPhone}` : ""}
                     </div>
-                  )}
-
-                  <div className="flex items-center gap-1.5 text-sm text-slate-500 flex-1 min-w-[200px]">
-                    <CalendarDays className="w-3.5 h-3.5 text-slate-400" />
-                    {scheduleLabel(rowView)}
+                    {(isFrozen(s) || isOverdue) && (
+                      <div className="mt-1.5">
+                        {isFrozen(s) ? (
+                          <span className="text-xs px-2 py-0.5 inline-flex items-center rounded-full bg-cyan-50 text-cyan-700 font-medium">
+                            ❄️ Frozen until {new Date(s.frozenUntil).toLocaleDateString("en-GB")}
+                          </span>
+                        ) : (
+                          <span className="text-xs px-2 py-0.5 inline-flex items-center rounded-full bg-red-50 text-red-600 font-semibold">
+                            ⚠️ Owes 2+ months
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
 
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                  <div className="flex items-center gap-1.5 shrink-0">
                     <span
                       className={`text-xs px-3 py-1.5 rounded-full font-semibold ${
                         (s.paidMonths || []).includes(paymentMonthFilter) ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"
@@ -9829,6 +9821,39 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       </button>
                     )}
                   </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500 border-t border-slate-100 mt-3 pt-2.5">
+                  <span>{BRANCHES.find((b) => b.id === s.branch)?.name.split(" (")[0] || "No branch"}</span>
+                  <span className="text-slate-300">·</span>
+                  <span>{rowView.level}</span>
+                  <span className="text-slate-300">·</span>
+                  <span className="flex items-center gap-1">
+                    <CalendarDays className="w-3 h-3 text-slate-400" />
+                    {scheduleLabel(rowView)}
+                  </span>
+                  {(LEVEL_SKILLS[rowView.level] || []).length > 0 && (() => {
+                    const total = LEVEL_SKILLS[rowView.level].length;
+                    const mastered = LEVEL_SKILLS[rowView.level].filter((sk) => (s.skills?.[rowView.level]?.[sk] || 0) >= 5).length;
+                    return (
+                      <>
+                        <span className="text-slate-300">·</span>
+                        <span className={`flex items-center gap-1 ${mastered === total ? "text-green-600" : ""}`}>
+                          <Star className="w-3 h-3 fill-current" /> {mastered}/{total} skills
+                        </span>
+                      </>
+                    );
+                  })()}
+                  {rowView.coachId && (
+                    <>
+                      <span className="text-slate-300">·</span>
+                      <span className="flex items-center gap-1">
+                        <Award className="w-3 h-3 text-slate-400" />
+                        {coaches.find((c) => c.id === rowView.coachId)?.name || "Coach"} ({sessionTypeInfo(rowView.sessionType).label})
+                      </span>
+                    </>
+                  )}
                 </div>
 
                 {s.notes && <div className="text-xs text-slate-400 border-t border-slate-100 pt-2 mt-3">{s.notes}</div>}
