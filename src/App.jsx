@@ -4351,6 +4351,204 @@ async function migrateCoreModelsOnce() {
   return { migrated: true, counts: models };
 }
 
+// Keeps a swimmer's Family/Class/Enrollment presence in the newer engine
+// in sync automatically, every time they're saved through the regular
+// Swimmers tab — so "enrolling" a swimmer there is no longer a separate,
+// easy-to-forget step in Family & Billing. Deliberately does NOT touch
+// the ledger/charges here — payment tracking stays on paidMonths, the
+// system every existing report and the Swimmers tab itself already
+// trusts, so this never risks double-charging anyone. Never throws: a
+// problem here should never block saving the swimmer itself.
+async function syncSwimmerToCoreEngine(swimmer) {
+  if (!swimmer.day || !swimmer.time) return; // nothing to enroll yet
+  try {
+    const [families, classes, enrollments] = await Promise.all([
+      loadCoreCollection(CORE_KEYS.families),
+      loadCoreCollection(CORE_KEYS.classes),
+      loadCoreCollection(CORE_KEYS.enrollments),
+    ]);
+
+    const phone = (swimmer.phone || "").trim() || `no-phone-${swimmer.id}`;
+    let family = families.find((f) => (f.primaryPhone || "").trim() === (swimmer.phone || "").trim() && swimmer.phone)
+      || families.find((f) => f.swimmerIds?.includes(swimmer.id));
+    let familiesChanged = false;
+    if (!family) {
+      family = {
+        id: `fam-${phone.replace(/\D/g, "") || genId()}`,
+        name: `${swimmer.name} Family`,
+        primaryPhone: swimmer.phone || "",
+        altPhone: swimmer.altPhone || "",
+        swimmerIds: [swimmer.id],
+        createdAt: new Date().toISOString(),
+        migratedFrom: "auto-sync",
+      };
+      families.push(family);
+      familiesChanged = true;
+    } else if (!family.swimmerIds?.includes(swimmer.id)) {
+      family.swimmerIds = [...(family.swimmerIds || []), swimmer.id];
+      familiesChanged = true;
+    }
+
+    const key = coreClassKey(swimmer);
+    let cls = classes.find((c) => coreClassKey(c) === key);
+    let classesChanged = false;
+    if (!cls) {
+      cls = {
+        id: `cls-${genId()}`,
+        name: `${swimmer.level || "Class"} · ${swimmer.day} · ${swimmer.time}`,
+        branch: swimmer.branch || BRANCHES[0]?.id || "",
+        level: swimmer.level || "",
+        day: swimmer.day,
+        time: swimmer.time,
+        coachId: swimmer.coachId || null,
+        sessionType: swimmer.sessionType || "group",
+        capacity: Number(swimmer.sessionType === "private" ? 1 : swimmer.level === "Baby" ? 1 : 3),
+        active: true,
+        createdAt: new Date().toISOString(),
+        migratedFrom: "auto-sync",
+      };
+      classes.push(cls);
+      classesChanged = true;
+    }
+
+    // A swimmer only ever holds one RECURRING enrollment at a time — if
+    // their schedule changed since the last save, the old one is closed
+    // out (not deleted, so the enrollment history stays intact) and a
+    // fresh one opens in the class matching their current schedule.
+    const activeRecurring = enrollments.find(
+      (e) => e.swimmerId === swimmer.id && (e.kind || "recurring") === "recurring" && isEnrollmentCurrentlyActive(e)
+    );
+    let enrollmentsChanged = false;
+    if (!activeRecurring || activeRecurring.classId !== cls.id) {
+      if (activeRecurring) {
+        activeRecurring.status = "cancelled";
+        activeRecurring.endDate = todayISO();
+        activeRecurring.updatedAt = new Date().toISOString();
+      }
+      enrollments.push(
+        createEnrollmentRecord({
+          familyId: family.id,
+          swimmerId: swimmer.id,
+          classId: cls.id,
+          planId: swimmer.planId || inferPlanId(swimmer),
+        })
+      );
+      enrollmentsChanged = true;
+    }
+
+    await Promise.all([
+      familiesChanged ? saveCoreCollection(CORE_KEYS.families, families) : null,
+      classesChanged ? saveCoreCollection(CORE_KEYS.classes, classes) : null,
+      enrollmentsChanged ? saveCoreCollection(CORE_KEYS.enrollments, enrollments) : null,
+    ]);
+  } catch (e) {
+    console.warn("Core engine sync skipped for this save:", e?.message);
+  }
+}
+
+// Same logic as syncSwimmerToCoreEngine, but for a whole batch at once —
+// loads each collection once, applies every swimmer in memory, then
+// saves once at the end, instead of a full load+save round trip per
+// swimmer. Used for the one-off "Sync all swimmers now" backfill button
+// in Family & Billing, so catching up a large existing roster stays fast.
+async function syncManySwimmersToCoreEngine(swimmerList) {
+  const [families, classes, enrollments] = await Promise.all([
+    loadCoreCollection(CORE_KEYS.families),
+    loadCoreCollection(CORE_KEYS.classes),
+    loadCoreCollection(CORE_KEYS.enrollments),
+  ]);
+  let classesCreated = 0;
+  let enrollmentsCreated = 0;
+
+  swimmerList.forEach((swimmer) => {
+    if (!swimmer.day || !swimmer.time) return;
+
+    const phone = (swimmer.phone || "").trim() || `no-phone-${swimmer.id}`;
+    let family = families.find((f) => (f.primaryPhone || "").trim() === (swimmer.phone || "").trim() && swimmer.phone)
+      || families.find((f) => f.swimmerIds?.includes(swimmer.id));
+    if (!family) {
+      family = {
+        id: `fam-${phone.replace(/\D/g, "") || genId()}`,
+        name: `${swimmer.name} Family`,
+        primaryPhone: swimmer.phone || "",
+        altPhone: swimmer.altPhone || "",
+        swimmerIds: [swimmer.id],
+        createdAt: new Date().toISOString(),
+        migratedFrom: "auto-sync-batch",
+      };
+      families.push(family);
+    } else if (!family.swimmerIds?.includes(swimmer.id)) {
+      family.swimmerIds = [...(family.swimmerIds || []), swimmer.id];
+    }
+
+    const key = coreClassKey(swimmer);
+    let cls = classes.find((c) => coreClassKey(c) === key);
+    if (!cls) {
+      cls = {
+        id: `cls-${genId()}`,
+        name: `${swimmer.level || "Class"} · ${swimmer.day} · ${swimmer.time}`,
+        branch: swimmer.branch || BRANCHES[0]?.id || "",
+        level: swimmer.level || "",
+        day: swimmer.day,
+        time: swimmer.time,
+        coachId: swimmer.coachId || null,
+        sessionType: swimmer.sessionType || "group",
+        capacity: Number(swimmer.sessionType === "private" ? 1 : swimmer.level === "Baby" ? 1 : 3),
+        active: true,
+        createdAt: new Date().toISOString(),
+        migratedFrom: "auto-sync-batch",
+      };
+      classes.push(cls);
+      classesCreated++;
+    }
+
+    const activeRecurring = enrollments.find(
+      (e) => e.swimmerId === swimmer.id && (e.kind || "recurring") === "recurring" && isEnrollmentCurrentlyActive(e)
+    );
+    if (!activeRecurring || activeRecurring.classId !== cls.id) {
+      if (activeRecurring) {
+        activeRecurring.status = "cancelled";
+        activeRecurring.endDate = todayISO();
+        activeRecurring.updatedAt = new Date().toISOString();
+      }
+      enrollments.push(
+        createEnrollmentRecord({
+          familyId: family.id,
+          swimmerId: swimmer.id,
+          classId: cls.id,
+          planId: swimmer.planId || inferPlanId(swimmer),
+        })
+      );
+      enrollmentsCreated++;
+    }
+  });
+
+  await Promise.all([
+    saveCoreCollection(CORE_KEYS.families, families),
+    saveCoreCollection(CORE_KEYS.classes, classes),
+    saveCoreCollection(CORE_KEYS.enrollments, enrollments),
+  ]);
+
+  return { classesCreated, enrollmentsCreated };
+}
+
+async function cancelCoreEnrollmentsForSwimmer(swimmerId) {
+  try {
+    const enrollments = await loadCoreCollection(CORE_KEYS.enrollments);
+    let changed = false;
+    const next = enrollments.map((e) => {
+      if (e.swimmerId === swimmerId && e.status === "active") {
+        changed = true;
+        return { ...e, status: "cancelled", endDate: todayISO(), updatedAt: new Date().toISOString() };
+      }
+      return e;
+    });
+    if (changed) await saveCoreCollection(CORE_KEYS.enrollments, next);
+  } catch (e) {
+    console.warn("Core engine cleanup skipped:", e?.message);
+  }
+}
+
 // Creates a real, standalone Class record — used by the "+ New class"
 // form in Family & Billing, as opposed to the classes that get inferred
 // automatically from swimmers' existing schedules during migration.
@@ -4688,6 +4886,30 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       setCoreCoaches(coachesList);
     } finally { setCoreLoading(false); }
   }, []);
+
+  // Runs the same auto-sync every regular swimmer save now triggers, but
+  // for every swimmer at once — for anyone added or last edited before
+  // that automatic sync existed, so their class/enrollment shows up here
+  // without needing to open and re-save each one by hand. Loads and saves
+  // the core collections once for the whole batch (not once per swimmer),
+  // so this stays fast even with a large roster.
+  const [backfillRunning, setBackfillRunning] = useState(false);
+  const [backfillMessage, setBackfillMessage] = useState("");
+  const syncAllSwimmersNow = async () => {
+    setBackfillRunning(true);
+    setBackfillMessage("");
+    try {
+      const all = await fetchAllSwimmers();
+      const scheduled = all.filter((s) => s.day && s.time);
+      const result = await syncManySwimmersToCoreEngine(scheduled);
+      await loadCoreModels();
+      setBackfillMessage(`Synced ${scheduled.length} scheduled swimmer${scheduled.length === 1 ? "" : "s"} — ${result.classesCreated} class${result.classesCreated === 1 ? "" : "es"} and ${result.enrollmentsCreated} enrollment${result.enrollmentsCreated === 1 ? "" : "s"} added.`);
+    } catch (e) {
+      setBackfillMessage("Something went wrong partway through — safe to run again, it only fills in what's missing.");
+    } finally {
+      setBackfillRunning(false);
+    }
+  };
 
   const openNewClassModal = (prefill = {}) => {
     setClassError("");
@@ -7650,6 +7872,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     const res = await saveCollection(STORE_KEYS.swimmers, next);
     if (!res) throw new Error("Could not save the swimmer, please try again");
     logActivity(accountName, role, existing ? "Edited swimmer" : "Added swimmer", finalRecord.name);
+    syncSwimmerToCoreEngine(finalRecord); // best-effort, never blocks this save
 
     loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     setShowForm(false);
@@ -7667,6 +7890,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           const res = await saveCollection(STORE_KEYS.swimmers, next);
           if (!res) throw new Error("delete failed");
           logActivity(accountName, role, "Deleted swimmer", swimmer.name);
+          cancelCoreEnrollmentsForSwimmer(swimmer.id); // best-effort, never blocks this delete
           loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
         } catch (e) {
           loadSwimmersPage({ offset: 0 });
@@ -10323,8 +10547,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <h2 className="text-xl font-bold text-slate-900">Family & Billing</h2>
               <p className="text-sm text-slate-400">New core model built from your existing swimmer records — legacy data remains untouched.</p>
             </div>
-            <button onClick={loadCoreModels} className="px-3 py-2 rounded-lg bg-slate-100 text-sm">Refresh</button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={syncAllSwimmersNow}
+                disabled={backfillRunning}
+                className="px-3 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold disabled:opacity-60"
+                title="Fills in classes/enrollments for any swimmer added or edited before this page existed"
+              >
+                {backfillRunning ? "Syncing..." : "Sync all swimmers now"}
+              </button>
+              <button onClick={loadCoreModels} className="px-3 py-2 rounded-lg bg-slate-100 text-sm">Refresh</button>
+            </div>
           </div>
+          {backfillMessage && <div className="mb-4 bg-green-50 border border-green-100 text-green-800 rounded-xl px-3 py-2 text-sm">{backfillMessage}</div>}
           {coreMigrationMessage && <div className="mb-4 bg-blue-50 border border-blue-100 text-blue-900 rounded-xl px-3 py-2 text-sm">{coreMigrationMessage}</div>}
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
