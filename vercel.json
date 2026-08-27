@@ -3,6 +3,7 @@
     { "source": "/((?!sw\\.js|robots\\.txt|sitemap\\.xml|manifest\\.json|icon-192\\.png|icon-512\\.png|apple-touch-icon\\.png|api/.*).*)", "destination": "/index.html" }
   ],
   "crons": [
-    { "path": "/api/whatsapp-reminder-cron", "schedule": "0 9 * * *" }
+    { "path": "/api/whatsapp-reminder-cron", "schedule": "0 9 * * *" },
+    { "path": "/api/renewal-cron", "schedule": "0 6 * * *" }
   ]
 }
