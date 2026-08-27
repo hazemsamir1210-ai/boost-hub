@@ -12255,23 +12255,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               const spotsLeft = capacity - booking.count;
                               const agesLabel = booking.ages.length > 0 ? booking.ages.slice().sort((a, b) => a - b).join(", ") : "";
                               return (
-                                <td key={t} className="px-2 py-2 text-center whitespace-nowrap">
-                                  <span
-                                    className={`inline-block px-1.5 py-0.5 rounded font-medium leading-tight ${
+                                <td key={t} className="px-2 py-2 text-center">
+                                  <div
+                                    className={`inline-block px-1.5 py-1 rounded font-medium leading-tight text-xs ${
                                       spotsLeft > 0 ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"
                                     }`}
                                     title={`${sessionTypeInfo(booking.sessionType).label} — ${booking.count}/${capacity}${agesLabel ? ` — ages: ${agesLabel}` : ""}`}
                                   >
-                                    {booking.count}/{capacity}
-                                    <br />
-                                    {booking.levels.join(", ")}
+                                    <div>{booking.count}/{capacity}</div>
+                                    <div>{booking.levels.join(", ")}</div>
                                     {agesLabel && (
-                                      <>
-                                        <br />
-                                        <span className="text-[10px] opacity-70">Ages: {agesLabel}</span>
-                                      </>
+                                      <div className="opacity-70 whitespace-nowrap">Ages: {agesLabel}</div>
                                     )}
-                                  </span>
+                                  </div>
                                   {makeupBadge}
                                 </td>
                               );
@@ -14830,7 +14826,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <div className="text-center text-slate-400 py-16">No feedback submitted yet</div>
           ) : (
             <>
-              <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-4 flex items-center gap-6">
+              <div className="bg-slate-50 rounded-2xl p-5 mb-4 flex items-center gap-6">
                 <div>
                   <div className="text-3xl font-bold text-slate-900">
                     {(feedback.reduce((sum, f) => sum + f.rating, 0) / feedback.length).toFixed(1)}
