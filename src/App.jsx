@@ -418,8 +418,16 @@ const CONFIG = {
   staffPassword: "staff123",             // pool staff attendance dashboard — change before going live
   // Optional: Telegram bot for instant admin notifications
   // Create a bot via BotFather and paste the token + chat id below
-  telegramBotToken: "8700106222:AAGqcrk7SDCDrNS091Kx2URxgHedzCf_msg",
-  telegramChatId: "6183949692",
+  // Telegram bot token/chat ID used to live here directly — a real,
+  // working token sitting in client-side JavaScript that anyone could pull
+  // out of the page source. It's been moved server-side (see
+  // /api/send-telegram-notification.js and Settings → "Telegram alerts");
+  // the old token embedded here before this change is now compromised and
+  // was revoked. Nothing reads these two fields anymore — kept only so
+  // any code that still checks for their presence fails safe (falsy) as
+  // it always has, without silently pinging a token that's no longer live.
+  telegramBotToken: "",
+  telegramChatId: "",
   // Homepage photos — paste data URIs of real academy/pool photos here
   // (same format as logoDataUri above). Leave empty and the homepage
   // falls back to the plain blue hero.
@@ -1805,22 +1813,26 @@ function photoKeyFor(id) {
 }
 
 async function notifyTelegram(record) {
-  if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) return;
+  // Sends via a server-side endpoint (/api/send-telegram-notification)
+  // that holds the bot token itself, read from an environment variable —
+  // the browser never sees it. Each academy has its own bot token/chat ID,
+  // set up from Settings → "Telegram alerts"; academies that haven't
+  // configured one just get a quiet no-op here (the endpoint checks and
+  // skips sending, same as the old CONFIG check used to).
   try {
-    const text =
-      `New subscription request\n` +
-      `Name: ${record.name}\n` +
-      `Phone: ${record.phone}\n` +
-      `Plan: ${record.planName} (${record.price} EGP)\n` +
-      `Code: ${record.id}`;
-    // A plain GET with the message in the query string avoids the CORS
-    // preflight that a JSON POST body triggers — some browsers block that
-    // preflight for Telegram's API, which silently drops the notification
-    // even though the request looks fine in the code.
-    const url =
-      `https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage` +
-      `?chat_id=${encodeURIComponent(CONFIG.telegramChatId)}&text=${encodeURIComponent(text)}`;
-    await fetch(url);
+    await fetch("/api/send-telegram-notification", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        academyId: window.__academy?.id,
+        text:
+          `New subscription request\n` +
+          `Name: ${record.name}\n` +
+          `Phone: ${record.phone}\n` +
+          `Plan: ${record.planName} (${record.price} EGP)\n` +
+          `Code: ${record.id}`,
+      }),
+    });
   } catch (e) {
     console.warn("Telegram notify failed", e);
   }
@@ -6189,6 +6201,47 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       setWhatsappError(e.message || "Could not save — please try again");
     } finally {
       setWhatsappSaving(false);
+    }
+  };
+
+  // ---- Settings: Telegram alerts (this academy's own bot credentials) ----
+  const [telegramCreds, setTelegramCreds] = useState({ telegramBotToken: "", telegramChatId: "" });
+  const [telegramStatus, setTelegramStatus] = useState({ configured: false });
+  const [telegramSaving, setTelegramSaving] = useState(false);
+  const [telegramSaved, setTelegramSaved] = useState(false);
+  const [telegramError, setTelegramError] = useState("");
+
+  const loadTelegramStatus = useCallback(() => {
+    if (!window.__academy?.id) return;
+    fetch(`/api/telegram-credentials-status?academyId=${window.__academy.id}`)
+      .then((r) => r.json())
+      .then((s) => setTelegramStatus({ configured: !!s.configured }))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (settingsSubTab === "telegram") loadTelegramStatus();
+  }, [settingsSubTab, loadTelegramStatus]);
+
+  const saveTelegramCreds = async () => {
+    setTelegramError("");
+    setTelegramSaved(false);
+    setTelegramSaving(true);
+    try {
+      const res = await fetch("/api/save-telegram-credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ academyId: window.__academy.id, ...telegramCreds }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "Could not save");
+      setTelegramSaved(true);
+      loadTelegramStatus();
+      setTelegramCreds({ telegramBotToken: "", telegramChatId: "" });
+    } catch (e) {
+      setTelegramError(e.message || "Could not save — please try again");
+    } finally {
+      setTelegramSaving(false);
     }
   };
 
@@ -14579,6 +14632,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               { id: "skills", label: "Skills & Levels" },
               { id: "payments", label: "Online payments" },
               { id: "whatsapp", label: "WhatsApp reminders" },
+              { id: "telegram", label: "Telegram alerts" },
               { id: "backup", label: "Backup" },
               ...(role === "admin" ? [{ id: "password", label: "Password" }] : []),
             ].map((t) => (
@@ -15442,6 +15496,57 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 {whatsappSaving ? "Saving..." : "Save"}
               </button>
               {whatsappSaved && <span className="ml-2 text-sm text-green-700">Saved.</span>}
+            </div>
+          </div>
+          )}
+
+          {settingsSubTab === "telegram" && (
+          <div>
+            <h3 className="font-bold text-slate-900 mb-1">Telegram alerts</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              Sends a Telegram message to you whenever a new subscription request comes in — via your own bot, so the token lives only on the server, never in the app anyone can view.
+            </p>
+            {telegramError && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-3">{telegramError}</div>}
+
+            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-semibold text-slate-800">Connection</h4>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${telegramStatus.configured ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"}`}>
+                  {telegramStatus.configured ? "Connected" : "Not set up"}
+                </span>
+              </div>
+              <div className="grid sm:grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Bot token</label>
+                  <input
+                    type="password"
+                    value={telegramCreds.telegramBotToken}
+                    onChange={(e) => setTelegramCreds({ ...telegramCreds, telegramBotToken: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    placeholder={telegramStatus.configured ? "•••••••• (already set)" : "From @BotFather"}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Chat ID</label>
+                  <input
+                    value={telegramCreds.telegramChatId}
+                    onChange={(e) => setTelegramCreds({ ...telegramCreds, telegramChatId: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    placeholder={telegramStatus.configured ? "•••••••• (already set)" : "Your Telegram chat ID"}
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-slate-400 mb-3">
+                Create a bot with @BotFather on Telegram to get a token, message your bot once, then get your chat ID from @userinfobot.
+              </p>
+              <button
+                onClick={saveTelegramCreds}
+                disabled={telegramSaving}
+                className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+              >
+                {telegramSaving ? "Saving..." : "Save"}
+              </button>
+              {telegramSaved && <span className="ml-2 text-sm text-green-700">Saved.</span>}
             </div>
           </div>
           )}
