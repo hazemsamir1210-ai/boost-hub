@@ -2076,29 +2076,73 @@ async function runHistoryCleanupIfDue() {
   return result;
 }
 
+// Distance between two lat/lng points in meters (haversine formula) — used
+// to check a GPS check-in actually happened near the pool, not the
+// straight-line "as the crow flies" distance being an approximation
+// people can fully trust down to the meter, but close enough to catch
+// someone checking in from home.
+function distanceMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// Reads the browser's current GPS position as a plain {lat, lng} object,
+// or null if location isn't available/permitted — check-in still proceeds
+// without it (see checkInStaff), it just won't be GPS-verified.
+function getCurrentPositionSafe() {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) return resolve(null);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  });
+}
+
+// Compares a captured position against a branch's saved pool location —
+// returns null when the branch has no location configured yet (nothing to
+// check against, so GPS is simply not enforced), otherwise how far away
+// they were and whether that's within the allowed radius.
+function checkWithinBranchRadius(position, branch) {
+  if (!branch?.lat || !branch?.lng) return null;
+  if (!position) return { withinRadius: false, distance: null, noGps: true };
+  const distance = Math.round(distanceMeters(position.lat, position.lng, branch.lat, branch.lng));
+  const radius = Number(branch.radiusMeters) || 150;
+  return { withinRadius: distance <= radius, distance, radius, noGps: false };
+}
+
 // Staff check-in/check-out — one record per person per day. Uses the
 // account's own name (whoever's logged in) plus today's date as the key,
 // so checking in twice the same day just updates the same record.
-async function checkInStaff(accountName, role) {
+async function checkInStaff(accountName, role, position = null) {
   const all = await loadCollection(STORE_KEYS.staffAttendance);
   const today = todayISO();
   const idx = all.findIndex((r) => r.accountName === accountName && r.date === today);
   const now = new Date().toISOString();
+  const gpsFields = position ? { checkInLat: position.lat, checkInLng: position.lng } : {};
   if (idx === -1) {
-    all.push({ id: genId(), accountName, role, date: today, checkIn: now, checkOut: null });
+    all.push({ id: genId(), accountName, role, date: today, checkIn: now, checkOut: null, ...gpsFields });
   } else {
-    all[idx] = { ...all[idx], checkIn: now };
+    all[idx] = { ...all[idx], checkIn: now, ...gpsFields };
   }
   await saveCollection(STORE_KEYS.staffAttendance, all);
   return all;
 }
 
-async function checkOutStaff(accountName) {
+async function checkOutStaff(accountName, position = null) {
   const all = await loadCollection(STORE_KEYS.staffAttendance);
   const today = todayISO();
   const idx = all.findIndex((r) => r.accountName === accountName && r.date === today);
   if (idx !== -1) {
-    all[idx] = { ...all[idx], checkOut: new Date().toISOString() };
+    const gpsFields = position ? { checkOutLat: position.lat, checkOutLng: position.lng } : {};
+    all[idx] = { ...all[idx], checkOut: new Date().toISOString(), ...gpsFields };
     await saveCollection(STORE_KEYS.staffAttendance, all);
   }
   return all;
@@ -6661,6 +6705,40 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     saveBranches(branchesDraft.filter((b) => b.id !== id));
   };
 
+  // ---- GPS staff attendance: capture the admin's current location once,
+  // as "this is where the pool actually is" — every future check-in gets
+  // compared against it before it's allowed to count.
+  const [locatingBranchId, setLocatingBranchId] = useState(null);
+  const [locationError, setLocationError] = useState("");
+  const captureBranchLocation = (id) => {
+    if (!navigator.geolocation) {
+      setLocationError("This browser doesn't support location — try a different device to set this up.");
+      return;
+    }
+    setLocationError("");
+    setLocatingBranchId(id);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const next = branchesDraft.map((b) =>
+          b.id === id ? { ...b, lat: pos.coords.latitude, lng: pos.coords.longitude, radiusMeters: b.radiusMeters || 150 } : b
+        );
+        saveBranches(next);
+        setLocatingBranchId(null);
+      },
+      (err) => {
+        setLocationError(err.message || "Could not get your location — check your browser's location permission.");
+        setLocatingBranchId(null);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+  const setBranchRadius = (id, radiusMeters) => {
+    setBranchesDraft((prev) => prev.map((b) => (b.id === id ? { ...b, radiusMeters } : b)));
+  };
+  const clearBranchLocation = (id) => {
+    saveBranches(branchesDraft.map((b) => (b.id === id ? { ...b, lat: null, lng: null } : b)));
+  };
+
   // ---- Settings tab: public homepage content (hero + programs) ----
   const [heroTagline, setHeroTagline] = useState("");
   const [heroSubtitle, setHeroSubtitle] = useState("");
@@ -6880,12 +6958,26 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
     setCheckingInOut(true);
     try {
+      const myBranch = BRANCHES.find((b) => b.id === branchRestriction) || BRANCHES[0];
+      const position = myBranch?.lat ? await getCurrentPositionSafe() : null;
+      const gpsCheck = checkWithinBranchRadius(position, myBranch);
+      if (gpsCheck && !gpsCheck.withinRadius) {
+        setScanMessage(
+          gpsCheck.noGps
+            ? "Couldn't confirm your location — check your browser's location permission and try again."
+            : `You're too far from the pool (${gpsCheck.distance}m away, need to be within ${gpsCheck.radius}m).`
+        );
+        setCheckingInOut(false);
+        setTimeout(() => setScanMessage(""), 4000);
+        return;
+      }
+
       if (!myAttendanceToday?.checkIn) {
-        const all = await checkInStaff(accountName, role);
+        const all = await checkInStaff(accountName, role, position);
         setMyAttendanceToday(all.find((r) => r.accountName === accountName && r.date === todayISO()));
         setScanMessage("Checked in!");
       } else if (!myAttendanceToday?.checkOut) {
-        const all = await checkOutStaff(accountName);
+        const all = await checkOutStaff(accountName, position);
         setMyAttendanceToday(all.find((r) => r.accountName === accountName && r.date === todayISO()));
         setScanMessage("Checked out!");
       } else {
@@ -14337,26 +14429,60 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               its own schedule/time slots set up automatically; you'd still manage those from the "Day & time slots" section above.
             </p>
             <div className="bg-white rounded-2xl border border-slate-200 p-5">
-              <div className="space-y-2 mb-4">
+              <div className="space-y-3 mb-4">
                 {branchesDraft.map((b) => (
-                  <div key={b.id} className="flex items-center gap-2">
-                    <input
-                      value={b.name}
-                      onChange={(e) => renameBranch(b.id, e.target.value)}
-                      onBlur={commitBranchRename}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") commitBranchRename();
-                      }}
-                      className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
-                    />
-                    {branchesDraft.length > 1 && (
-                      <button onClick={() => removeBranch(b.id)} className="p-2 text-slate-300 hover:text-red-500">
-                        <X className="w-4 h-4" />
-                      </button>
-                    )}
+                  <div key={b.id} className="border border-slate-100 rounded-xl p-3">
+                    <div className="flex items-center gap-2 mb-2">
+                      <input
+                        value={b.name}
+                        onChange={(e) => renameBranch(b.id, e.target.value)}
+                        onBlur={commitBranchRename}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") commitBranchRename();
+                        }}
+                        className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                      />
+                      {branchesDraft.length > 1 && (
+                        <button onClick={() => removeBranch(b.id)} className="p-2 text-slate-300 hover:text-red-500">
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap text-xs">
+                      {b.lat ? (
+                        <>
+                          <span className="text-green-600 flex items-center gap-1">📍 Location set</span>
+                          <span className="text-slate-400">·</span>
+                          <span className="text-slate-500">Radius:</span>
+                          <input
+                            type="number"
+                            min="20"
+                            max="1000"
+                            value={b.radiusMeters || 150}
+                            onChange={(e) => setBranchRadius(b.id, Number(e.target.value))}
+                            onBlur={commitBranchRename}
+                            className="w-16 border border-slate-200 rounded py-1 px-2"
+                          />
+                          <span className="text-slate-500">meters</span>
+                          <button onClick={() => clearBranchLocation(b.id)} className="text-red-500 hover:underline ml-1">Remove</button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => captureBranchLocation(b.id)}
+                          disabled={locatingBranchId === b.id}
+                          className="text-blue-900 hover:underline disabled:opacity-60"
+                        >
+                          {locatingBranchId === b.id ? "Getting your location..." : "📍 Set GPS location (stand at the pool, then click)"}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
+              {locationError && <div className="text-xs text-red-600 mb-3">{locationError}</div>}
+              <p className="text-xs text-slate-400 mb-4">
+                Once a branch has a location set, staff check-in/check-out (QR scan) requires them to actually be within the radius — stand at the pool yourself when setting this up.
+              </p>
               <div className="flex gap-2">
                 <input
                   value={newBranchName}
@@ -16673,12 +16799,29 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
     }
     setCheckingInOut(true);
     try {
+      // GPS is only enforced for a branch that's actually had its location
+      // captured in Settings — an academy that never set one up keeps
+      // working exactly as before, QR code only.
+      const myBranch = BRANCHES.find((b) => b.id === branchRestriction) || BRANCHES[0];
+      const position = myBranch?.lat ? await getCurrentPositionSafe() : null;
+      const gpsCheck = checkWithinBranchRadius(position, myBranch);
+      if (gpsCheck && !gpsCheck.withinRadius) {
+        setScanMessage(
+          gpsCheck.noGps
+            ? "Couldn't confirm your location — check your browser's location permission and try again."
+            : `You're too far from the pool (${gpsCheck.distance}m away, need to be within ${gpsCheck.radius}m).`
+        );
+        setCheckingInOut(false);
+        setTimeout(() => setScanMessage(""), 4000);
+        return;
+      }
+
       if (!myAttendanceToday?.checkIn) {
-        const all = await checkInStaff(accountName, "technical");
+        const all = await checkInStaff(accountName, "technical", position);
         setMyAttendanceToday(all.find((r) => r.accountName === accountName && r.date === todayISO()));
         setScanMessage("Checked in!");
       } else if (!myAttendanceToday?.checkOut) {
-        const all = await checkOutStaff(accountName);
+        const all = await checkOutStaff(accountName, position);
         setMyAttendanceToday(all.find((r) => r.accountName === accountName && r.date === todayISO()));
         setScanMessage("Checked out!");
       } else {
@@ -17816,12 +17959,26 @@ function CoachView({ onExit, preAuthedCoach = null }) {
     }
     setCheckingInOut(true);
     try {
+      const myBranch = BRANCHES.find((b) => b.id === authedCoach.branch) || BRANCHES[0];
+      const position = myBranch?.lat ? await getCurrentPositionSafe() : null;
+      const gpsCheck = checkWithinBranchRadius(position, myBranch);
+      if (gpsCheck && !gpsCheck.withinRadius) {
+        setScanMessage(
+          gpsCheck.noGps
+            ? "Couldn't confirm your location — check your browser's location permission and try again."
+            : `You're too far from the pool (${gpsCheck.distance}m away, need to be within ${gpsCheck.radius}m).`
+        );
+        setCheckingInOut(false);
+        setTimeout(() => setScanMessage(""), 4000);
+        return;
+      }
+
       if (!myAttendanceToday?.checkIn) {
-        const all = await checkInStaff(authedCoach.name, "coach");
+        const all = await checkInStaff(authedCoach.name, "coach", position);
         setMyAttendanceToday(all.find((r) => r.accountName === authedCoach.name && r.date === todayISO()));
         setScanMessage("Checked in!");
       } else if (!myAttendanceToday?.checkOut) {
-        const all = await checkOutStaff(authedCoach.name);
+        const all = await checkOutStaff(authedCoach.name, position);
         setMyAttendanceToday(all.find((r) => r.accountName === authedCoach.name && r.date === todayISO()));
         setScanMessage("Checked out!");
       } else {
