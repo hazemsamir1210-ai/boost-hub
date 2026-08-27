@@ -4895,6 +4895,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   // so this stays fast even with a large roster.
   const [backfillRunning, setBackfillRunning] = useState(false);
   const [backfillMessage, setBackfillMessage] = useState("");
+  const [refreshedFlash, setRefreshedFlash] = useState(false);
   const syncAllSwimmersNow = async () => {
     setBackfillRunning(true);
     setBackfillMessage("");
@@ -10556,7 +10557,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               >
                 {backfillRunning ? "Syncing..." : "Sync all swimmers now"}
               </button>
-              <button onClick={loadCoreModels} className="px-3 py-2 rounded-lg bg-slate-100 text-sm">Refresh</button>
+              <button
+                onClick={async () => {
+                  setRefreshedFlash(false);
+                  await loadCoreModels();
+                  setRefreshedFlash(true);
+                  setTimeout(() => setRefreshedFlash(false), 1500);
+                }}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-100 text-sm"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${coreLoading ? "animate-spin" : ""}`} />
+                {refreshedFlash ? "Refreshed ✓" : "Refresh"}
+              </button>
             </div>
           </div>
           {backfillMessage && <div className="mb-4 bg-green-50 border border-green-100 text-green-800 rounded-xl px-3 py-2 text-sm">{backfillMessage}</div>}
@@ -10579,13 +10591,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             </div>
 
             {coreTab === "calendar" && (
-              <ClassCalendarGrid
-                classes={coreClasses}
-                enrollments={coreEnrollments}
-                coaches={coreCoaches}
-                onCellClick={(day, time) => openNewClassModal({ day, time })}
-                onClassClick={openEditClassModal}
-              />
+              coreLoading ? (
+                <div className="py-12 text-center text-slate-400 flex items-center justify-center gap-2">
+                  <RefreshCw className="w-4 h-4 animate-spin" /> Loading...
+                </div>
+              ) : (
+                <ClassCalendarGrid
+                  classes={coreClasses}
+                  enrollments={coreEnrollments}
+                  coaches={coreCoaches}
+                  onCellClick={(day, time) => openNewClassModal({ day, time })}
+                  onClassClick={openEditClassModal}
+                />
+              )
             )}
 
             {coreTab === "reminders" && (
