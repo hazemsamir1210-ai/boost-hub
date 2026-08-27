@@ -4331,6 +4331,8 @@ const CORE_KEYS = {
   enrollments: "enrollments-all",
   ledger: "family-ledger-all",
   coreMigration: "core-model-migration-v1",
+  products: "pos-products-all",
+  sales: "pos-sales-all",
 };
 
 async function loadCoreCollection(key) {
@@ -4785,6 +4787,33 @@ function createFamilyCharge({
   };
 }
 
+// POS / Merchandise — a simple product catalog with stock counts, and a
+// sale record for each transaction. A sale is settled on the spot (unlike
+// tuition charges, which can sit unpaid for a while), so it's logged
+// straight into the family ledger as an already-paid charge when linked
+// to a family — this keeps one combined view of everything a family has
+// ever paid, tuition and merchandise alike, without inventing a second,
+// disconnected "sales ledger" to check separately.
+function createProductRecord({ name, price, stock = 0, sku = "" }) {
+  const now = new Date().toISOString();
+  return { id: `prod-${genId()}`, name, price: Number(price || 0), stock: Number(stock || 0), sku, active: true, createdAt: now, updatedAt: now };
+}
+
+function createSaleRecord({ items, familyId = null, swimmerName = "", method = "cash", soldBy = "" }) {
+  const now = new Date().toISOString();
+  const total = items.reduce((sum, it) => sum + it.price * it.quantity, 0);
+  return {
+    id: `sale-${genId()}`,
+    items, // [{ productId, name, price, quantity }]
+    total,
+    familyId,
+    swimmerName,
+    method,
+    soldBy,
+    createdAt: now,
+  };
+}
+
 // Applies one payment amount FIFO across a family's oldest open charges
 // first. `charges` should already be filtered to that family's "charge"
 // rows only — callers merge the result back into the full ledger.
@@ -5001,6 +5030,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [coreClasses, setCoreClasses] = useState([]);
   const [coreEnrollments, setCoreEnrollments] = useState([]);
   const [coreLedger, setCoreLedger] = useState([]);
+  const [posProducts, setPosProducts] = useState([]);
+  const [posSales, setPosSales] = useState([]);
+  const [posLoading, setPosLoading] = useState(false);
   const [coreSearch, setCoreSearch] = useState("");
   const [coreLoading, setCoreLoading] = useState(false);
   const [coreMigrationMessage, setCoreMigrationMessage] = useState("");
@@ -5030,6 +5062,149 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       setCoreCoaches(coachesList);
     } finally { setCoreLoading(false); }
   }, []);
+
+  const loadPosData = useCallback(async () => {
+    setPosLoading(true);
+    try {
+      const [products, sales] = await Promise.all([
+        loadCoreCollection(CORE_KEYS.products),
+        loadCoreCollection(CORE_KEYS.sales),
+      ]);
+      setPosProducts(products);
+      setPosSales(sales);
+    } finally { setPosLoading(false); }
+  }, []);
+
+  useEffect(() => {
+    if (tab === "pos") loadPosData();
+  }, [tab, loadPosData]);
+
+  // ---- POS: product catalog management ----
+  const [productModal, setProductModal] = useState(null); // null | { mode: "new"|"edit", form }
+  const [productError, setProductError] = useState("");
+  const openNewProductModal = () => {
+    setProductError("");
+    setProductModal({ mode: "new", form: { name: "", price: "", stock: "", sku: "" } });
+  };
+  const openEditProductModal = (p) => {
+    setProductError("");
+    setProductModal({ mode: "edit", id: p.id, form: { name: p.name, price: String(p.price), stock: String(p.stock), sku: p.sku || "" } });
+  };
+  const saveProductModal = async () => {
+    const f = productModal.form;
+    if (!f.name.trim() || !f.price || Number(f.price) < 0) {
+      setProductError("Enter a name and a valid price");
+      return;
+    }
+    try {
+      let next;
+      if (productModal.mode === "new") {
+        next = [...posProducts, createProductRecord({ name: f.name.trim(), price: f.price, stock: f.stock, sku: f.sku.trim() })];
+      } else {
+        next = posProducts.map((p) =>
+          p.id === productModal.id
+            ? { ...p, name: f.name.trim(), price: Number(f.price), stock: Number(f.stock), sku: f.sku.trim(), updatedAt: new Date().toISOString() }
+            : p
+        );
+      }
+      await saveCoreCollection(CORE_KEYS.products, next);
+      setPosProducts(next);
+      setProductModal(null);
+    } catch (e) {
+      setProductError(e?.message || "Could not save");
+    }
+  };
+  const toggleProductActive = async (p) => {
+    const next = posProducts.map((x) => (x.id === p.id ? { ...x, active: x.active === false } : x));
+    await saveCoreCollection(CORE_KEYS.products, next);
+    setPosProducts(next);
+  };
+
+  // ---- POS: making a sale ----
+  const [saleCart, setSaleCart] = useState([]); // [{ productId, name, price, quantity }]
+  const [saleFamilyId, setSaleFamilyId] = useState("");
+  const [saleSwimmerName, setSaleSwimmerName] = useState("");
+  const [saleMethod, setSaleMethod] = useState("cash");
+  const [saleError, setSaleError] = useState("");
+  const [saleSaving, setSaleSaving] = useState(false);
+  const [saleSuccess, setSaleSuccess] = useState(false);
+
+  const addToCart = (product) => {
+    setSaleCart((prev) => {
+      const existing = prev.find((it) => it.productId === product.id);
+      if (existing) {
+        return prev.map((it) => (it.productId === product.id ? { ...it, quantity: it.quantity + 1 } : it));
+      }
+      return [...prev, { productId: product.id, name: product.name, price: product.price, quantity: 1 }];
+    });
+  };
+  const updateCartQuantity = (productId, quantity) => {
+    setSaleCart((prev) => prev.map((it) => (it.productId === productId ? { ...it, quantity: Math.max(1, quantity) } : it)).filter((it) => it.quantity > 0));
+  };
+  const removeFromCart = (productId) => setSaleCart((prev) => prev.filter((it) => it.productId !== productId));
+  const cartTotal = saleCart.reduce((sum, it) => sum + it.price * it.quantity, 0);
+
+  const completeSale = async () => {
+    if (saleCart.length === 0) return;
+    setSaleError("");
+    // Stock check — can't sell more than what's actually in stock.
+    for (const item of saleCart) {
+      const product = posProducts.find((p) => p.id === item.productId);
+      if (product && item.quantity > product.stock) {
+        setSaleError(`Only ${product.stock} of "${product.name}" left in stock`);
+        return;
+      }
+    }
+    setSaleSaving(true);
+    try {
+      const sale = createSaleRecord({
+        items: saleCart,
+        familyId: saleFamilyId || null,
+        swimmerName: saleSwimmerName.trim(),
+        method: saleMethod,
+        soldBy: accountName,
+      });
+      const nextSales = [...posSales, sale];
+      const nextProducts = posProducts.map((p) => {
+        const item = saleCart.find((it) => it.productId === p.id);
+        return item ? { ...p, stock: Math.max(0, p.stock - item.quantity) } : p;
+      });
+      await Promise.all([
+        saveCoreCollection(CORE_KEYS.sales, nextSales),
+        saveCoreCollection(CORE_KEYS.products, nextProducts),
+      ]);
+
+      // If this sale is linked to a family, it lands on their ledger too,
+      // already fully paid — one place to see everything they've ever
+      // paid for, tuition and merchandise both.
+      if (saleFamilyId) {
+        const charge = createFamilyCharge({
+          familyId: saleFamilyId,
+          month: monthKey(),
+          description: `Merchandise: ${saleCart.map((it) => `${it.name} x${it.quantity}`).join(", ")}`,
+          amount: cartTotal,
+          category: "merchandise",
+        });
+        const paidCharge = { ...charge, paidAmount: charge.amount, balance: 0, status: BILLING_STATUS.PAID };
+        const nextLedger = [...coreLedger, paidCharge];
+        await saveCoreCollection(CORE_KEYS.ledger, nextLedger);
+        setCoreLedger(nextLedger);
+      }
+
+      setPosSales(nextSales);
+      setPosProducts(nextProducts);
+      setSaleCart([]);
+      setSaleFamilyId("");
+      setSaleSwimmerName("");
+      logActivity(accountName, role, "POS sale", `${cartTotal.toLocaleString()} EGP — ${saleCart.map((it) => it.name).join(", ")}`);
+      setSaleSuccess(true);
+      setTimeout(() => setSaleSuccess(false), 2500);
+    } catch (e) {
+      setSaleError(e?.message || "Could not complete sale");
+    } finally {
+      setSaleSaving(false);
+    }
+  };
 
   // Runs the same auto-sync every regular swimmer save now triggers, but
   // for every swimmer at once — for anyone added or last edited before
@@ -8453,8 +8628,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       .filter((p) => p.paidMonth === paymentMonthFilter || p.month === paymentMonthFilter)
       .reduce((sum, p) => sum + (Number(p.price ?? p.amount) || 0), 0);
     const amount = baseAmount > 0 ? baseAmount : Math.max(0, finalAmount - previousPaid);
-    if (!amount || amount <= 0) return setCashError(previousPaid >= finalAmount ? "This month's plan is already fully paid" : "Enter a valid amount");
-    if (amount > Math.max(0, finalAmount - previousPaid)) return setCashError(`Maximum remaining balance is ${Math.max(0, finalAmount - previousPaid)} EGP`);
+    const remaining = Math.max(0, finalAmount - previousPaid);
+    // previousPaid can reach or exceed finalAmount without paidMonths having
+    // been updated to match — e.g. the plan price changed after they'd
+    // already paid the old amount, or "Undo payment" cleared the flag but
+    // left the ledger entries in place. Either way, "remaining is 0" always
+    // means the same thing: fully paid, nothing left to collect — never a
+    // reason to talk about a maximum amount.
+    if (remaining === 0) return setCashError("This month's plan is already fully paid — use \"Reconcile\" below to fix the Paid status, no new payment needed.");
+    if (!amount || amount <= 0) return setCashError("Enter a valid amount");
+    if (amount > remaining) return setCashError(`Maximum remaining balance is ${remaining} EGP`);
     setCashSaving(true);
     const now = new Date().toISOString();
     const methodLabel = cashMethod === "card" ? "Card (in person)" : "Cash";
@@ -8484,6 +8667,26 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       loadSwimmersPage({ offset: 0 });
     } catch (e) {
       setCashError(e?.message || "Could not save the payment");
+    } finally {
+      setCashSaving(false);
+    }
+  };
+
+  // For the "already paid but not flagged" mismatch — no new money to
+  // record, just brings paidMonths back in line with what the ledger
+  // already shows was actually collected.
+  const reconcilePaidStatus = async (swimmer) => {
+    setCashSaving(true);
+    try {
+      await updateSwimmerById(swimmer.id, (s) => ({
+        ...s,
+        paidMonths: [...new Set([...(s.paidMonths || []), paymentMonthFilter])],
+      }));
+      logActivity(accountName, role, "Reconciled paid status", `${swimmer.name} — ${monthLabel(paymentMonthFilter)}`);
+      setCashModal(null);
+      loadSwimmersPage({ offset: 0 });
+    } catch (e) {
+      setCashError(e?.message || "Could not reconcile — please try again");
     } finally {
       setCashSaving(false);
     }
@@ -9214,7 +9417,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             onClick={() => setTab("management")}
             className={navBtnClass("management")}
           >
-            <Users className="w-4 h-4" /> Family & Billing
+            <Users className="w-4 h-4" /> {t("familyBilling")}
+          </button>
+        )}
+        {(canRecordPayments || canEditContent) && (
+          <button
+            onClick={() => setTab("pos")}
+            className={navBtnClass("pos")}
+          >
+            <Wallet className="w-4 h-4" /> POS
           </button>
         )}
         {canEditContent && role !== "technical_director" && (
@@ -10906,6 +11117,232 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 ))}
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {tab === "pos" && (canRecordPayments || canEditContent) && (
+        <div>
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+            <div>
+              <h2 className="text-xl font-bold text-slate-900">POS · Merchandise</h2>
+              <p className="text-sm text-slate-400">Sell goggles, caps, swimsuits and other items — tracked stock, optional link to a family's ledger.</p>
+            </div>
+            {canEditContent && (
+              <button onClick={openNewProductModal} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold">
+                <Plus className="w-4 h-4" /> Add product
+              </button>
+            )}
+          </div>
+
+          {posLoading ? (
+            <div className="py-12 text-center text-slate-400 flex items-center justify-center gap-2">
+              <RefreshCw className="w-4 h-4 animate-spin" /> Loading...
+            </div>
+          ) : (
+            <div className="grid lg:grid-cols-3 gap-4">
+              <div className="lg:col-span-2">
+                <div className="text-sm font-semibold text-slate-800 mb-2">Products</div>
+                {posProducts.filter((p) => p.active !== false).length === 0 ? (
+                  <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-sm text-slate-400">
+                    No products yet — add your first one to start selling.
+                  </div>
+                ) : (
+                  <div className="grid sm:grid-cols-2 gap-3">
+                    {posProducts.filter((p) => p.active !== false).map((p) => (
+                      <div key={p.id} className="bg-white rounded-xl border border-slate-200 p-3">
+                        <div className="flex items-start justify-between gap-2 mb-2">
+                          <div>
+                            <div className="font-semibold text-sm">{p.name}</div>
+                            <div className="text-xs text-slate-400">{p.sku && `${p.sku} · `}{p.stock} in stock</div>
+                          </div>
+                          {canEditContent && (
+                            <button onClick={() => openEditProductModal(p)} className="p-1 rounded hover:bg-slate-100">
+                              <Pencil className="w-3.5 h-3.5 text-slate-400" />
+                            </button>
+                          )}
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-blue-950">{p.price.toLocaleString()} EGP</span>
+                          <button
+                            onClick={() => addToCart(p)}
+                            disabled={p.stock <= 0}
+                            className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-semibold disabled:opacity-40"
+                          >
+                            {p.stock <= 0 ? "Out of stock" : "Add"}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {canEditContent && (
+                  <div className="mt-6">
+                    <div className="text-sm font-semibold text-slate-800 mb-2">Sales history</div>
+                    {posSales.length === 0 ? (
+                      <div className="text-xs text-slate-400">No sales recorded yet</div>
+                    ) : (
+                      <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                        {posSales.slice().reverse().map((sale) => (
+                          <div key={sale.id} className="flex items-center justify-between text-sm border-b border-slate-100 pb-1.5">
+                            <div>
+                              <div className="text-slate-700">{sale.items.map((it) => `${it.name} x${it.quantity}`).join(", ")}</div>
+                              <div className="text-xs text-slate-400">
+                                {new Date(sale.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })} · {sale.method}
+                                {sale.swimmerName ? ` · ${sale.swimmerName}` : ""}
+                              </div>
+                            </div>
+                            <span className="font-semibold">{sale.total.toLocaleString()} EGP</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-white rounded-2xl border border-slate-200 p-4 h-fit sticky top-4">
+                <div className="text-sm font-semibold text-slate-800 mb-3">Current sale</div>
+                {saleCart.length === 0 ? (
+                  <div className="text-xs text-slate-400 text-center py-6">Cart is empty — add products from the left.</div>
+                ) : (
+                  <div className="space-y-2 mb-3">
+                    {saleCart.map((it) => (
+                      <div key={it.productId} className="flex items-center justify-between gap-2 text-sm">
+                        <span className="flex-1 truncate">{it.name}</span>
+                        <input
+                          type="number"
+                          min="1"
+                          value={it.quantity}
+                          onChange={(e) => updateCartQuantity(it.productId, Number(e.target.value))}
+                          className="w-14 border border-slate-200 rounded py-1 px-1.5 text-center"
+                        />
+                        <span className="w-16 text-right font-medium">{(it.price * it.quantity).toLocaleString()}</span>
+                        <button onClick={() => removeFromCart(it.productId)} className="text-slate-300 hover:text-red-500">
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="flex items-center justify-between font-bold text-slate-900 border-t border-slate-100 pt-2 mb-3">
+                  <span>Total</span>
+                  <span>{cartTotal.toLocaleString()} EGP</span>
+                </div>
+
+                <label className="text-xs text-slate-500 mb-1 block">Link to family (optional)</label>
+                <select
+                  value={saleFamilyId}
+                  onChange={(e) => setSaleFamilyId(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none mb-2 bg-white"
+                >
+                  <option value="">— Walk-in sale —</option>
+                  {coreFamilies.map((f) => (
+                    <option key={f.id} value={f.id}>{f.name}</option>
+                  ))}
+                </select>
+                {saleFamilyId && (
+                  <input
+                    value={saleSwimmerName}
+                    onChange={(e) => setSaleSwimmerName(e.target.value)}
+                    placeholder="Swimmer's name (optional)"
+                    className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none mb-2"
+                  />
+                )}
+                <label className="text-xs text-slate-500 mb-1 block">Payment method</label>
+                <select
+                  value={saleMethod}
+                  onChange={(e) => setSaleMethod(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none mb-3 bg-white"
+                >
+                  <option value="cash">Cash</option>
+                  <option value="instapay">Instapay</option>
+                  <option value="fawry">Fawry</option>
+                  <option value="paymob">Paymob</option>
+                </select>
+
+                {saleError && <div className="text-xs text-red-600 mb-2">{saleError}</div>}
+                {saleSuccess && <div className="text-xs text-green-700 bg-green-50 rounded-lg px-2 py-1.5 mb-2">Sale completed ✓</div>}
+
+                <button
+                  onClick={completeSale}
+                  disabled={saleCart.length === 0 || saleSaving}
+                  className="w-full py-2.5 rounded-xl bg-blue-950 text-white font-semibold disabled:opacity-50"
+                >
+                  {saleSaving ? "Processing..." : "Complete sale"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {productModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setProductModal(null)}>
+          <div className="bg-white rounded-2xl p-5 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-slate-900">{productModal.mode === "new" ? "Add product" : "Edit product"}</h3>
+              <button onClick={() => setProductModal(null)}><X className="w-5 h-5 text-slate-400" /></button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">Name</label>
+                <input
+                  value={productModal.form.name}
+                  onChange={(e) => setProductModal({ ...productModal, form: { ...productModal.form, name: e.target.value } })}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  autoFocus
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Price (EGP)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={productModal.form.price}
+                    onChange={(e) => setProductModal({ ...productModal, form: { ...productModal.form, price: e.target.value } })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 mb-1 block">Stock</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={productModal.form.stock}
+                    onChange={(e) => setProductModal({ ...productModal, form: { ...productModal.form, stock: e.target.value } })}
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">SKU (optional)</label>
+                <input
+                  value={productModal.form.sku}
+                  onChange={(e) => setProductModal({ ...productModal, form: { ...productModal.form, sku: e.target.value } })}
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                />
+              </div>
+              {productError && <div className="text-xs text-red-600">{productError}</div>}
+              <div className="flex gap-2">
+                <button onClick={saveProductModal} className="flex-1 py-2.5 rounded-xl bg-blue-950 text-white font-semibold">
+                  Save
+                </button>
+                {productModal.mode === "edit" && (
+                  <button
+                    onClick={() => {
+                      toggleProductActive(posProducts.find((p) => p.id === productModal.id));
+                      setProductModal(null);
+                    }}
+                    className="px-4 py-2.5 rounded-xl border border-red-200 text-red-600 font-semibold"
+                  >
+                    Deactivate
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -15367,6 +15804,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               />
             </div>
             {cashError && <div className="text-red-500 text-sm mb-3">{cashError}</div>}
+            {cashError.includes("Reconcile") && (
+              <button
+                onClick={() => reconcilePaidStatus(cashModal)}
+                disabled={cashSaving}
+                className="w-full mb-3 py-2 rounded-lg bg-amber-50 text-amber-700 text-sm font-semibold hover:bg-amber-100 disabled:opacity-60"
+              >
+                Reconcile — mark this month Paid (no new payment)
+              </button>
+            )}
             <div className="flex gap-2">
               <button
                 onClick={recordCashPayment}
