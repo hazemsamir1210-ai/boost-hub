@@ -4431,6 +4431,35 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
    database migration. The four collections can later be promoted to
    first-class Supabase tables after production testing.
    ============================================================ */
+
+// Parent retention score — the same churn-risk signals as
+// calculateChurnRisk, but rolled up to the FAMILY level (all of a
+// family's swimmers together) and framed positively: 100 means every
+// signal looks healthy, not "0% chance of leaving" — this is a
+// loyalty/health score, not a probability. Families with more history
+// with the academy get a small credit for that track record, since a
+// family that's stuck around 2 years through normal ups and downs is a
+// different risk profile than one that joined last month.
+function calculateFamilyRetentionScore(family, allSwimmers) {
+  const mySwimmers = allSwimmers.filter((s) => (family.swimmerIds || []).includes(s.id));
+  if (mySwimmers.length === 0) return null;
+
+  const risks = mySwimmers.map((s) => calculateChurnRisk(s));
+  const avgChurnRisk = risks.reduce((sum, r) => sum + r.score, 0) / risks.length;
+
+  const earliestJoin = mySwimmers.reduce((earliest, s) => {
+    if (!s.createdAt) return earliest;
+    return !earliest || new Date(s.createdAt) < new Date(earliest) ? s.createdAt : earliest;
+  }, null);
+  const monthsWithAcademy = earliestJoin ? Math.max(0, Math.floor((new Date() - new Date(earliestJoin)) / (1000 * 60 * 60 * 24 * 30))) : 0;
+  const loyaltyBonus = Math.min(15, Math.floor(monthsWithAcademy / 2)); // up to +15 for long-tenured families
+
+  const score = Math.max(0, Math.min(100, Math.round(100 - avgChurnRisk + loyaltyBonus)));
+  const topReasons = [...new Set(risks.flatMap((r) => r.reasons))].slice(0, 3);
+
+  return { score, monthsWithAcademy, swimmerCount: mySwimmers.length, topReasons };
+}
+
 const CORE_KEYS = {
   families: "families-all",
   classes: "classes-all",
@@ -13049,6 +13078,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           forecastMonths.push(d.toLocaleDateString("en-GB", { month: "short" }));
         }
 
+        // Parent retention scores — only meaningful for families with
+        // more than one swimmer, or where the "family" concept actually
+        // matters (single-swimmer families are already fully covered by
+        // the individual churn risk list above, so showing them twice
+        // here would just be noise).
+        const familyRetentionScores = coreFamilies
+          .filter((f) => (f.swimmerIds || []).length > 1)
+          .map((f) => ({ family: f, ...calculateFamilyRetentionScore(f, swimmers) }))
+          .filter((r) => r.score !== null)
+          .sort((a, b) => a.score - b.score);
+
         // Revenue by plan — inferred from each active swimmer's own plan
         // (sessionType + level combination maps to a PLANS entry the same
         // way subscribing does), counting only those paid for the month
@@ -13307,6 +13347,31 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 </div>
               )}
             </div>
+
+            {familyRetentionScores.length > 0 && (
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 mt-4">
+                <div className="text-sm font-semibold text-slate-800 mb-1">Parent retention scores</div>
+                <p className="text-xs text-slate-400 mb-3">
+                  For families with more than one swimmer — a loyalty/health score from attendance, payment, and tenure, not a "chance of leaving" number.
+                </p>
+                <div className="space-y-2 max-h-80 overflow-y-auto">
+                  {familyRetentionScores.map(({ family, score, monthsWithAcademy, swimmerCount, topReasons }) => (
+                    <div key={family.id} className="flex items-center justify-between gap-3 border-b border-slate-50 pb-2">
+                      <div>
+                        <div className="text-sm font-medium text-slate-700">{family.name}</div>
+                        <div className="text-xs text-slate-400">
+                          {swimmerCount} swimmers · {monthsWithAcademy} month{monthsWithAcademy === 1 ? "" : "s"} with you
+                          {topReasons.length > 0 ? ` · ${topReasons[0]}` : ""}
+                        </div>
+                      </div>
+                      <span className={`text-sm font-bold shrink-0 ${score >= 80 ? "text-green-600" : score >= 60 ? "text-amber-600" : "text-red-500"}`}>
+                        {score}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         );
       })()}
