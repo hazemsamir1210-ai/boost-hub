@@ -11518,12 +11518,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         <div>
           <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
             <div>
-              <h2 className="text-xl font-bold text-slate-900">POS · Merchandise</h2>
-              <p className="text-sm text-slate-400">Sell goggles, caps, swimsuits and other items — tracked stock, optional link to a family's ledger.</p>
+              <h2 className="text-xl font-bold text-slate-900">{t("posTitle")}</h2>
+              <p className="text-sm text-slate-400">{t("posSub")}</p>
             </div>
             {canEditContent && (
               <button onClick={openNewProductModal} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold">
-                <Plus className="w-4 h-4" /> Add product
+                <Plus className="w-4 h-4" /> {t("posAddProduct")}
               </button>
             )}
           </div>
@@ -11535,10 +11535,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           ) : (
             <div className="grid lg:grid-cols-3 gap-4">
               <div className="lg:col-span-2">
-                <div className="text-sm font-semibold text-slate-800 mb-2">Products</div>
+                <div className="text-sm font-semibold text-slate-800 mb-2">{t("posProducts")}</div>
                 {posProducts.filter((p) => p.active !== false).length === 0 ? (
                   <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-sm text-slate-400">
-                    No products yet — add your first one to start selling.
+                    {t("posNoProducts")}
                   </div>
                 ) : (
                   <div className="grid sm:grid-cols-2 gap-3">
@@ -11547,7 +11547,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         <div className="flex items-start justify-between gap-2 mb-2">
                           <div>
                             <div className="font-semibold text-sm">{p.name}</div>
-                            <div className="text-xs text-slate-400">{p.sku && `${p.sku} · `}{p.stock} in stock</div>
+                            <div className="text-xs text-slate-400">{p.sku && `${p.sku} · `}{p.stock} {t("posInStock")}</div>
                           </div>
                           {canEditContent && (
                             <button onClick={() => openEditProductModal(p)} className="p-1 rounded hover:bg-slate-100">
@@ -11562,7 +11562,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                             disabled={p.stock <= 0}
                             className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-semibold disabled:opacity-40"
                           >
-                            {p.stock <= 0 ? "Out of stock" : "Add"}
+                            {p.stock <= 0 ? t("posOutOfStock") : t("posAdd")}
                           </button>
                         </div>
                       </div>
@@ -11572,9 +11572,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
                 {canEditContent && (
                   <div className="mt-6">
-                    <div className="text-sm font-semibold text-slate-800 mb-2">Sales history</div>
+                    <div className="text-sm font-semibold text-slate-800 mb-2">{t("posSalesHistory")}</div>
                     {posSales.length === 0 ? (
-                      <div className="text-xs text-slate-400">No sales recorded yet</div>
+                      <div className="text-xs text-slate-400">{t("posNoSales")}</div>
                     ) : (
                       <div className="space-y-1.5 max-h-72 overflow-y-auto">
                         {posSales.slice().reverse().map((sale) => (
@@ -11596,9 +11596,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </div>
 
               <div className="bg-white rounded-2xl border border-slate-200 p-4 h-fit sticky top-4">
-                <div className="text-sm font-semibold text-slate-800 mb-3">Current sale</div>
+                <div className="text-sm font-semibold text-slate-800 mb-3">{t("posCurrentSale")}</div>
                 {saleCart.length === 0 ? (
-                  <div className="text-xs text-slate-400 text-center py-6">Cart is empty — add products from the left.</div>
+                  <div className="text-xs text-slate-400 text-center py-6">{t("posCartEmpty")}</div>
                 ) : (
                   <div className="space-y-2 mb-3">
                     {saleCart.map((it) => (
@@ -11620,17 +11620,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   </div>
                 )}
                 <div className="flex items-center justify-between font-bold text-slate-900 border-t border-slate-100 pt-2 mb-3">
-                  <span>Total</span>
+                  <span>{t("posTotal")}</span>
                   <span>{cartTotal.toLocaleString()} EGP</span>
                 </div>
 
-                <label className="text-xs text-slate-500 mb-1 block">Link to family (optional)</label>
+                <label className="text-xs text-slate-500 mb-1 block">{t("posLinkFamily")}</label>
                 <select
                   value={saleFamilyId}
                   onChange={(e) => setSaleFamilyId(e.target.value)}
                   className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none mb-2 bg-white"
                 >
-                  <option value="">— Walk-in sale —</option>
+                  <option value="">{t("posWalkIn")}</option>
                   {coreFamilies.map((f) => (
                     <option key={f.id} value={f.id}>{f.name}</option>
                   ))}
@@ -11639,11 +11639,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <input
                     value={saleSwimmerName}
                     onChange={(e) => setSaleSwimmerName(e.target.value)}
-                    placeholder="Swimmer's name (optional)"
+                    placeholder={t("posSwimmerName")}
                     className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none mb-2"
                   />
                 )}
-                <label className="text-xs text-slate-500 mb-1 block">Payment method</label>
+                <label className="text-xs text-slate-500 mb-1 block">{t("posPaymentMethod")}</label>
                 <select
                   value={saleMethod}
                   onChange={(e) => setSaleMethod(e.target.value)}
@@ -11656,7 +11656,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 </select>
 
                 {saleError && <div className="text-xs text-red-600 mb-2">{saleError}</div>}
-                {saleSuccess && <div className="text-xs text-green-700 bg-green-50 rounded-lg px-2 py-1.5 mb-2">Sale completed ✓</div>}
+                {saleSuccess && <div className="text-xs text-green-700 bg-green-50 rounded-lg px-2 py-1.5 mb-2">{t("posSaleCompleted")}</div>}
 
                 <button
                   onClick={completeSale}
@@ -11675,12 +11675,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setProductModal(null)}>
           <div className="bg-white rounded-2xl p-5 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-slate-900">{productModal.mode === "new" ? "Add product" : "Edit product"}</h3>
+              <h3 className="text-lg font-bold text-slate-900">{productModal.mode === "new" ? t("posAddProductTitle") : t("posEditProductTitle")}</h3>
               <button onClick={() => setProductModal(null)}><X className="w-5 h-5 text-slate-400" /></button>
             </div>
             <div className="space-y-3">
               <div>
-                <label className="text-xs text-slate-500 mb-1 block">Name</label>
+                <label className="text-xs text-slate-500 mb-1 block">{t("posProductName")}</label>
                 <input
                   value={productModal.form.name}
                   onChange={(e) => setProductModal({ ...productModal, form: { ...productModal.form, name: e.target.value } })}
@@ -11690,7 +11690,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-slate-500 mb-1 block">Price (EGP)</label>
+                  <label className="text-xs text-slate-500 mb-1 block">{t("posPrice")}</label>
                   <input
                     type="number"
                     min="0"
@@ -11700,7 +11700,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   />
                 </div>
                 <div>
-                  <label className="text-xs text-slate-500 mb-1 block">Stock</label>
+                  <label className="text-xs text-slate-500 mb-1 block">{t("posStock")}</label>
                   <input
                     type="number"
                     min="0"
@@ -11711,7 +11711,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 </div>
               </div>
               <div>
-                <label className="text-xs text-slate-500 mb-1 block">SKU (optional)</label>
+                <label className="text-xs text-slate-500 mb-1 block">{t("posSku")}</label>
                 <input
                   value={productModal.form.sku}
                   onChange={(e) => setProductModal({ ...productModal, form: { ...productModal.form, sku: e.target.value } })}
@@ -11721,7 +11721,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               {productError && <div className="text-xs text-red-600">{productError}</div>}
               <div className="flex gap-2">
                 <button onClick={saveProductModal} className="flex-1 py-2.5 rounded-xl bg-blue-950 text-white font-semibold">
-                  Save
+                  {t("posSave")}
                 </button>
                 {productModal.mode === "edit" && (
                   <button
@@ -11731,7 +11731,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     }}
                     className="px-4 py-2.5 rounded-xl border border-red-200 text-red-600 font-semibold"
                   >
-                    Deactivate
+                    {t("posDeactivate")}
                   </button>
                 )}
               </div>
@@ -20411,6 +20411,34 @@ const TRANSLATIONS = {
     planLabel: "Plan",
     trialLabel: "Trial",
     dropinLabel: "Drop-in",
+    posTitle: "POS · Merchandise",
+    posSub: "Sell goggles, caps, swimsuits and other items — tracked stock, optional link to a family's ledger.",
+    posAddProduct: "Add product",
+    posProducts: "Products",
+    posNoProducts: "No products yet — add your first one to start selling.",
+    posInStock: "in stock",
+    posOutOfStock: "Out of stock",
+    posAdd: "Add",
+    posSalesHistory: "Sales history",
+    posNoSales: "No sales recorded yet",
+    posCurrentSale: "Current sale",
+    posCartEmpty: "Cart is empty — add products from the left.",
+    posTotal: "Total",
+    posLinkFamily: "Link to family (optional)",
+    posWalkIn: "— Walk-in sale —",
+    posSwimmerName: "Swimmer's name (optional)",
+    posPaymentMethod: "Payment method",
+    posSaleCompleted: "Sale completed ✓",
+    posProcessing: "Processing...",
+    posCompleteSale: "Complete sale",
+    posAddProductTitle: "Add product",
+    posEditProductTitle: "Edit product",
+    posProductName: "Name",
+    posPrice: "Price (EGP)",
+    posStock: "Stock",
+    posSku: "SKU (optional)",
+    posSave: "Save",
+    posDeactivate: "Deactivate",
     daily: "Daily",
     weekly: "Weekly",
     monthly: "Monthly",
@@ -20586,6 +20614,34 @@ const TRANSLATIONS = {
     planLabel: "الخطة",
     trialLabel: "تجريبي",
     dropinLabel: "حصة واحدة",
+    posTitle: "نقطة البيع · المنتجات",
+    posSub: "بيع نضارات، كاب، مايوهات، وحاجات تانية — بمخزون متابَع، وربط اختياري بكشف حساب أسرة.",
+    posAddProduct: "إضافة منتج",
+    posProducts: "المنتجات",
+    posNoProducts: "لسه مفيش منتجات — ضيفي أول واحد عشان تبدأي البيع.",
+    posInStock: "متاح",
+    posOutOfStock: "خلص من المخزون",
+    posAdd: "إضافة",
+    posSalesHistory: "سجل المبيعات",
+    posNoSales: "لسه مفيش مبيعات مسجّلة",
+    posCurrentSale: "عملية البيع الحالية",
+    posCartEmpty: "السلة فاضية — ضيفي منتجات من الشمال.",
+    posTotal: "الإجمالي",
+    posLinkFamily: "ربط بأسرة (اختياري)",
+    posWalkIn: "— بيع عادي (من غير ربط) —",
+    posSwimmerName: "اسم السباح (اختياري)",
+    posPaymentMethod: "طريقة الدفع",
+    posSaleCompleted: "تمت عملية البيع ✓",
+    posProcessing: "جاري التنفيذ...",
+    posCompleteSale: "إتمام البيع",
+    posAddProductTitle: "إضافة منتج",
+    posEditProductTitle: "تعديل منتج",
+    posProductName: "الاسم",
+    posPrice: "السعر (جنيه)",
+    posStock: "الكمية",
+    posSku: "رقم المنتج SKU (اختياري)",
+    posSave: "حفظ",
+    posDeactivate: "إلغاء التفعيل",
     daily: "يومي",
     weekly: "أسبوعي",
     monthly: "شهري",
