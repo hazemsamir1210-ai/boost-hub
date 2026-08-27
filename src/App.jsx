@@ -3099,6 +3099,33 @@ function calculateChurnRisk(swimmer) {
   return { score: Math.min(100, score), reasons };
 }
 
+// Revenue forecasting — ordinary least-squares linear regression over the
+// last several months of actual revenue, projected forward. Simple and
+// transparent on purpose: a straight-line trend through recent months,
+// not a black-box prediction — good enough to spot "we're growing" or
+// "we're shrinking" and roughly by how much, without pretending to know
+// more than the data supports.
+function forecastRevenue(monthlyTotals, monthsAhead = 3) {
+  const n = monthlyTotals.length;
+  if (n < 2) return { forecasts: [], slope: 0, trending: "flat" };
+  const xs = monthlyTotals.map((_, i) => i);
+  const ys = monthlyTotals;
+  const meanX = xs.reduce((a, b) => a + b, 0) / n;
+  const meanY = ys.reduce((a, b) => a + b, 0) / n;
+  const num = xs.reduce((sum, x, i) => sum + (x - meanX) * (ys[i] - meanY), 0);
+  const den = xs.reduce((sum, x) => sum + (x - meanX) ** 2, 0);
+  const slope = den === 0 ? 0 : num / den;
+  const intercept = meanY - slope * meanX;
+
+  const forecasts = [];
+  for (let i = 0; i < monthsAhead; i++) {
+    const x = n + i;
+    const predicted = Math.max(0, Math.round(intercept + slope * x));
+    forecasts.push(predicted);
+  }
+  return { forecasts, slope, trending: slope > meanY * 0.02 ? "up" : slope < -meanY * 0.02 ? "down" : "flat" };
+}
+
 /* Sunday/Tuesday, Monday/Wednesday, Friday/Saturday — Thursday has no group */
 function dayGroupForToday() {
   const dow = new Date().getDay(); // 0=Sun..6=Sat
@@ -12999,6 +13026,29 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           .sort((a, b) => b.score - a.score);
         const monthKeyNow = monthKey();
 
+        // Last 6 months of actual confirmed revenue, feeding the forecast
+        // below — same "confirmed request" data source the rest of this
+        // app already trusts for revenue, just summed per month.
+        const revenueHistory6mo = [];
+        for (let i = 5; i >= 0; i--) {
+          const d = new Date();
+          d.setDate(1);
+          d.setMonth(d.getMonth() - i);
+          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+          const total = requests
+            .filter((r) => r.status === "confirmed" && (r.confirmedAt || r.createdAt || "").slice(0, 7) === key)
+            .reduce((sum, r) => sum + Math.max(0, (Number(r.price) || 0) - (Number(r.refundedAmount) || 0)), 0);
+          revenueHistory6mo.push({ key, label: d.toLocaleDateString("en-GB", { month: "short" }), total });
+        }
+        const revenueForecast = forecastRevenue(revenueHistory6mo.map((m) => m.total), 3);
+        const forecastMonths = [];
+        for (let i = 1; i <= 3; i++) {
+          const d = new Date();
+          d.setDate(1);
+          d.setMonth(d.getMonth() + i);
+          forecastMonths.push(d.toLocaleDateString("en-GB", { month: "short" }));
+        }
+
         // Revenue by plan — inferred from each active swimmer's own plan
         // (sessionType + level combination maps to a PLANS entry the same
         // way subscribing does), counting only those paid for the month
@@ -13208,6 +13258,50 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                           <Send className="w-3 h-3" /> Check in
                         </a>
                       )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white rounded-2xl border border-slate-200 p-5 mt-4">
+              <div className="flex items-center justify-between mb-1">
+                <div className="text-sm font-semibold text-slate-800">Revenue forecast — next 3 months</div>
+                {revenueForecast.forecasts.length > 0 && (
+                  <span
+                    className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                      revenueForecast.trending === "up" ? "bg-green-50 text-green-700" : revenueForecast.trending === "down" ? "bg-red-50 text-red-600" : "bg-slate-100 text-slate-500"
+                    }`}
+                  >
+                    {revenueForecast.trending === "up" ? "↑ Trending up" : revenueForecast.trending === "down" ? "↓ Trending down" : "→ Flat"}
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-400 mb-3">
+                A straight-line projection from the last 6 months of actual revenue — a rough trend to plan around, not a guarantee.
+              </p>
+              {revenueForecast.forecasts.length === 0 ? (
+                <div className="text-sm text-slate-400 text-center py-6">Not enough revenue history yet to forecast — check back after a couple more months.</div>
+              ) : (
+                <div className="flex items-end gap-3 h-28">
+                  {revenueHistory6mo.map((m) => (
+                    <div key={m.key} className="flex-1 flex flex-col items-center gap-1">
+                      <div className="text-[10px] text-slate-400 font-medium">{m.total > 0 ? m.total.toLocaleString() : ""}</div>
+                      <div
+                        className="w-full rounded-t-md bg-blue-900"
+                        style={{ height: `${Math.max((m.total / Math.max(...revenueHistory6mo.map((x) => x.total), ...revenueForecast.forecasts, 1)) * 80, m.total > 0 ? 4 : 0)}px` }}
+                      />
+                      <div className="text-[10px] text-slate-400">{m.label}</div>
+                    </div>
+                  ))}
+                  {revenueForecast.forecasts.map((val, i) => (
+                    <div key={`f-${i}`} className="flex-1 flex flex-col items-center gap-1">
+                      <div className="text-[10px] text-amber-600 font-medium">{val.toLocaleString()}</div>
+                      <div
+                        className="w-full rounded-t-md bg-amber-300 border-2 border-dashed border-amber-500"
+                        style={{ height: `${Math.max((val / Math.max(...revenueHistory6mo.map((x) => x.total), ...revenueForecast.forecasts, 1)) * 80, 4)}px` }}
+                      />
+                      <div className="text-[10px] text-amber-600 font-medium">{forecastMonths[i]}</div>
                     </div>
                   ))}
                 </div>
