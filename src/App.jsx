@@ -1047,6 +1047,7 @@ function downloadReportHTML(filename, bodyHtml) {
   .roster-grid th { background: #f1f5f9; }
   .roster-grid tr:nth-child(even) td { background: #fafbfc; }
   .roster-grid .blank-row td { background: #ffffff; height: 22px; }
+  .coach-block { page-break-inside: avoid; break-inside: avoid; }
   @media print { body { padding: 0; } }
 </style></head><body>${bodyHtml}
 <script>window.onload = () => setTimeout(() => window.print(), 300);</script>
@@ -8397,8 +8398,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             .join("");
 
           return `
-            <h3>${escapeHtml(coachName)} (${entries.length})</h3>
-            ${slotSections}`;
+            <div class="coach-block">
+              <h3>${escapeHtml(coachName)} (${entries.length})</h3>
+              ${slotSections}
+            </div>`;
         })
         .join("");
 
