@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
-import jsQR from "jsqr";
-import QRCode from "qrcode";
 import {
   Waves, Upload, CheckCircle2, Lock, RefreshCw, Phone, User,
   Facebook, Instagram, MessageCircle,
@@ -21,6 +19,24 @@ let _xlsxModule = null;
 async function loadXLSX() {
   if (!_xlsxModule) _xlsxModule = await import("xlsx");
   return _xlsxModule;
+}
+
+// jsQR and QRCode power the staff QR check-in/check-out flow — the code
+// generation (an admin-only screen) and the scanner (only opened when
+// someone taps "Scan to check in"), neither of which happens on a
+// typical login. Bundling them in eagerly meant every parent and coach
+// downloaded both libraries just to log in and never use them; loading
+// them only when the check-in screen actually opens keeps that weight
+// out of everyone else's way, the same reasoning as xlsx above.
+let _jsQRModule = null;
+async function loadJsQR() {
+  if (!_jsQRModule) _jsQRModule = (await import("jsqr")).default;
+  return _jsQRModule;
+}
+let _qrcodeModule = null;
+async function loadQRCode() {
+  if (!_qrcodeModule) _qrcodeModule = (await import("qrcode")).default;
+  return _qrcodeModule;
 }
 
 // The single fixed code printed and hung at the pool entrance — every
@@ -4397,6 +4413,15 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           attendance: initial?.attendance || {},
           parentPin: parentPin,
           createdAt: initial?.createdAt || new Date().toISOString(),
+          // A leftover nextSchedule from an earlier "book ahead" edit
+          // needs clearing once it's no longer actually ahead of what's
+          // being saved here — otherwise it keeps getting counted by the
+          // coach/schedule grid (which checks nextSchedule.scheduleMonth
+          // against whatever month is being viewed) on top of the live
+          // fields above, double-booking the same swimmer under whichever
+          // coach that stale entry still names.
+          nextSchedule:
+            initial?.nextSchedule && initial.nextSchedule.scheduleMonth > scheduleMonth ? initial.nextSchedule : null,
         }
       : {
           ...(initial || {}),
@@ -8721,13 +8746,20 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     // the full roster fresh each time via fetchAllSwimmers/updateSwimmerById
     // instead of keeping it sitting in state.
     if (tab === "reports" || tab === "coaches" || tab === "schedule" || tab === "dashboard" || tab === "coachassign") loadSwimmers();
+    // Every save the admin makes themselves already triggers an immediate
+    // refresh right where it happens (see saveSwimmer/assignCoach) — this
+    // interval exists only to catch changes made by OTHER logged-in staff
+    // at the same time, which is a much rarer case, so it can run far
+    // less often than every 15 seconds without anyone noticing staleness
+    // in practice. Cutting it to a minute meaningfully reduces the
+    // constant background data/battery use on mobile.
     const t = setInterval(() => {
       loadRequests();
       loadCoaches();
       if (tab === "reports") loadExpenses();
       if (tab === "accounts") loadAccounts();
       if (tab === "reports" || tab === "coaches" || tab === "schedule" || tab === "dashboard" || tab === "coachassign") loadSwimmers();
-    }, 15000);
+    }, 60000);
     return () => clearInterval(t);
   }, [authed, tab, loadRequests, loadSwimmers, loadCoaches, loadExpenses, loadAccounts, loadAchievements, loadMyAccessLevel, loadMyPayrollAccess]);
 
@@ -9658,11 +9690,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const addTrainingDate = async (swimmer, date) => {
     if (!date) return;
     try {
-      await updateSwimmerById(swimmer.id, (s) => ({
+      const updated = await updateSwimmerById(swimmer.id, (s) => ({
         ...s,
         trainingDates: Array.from(new Set([...(s.trainingDates || []), date])).sort(),
       }));
-      loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
+      setSwimmersPage((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
     } catch (e) {
       loadSwimmersPage({ offset: 0 });
     }
@@ -9670,12 +9702,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   const removeTrainingDate = async (swimmer, date) => {
     try {
-      await updateSwimmerById(swimmer.id, (s) => {
+      const updated = await updateSwimmerById(swimmer.id, (s) => {
         const attendance = { ...(s.attendance || {}) };
         delete attendance[date];
         return { ...s, trainingDates: (s.trainingDates || []).filter((d) => d !== date), attendance };
       });
-      loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
+      setSwimmersPage((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
     } catch (e) {
       loadSwimmersPage({ offset: 0 });
     }
@@ -9683,8 +9715,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   const markAttendance = async (swimmer, date, status) => {
     try {
-      await updateSwimmerById(swimmer.id, (s) => applyAttendanceStatus(s, date, status));
-      loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
+      // Attendance gets marked one swimmer at a time down a whole class
+      // roster in quick succession — refetching everyone from Supabase
+      // after each tap made that feel sluggish. Patching just this one
+      // swimmer in local state keeps it instant.
+      const updated = await updateSwimmerById(swimmer.id, (s) => applyAttendanceStatus(s, date, status));
+      setSwimmersPage((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
     } catch (e) {
       loadSwimmersPage({ offset: 0 });
     }
@@ -9694,13 +9730,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   // even after moving up to Level 4 with a fresh checklist of its own.
   const setSkillRating = async (swimmer, skill, rating) => {
     try {
-      await updateSwimmerById(swimmer.id, (s) => {
+      const updated = await updateSwimmerById(swimmer.id, (s) => {
         const level = s.level;
         const levelSkills = { ...(s.skills?.[level] || {}) };
         levelSkills[skill] = rating;
         return { ...s, skills: { ...(s.skills || {}), [level]: levelSkills } };
       });
-      loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
+      // Star ratings get clicked rapidly in succession (5 stars × several
+      // skills) — refetching the whole visible page from Supabase after
+      // every single click made that feel noticeably laggy. Patching the
+      // one swimmer already in local state is instant and exactly as
+      // correct, since updateSwimmerById already tells us precisely what
+      // the saved record now looks like.
+      setSwimmersPage((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
     } catch (e) {
       loadSwimmersPage({ offset: 0 });
     }
@@ -18429,7 +18471,7 @@ function QRPosterModal({ onClose }) {
 
   useEffect(() => {
     if (canvasRef.current) {
-      QRCode.toCanvas(canvasRef.current, STAFF_CHECKIN_CODE, { width: 280, margin: 2 });
+      loadQRCode().then((QRCode) => QRCode.toCanvas(canvasRef.current, STAFF_CHECKIN_CODE, { width: 280, margin: 2 }));
     }
   }, []);
 
@@ -18466,9 +18508,11 @@ function QRScanner({ onScan, onClose }) {
 
   useEffect(() => {
     let cancelled = false;
-    navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: "environment" } })
-      .then((stream) => {
+    Promise.all([
+      loadJsQR(),
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }),
+    ])
+      .then(([jsQR, stream]) => {
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
           return;
