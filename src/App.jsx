@@ -2908,6 +2908,32 @@ function parseImportedSwimmerRow(row, coaches) {
   };
 }
 
+// Compares an existing swimmer against a freshly-imported record and
+// works out exactly what re-importing this row would change — schedule
+// fields are replaced outright (that's the whole point: pick up a new
+// booking), while paidMonths is merged (union) rather than replaced, so
+// re-importing a file that only reflects this month's payment status can
+// never accidentally erase a swimmer's payment history from an earlier
+// month that just isn't in this particular sheet.
+function diffSwimmerUpdate(existing, imported) {
+  const changes = [];
+  const fieldsToSync = ["day", "time", "level", "coachId", "sessionType", "branch", "age"];
+  const patch = {};
+  fieldsToSync.forEach((f) => {
+    const newVal = imported[f];
+    if (newVal !== undefined && newVal !== "" && newVal !== null && newVal !== existing[f]) {
+      changes.push({ field: f, from: existing[f] ?? "—", to: newVal });
+      patch[f] = newVal;
+    }
+  });
+  const newlyPaid = (imported.paidMonths || []).filter((m) => !(existing.paidMonths || []).includes(m));
+  if (newlyPaid.length > 0) {
+    changes.push({ field: "paidMonths", from: null, to: newlyPaid.map(monthLabel).join(", ") });
+    patch.paidMonths = [...(existing.paidMonths || []), ...newlyPaid];
+  }
+  return { changes, patch };
+}
+
 function dateLabel(iso) {
   return new Date(iso + "T00:00:00").toLocaleDateString("en-GB", {
     weekday: "short",
@@ -9070,11 +9096,21 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         const existingAll = await fetchAllSwimmers();
         const valid = [];
         const duplicates = [];
+        const updates = [];
         const seenPhones = new Set();
         fullHistory.swimmers.forEach((record, i) => {
           const existing = existingAll.find((s) => s.phone === record.phone && s.name.trim().toLowerCase() === record.name.trim().toLowerCase());
-          if (existing || seenPhones.has(record.phone)) {
-            duplicates.push({ row: i + 3, record, reason: existing ? "already registered" : "duplicate row in this file" });
+          if (existing) {
+            const { changes, patch } = diffSwimmerUpdate(existing, record);
+            if (changes.length > 0) {
+              updates.push({ row: i + 3, existing, changes, patch });
+            } else {
+              duplicates.push({ row: i + 3, record, reason: "already registered, no changes found" });
+            }
+            return;
+          }
+          if (seenPhones.has(record.phone)) {
+            duplicates.push({ row: i + 3, record, reason: "duplicate row in this file" });
             return;
           }
           seenPhones.add(record.phone);
@@ -9085,6 +9121,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         });
         setImportPreview({
           valid,
+          updates,
           duplicates,
           errors: [],
           fullHistoryNote: `Full history sheet detected — ${fullHistory.monthsFound} months read, current schedule taken from ${fullHistory.latestMonthLabel}.`,
@@ -9101,6 +9138,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       const valid = [];
       const duplicates = [];
       const errors = [];
+      const updates = [];
       const seenPhones = new Set(); // catches duplicates within the file itself, not just against existing swimmers
       rows.forEach((row, i) => {
         const result = parseImportedSwimmerRow(row, coaches);
@@ -9110,8 +9148,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         }
         const { record, warnings } = result;
         const existing = existingAll.find((s) => s.phone === record.phone && s.name.trim().toLowerCase() === record.name.trim().toLowerCase());
-        if (existing || seenPhones.has(record.phone)) {
-          duplicates.push({ row: i + 2, record, reason: existing ? "already registered" : "duplicate row in this file" });
+        if (existing) {
+          const { changes, patch } = diffSwimmerUpdate(existing, record);
+          if (changes.length > 0) {
+            updates.push({ row: i + 2, existing, changes, patch });
+          } else {
+            duplicates.push({ row: i + 2, record, reason: "already registered, no changes found" });
+          }
+          return;
+        }
+        if (seenPhones.has(record.phone)) {
+          duplicates.push({ row: i + 2, record, reason: "duplicate row in this file" });
           return;
         }
         seenPhones.add(record.phone);
@@ -9119,6 +9166,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       });
       setImportPreview({
         valid,
+        updates,
         duplicates,
         errors,
         fullHistoryNote: wb.SheetNames.length > 1
@@ -9133,14 +9181,22 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   };
 
   const confirmImport = async () => {
-    if (!importPreview || importPreview.valid.length === 0) return;
+    if (!importPreview || (importPreview.valid.length === 0 && (importPreview.updates || []).length === 0)) return;
     setImporting(true);
     try {
       const all = await fetchAllSwimmers();
+      const updatesById = new Map((importPreview.updates || []).map((u) => [u.existing.id, u.patch]));
+      const merged = all.map((s) => (updatesById.has(s.id) ? { ...s, ...updatesById.get(s.id) } : s));
       const newRecords = importPreview.valid.map((v) => v.record);
-      const next = [...all, ...newRecords];
+      const next = [...merged, ...newRecords];
       const res = await saveCollection(STORE_KEYS.swimmers, next);
       if (!res) throw new Error("Could not save the imported swimmers, please try again");
+      logActivity(
+        accountName,
+        role,
+        "Imported swimmers",
+        `${newRecords.length} new, ${updatesById.size} updated`
+      );
       loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
       setImportPreview(null);
     } catch (e) {
@@ -9658,16 +9714,6 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         if (dayFilter !== "all") query = query.filter("data->>day", "eq", dayFilter);
         if (timeFilter !== "all") query = query.filter("data->>time", "eq", timeFilter);
         if (sessionTypeFilter !== "all") query = query.filter("data->>sessionType", "eq", sessionTypeFilter);
-        if (noCoachOnly) {
-          // Every place that sets a swimmer's coachId normalizes it to
-          // null when there's no coach (coachId || null) — never an
-          // empty string — so a plain null check is all this needs.
-          // Using .filter() here (not .is()) since that's the JSON-path
-          // filter method already proven to work for day/time/sessionType
-          // above — .is() doesn't reliably accept a "data->>x" expression
-          // as its column argument the way a plain column name would.
-          query = query.filter("data->>coachId", "is", null);
-        }
         if (paymentStatusFilter === "paid") {
           query = query.filter("data->paidMonths", "cs", JSON.stringify([paymentMonthFilter]));
         } else if (paymentStatusFilter === "unpaid") {
@@ -9675,6 +9721,21 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         }
         const q = search.trim();
         if (q) query = query.or(`name.ilike.%${q}%,phone.ilike.%${q}%`);
+        // "No coach assigned" is filtered client-side instead of at the
+        // database level — the equivalent JSON-path server filter proved
+        // unreliable in practice, so this fetches every swimmer matching
+        // every OTHER filter (uncapped, not paginated) and filters this
+        // one condition in JS, which is guaranteed correct regardless of
+        // how coachId happens to be represented in older records.
+        if (noCoachOnly) {
+          query = query.order("name", { ascending: true });
+          const { data, error } = await query;
+          if (error) throw error;
+          const items = (data || []).map((r) => r.data).filter((s) => !s.coachId);
+          setSwimmersPage(items);
+          setSwimmersPageTotal(items.length);
+          return;
+        }
         query = query.order("name", { ascending: true }).range(offset, offset + SWIMMERS_PAGE_SIZE - 1);
         const { data, error, count } = await query;
         if (error) throw error;
@@ -17473,11 +17534,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <div className={`text-xs rounded-lg px-3 py-2 mb-3 ${importPreview.fullHistoryNote.startsWith("No month") ? "bg-amber-50 text-amber-800" : "bg-sky-50 text-sky-800"}`}>{importPreview.fullHistoryNote}</div>
             )}
             <p className="text-sm text-slate-500 mb-4">
-              Found {importPreview.valid.length + importPreview.duplicates.length + importPreview.errors.length} row
-              {importPreview.valid.length + importPreview.duplicates.length + importPreview.errors.length === 1 ? "" : "s"} —{" "}
-              <span className="text-green-700 font-medium">{importPreview.valid.length} ready to import</span>
+              Found {importPreview.valid.length + (importPreview.updates || []).length + importPreview.duplicates.length + importPreview.errors.length} row
+              {importPreview.valid.length + (importPreview.updates || []).length + importPreview.duplicates.length + importPreview.errors.length === 1 ? "" : "s"} —{" "}
+              <span className="text-green-700 font-medium">{importPreview.valid.length} new</span>
+              {(importPreview.updates || []).length > 0 && (
+                <>, <span className="text-sky-700 font-medium">{importPreview.updates.length} to update</span></>
+              )}
               {importPreview.duplicates.length > 0 && (
-                <>, <span className="text-amber-600 font-medium">{importPreview.duplicates.length} already registered</span></>
+                <>, <span className="text-amber-600 font-medium">{importPreview.duplicates.length} unchanged</span></>
               )}
               {importPreview.errors.length > 0 && (
                 <>, <span className="text-red-500 font-medium">{importPreview.errors.length} skipped</span></>
@@ -17498,9 +17562,27 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </div>
             )}
 
+            {(importPreview.updates || []).length > 0 && (
+              <div className="mb-4">
+                <div className="text-xs font-semibold text-slate-500 mb-1.5">Already registered — will update with the new info below</div>
+                <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                  {importPreview.updates.map((u, i) => (
+                    <div key={i} className="text-xs bg-sky-50 rounded-lg px-3 py-2">
+                      <div className="font-medium text-slate-800 mb-1">{u.existing.name}</div>
+                      {u.changes.map((c, j) => (
+                        <div key={j} className="text-sky-800">
+                          {c.field}: <span className="text-slate-500">{String(c.from)}</span> → <span className="font-medium">{String(c.to)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {importPreview.duplicates.length > 0 && (
               <div className="mb-4">
-                <div className="text-xs font-semibold text-slate-500 mb-1.5">Already registered — not imported again</div>
+                <div className="text-xs font-semibold text-slate-500 mb-1.5">Already registered — no changes found</div>
                 <div className="space-y-1 max-h-28 overflow-y-auto">
                   {importPreview.duplicates.map((d, i) => (
                     <div key={i} className="text-xs bg-amber-50 text-amber-700 rounded-lg px-3 py-1.5">
@@ -17513,7 +17595,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
             {importPreview.valid.length > 0 && (
               <div className="mb-4">
-                <div className="text-xs font-semibold text-slate-500 mb-1.5">Will be imported</div>
+                <div className="text-xs font-semibold text-slate-500 mb-1.5">New swimmers — will be added</div>
                 <div className="space-y-1.5 max-h-56 overflow-y-auto">
                   {importPreview.valid.map((v, i) => (
                     <div key={i} className="text-xs bg-slate-50 rounded-lg px-3 py-2">
@@ -17532,11 +17614,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <div className="flex gap-2">
               <button
                 onClick={confirmImport}
-                disabled={importing || importPreview.valid.length === 0}
+                disabled={importing || (importPreview.valid.length === 0 && (importPreview.updates || []).length === 0)}
                 className="flex-1 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60 flex items-center justify-center gap-2"
               >
                 {importing && <RefreshCw className="w-4 h-4 animate-spin" />}
-                {importing ? "Importing..." : `Import ${importPreview.valid.length} swimmer${importPreview.valid.length === 1 ? "" : "s"}`}
+                {importing
+                  ? "Importing..."
+                  : `Import ${importPreview.valid.length} new, update ${(importPreview.updates || []).length}`}
               </button>
               <button
                 onClick={() => setImportPreview(null)}
