@@ -122,7 +122,7 @@ async function resolveAcademy() {
     // database-side RLS check that actually enforces this on writes.
     subscriptionExpired: !!(data.subscription_paid_until && data.subscription_paid_until < todayISO()),
     subscriptionPaidUntil: data.subscription_paid_until || null,
-    primaryColor: data.primary_color || "#0c1e3e",
+    primaryColor: data.primary_color || "#0369a1",
     contactPhone: data.contact_phone || "",
     whatsapp: data.whatsapp || "",
     facebookUrl: data.facebook_url || "",
@@ -408,7 +408,7 @@ const PLATFORM_BRAND = {
    ============================================================ */
 const CONFIG = {
   academyName: "Swim Junior",
-  primaryColor: "#0c1e3e", // this academy's brand color for the public homepage — overridden per-academy by resolveAcademy()
+  primaryColor: "#0369a1", // this academy's brand color for the public homepage — overridden per-academy by resolveAcademy()
   logoDataUri: "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%22200%22%20height%3D%22200%22%3E%3Crect%20width%3D%22200%22%20height%3D%22200%22%20fill%3D%22%230b1e4a%22/%3E%3Ctext%20x%3D%22100%22%20y%3D%22115%22%20font-family%3D%22sans-serif%22%20font-size%3D%2260%22%20text-anchor%3D%22middle%22%3E%F0%9F%8F%8A%3C/text%3E%3C/svg%3E", // academy logo
   signatureDataUri: "", // optional — printed on receipts/reports if set, from the Settings tab
   instapayHandle: "", // this academy's own Instapay handle — set from the Settings tab; a new academy starts blank on purpose so its parents never see another academy's payment details by accident
@@ -2953,7 +2953,7 @@ function levelInMonth(swimmer, key) {
 // rgba(...) string at the given opacity — used for the homepage hero's
 // darkening overlays, which need partial transparency over a photo.
 function academyColorRgba(alpha = 1) {
-  const hex = (CONFIG.primaryColor || "#0c1e3e").replace("#", "");
+  const hex = (CONFIG.primaryColor || "#0369a1").replace("#", "");
   const r = parseInt(hex.slice(0, 2), 16) || 0;
   const g = parseInt(hex.slice(2, 4), 16) || 0;
   const b = parseInt(hex.slice(4, 6), 16) || 0;
@@ -3263,9 +3263,9 @@ function SkillTreePath({ skills, ratings = {}, onRate, editable }) {
 function SuccessScreen({ record, onHome }) {
   return (
     <div className="min-h-[70vh] flex items-center justify-center px-4">
-      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center border border-blue-100">
-        <div className="mx-auto w-16 h-16 rounded-full bg-blue-50 flex items-center justify-center mb-4">
-          <CheckCircle2 className="w-9 h-9 text-blue-900" />
+      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center border border-sky-100">
+        <div className="mx-auto w-16 h-16 rounded-full bg-sky-50 flex items-center justify-center mb-4">
+          <CheckCircle2 className="w-9 h-9 text-sky-900" />
         </div>
         <h2 className="text-2xl font-bold text-slate-900 mb-2">Request received</h2>
         <p className="text-slate-500 mb-4 leading-relaxed">
@@ -3277,7 +3277,7 @@ function SuccessScreen({ record, onHome }) {
         </div>
         <button
           onClick={onHome}
-          className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition"
+          className="w-full py-3 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 transition"
         >
           Back to home
         </button>
@@ -3347,7 +3347,7 @@ function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
           <input
             value={swimmerName}
             onChange={(e) => setSwimmerName(e.target.value)}
-            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900"
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900"
           />
         </div>
         <div>
@@ -3357,7 +3357,7 @@ function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
             min="0"
             value={age}
             onChange={(e) => setAge(e.target.value)}
-            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900"
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900"
           />
         </div>
         <div>
@@ -3365,7 +3365,7 @@ function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
           <input
             value={parentName}
             onChange={(e) => setParentName(e.target.value)}
-            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900"
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900"
           />
         </div>
         <div>
@@ -3374,7 +3374,7 @@ function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
             placeholder="01xxxxxxxxx"
-            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900"
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900"
           />
         </div>
 
@@ -3382,7 +3382,7 @@ function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
           <button
             type="button"
             onClick={() => setWaiverExpanded((v) => !v)}
-            className="text-xs text-blue-900 hover:underline mb-2"
+            className="text-xs text-sky-900 hover:underline mb-2"
           >
             {waiverExpanded ? t("hideWaiver") : t("readWaiver")} {t("waiverAndTerms")}
           </button>
@@ -3403,7 +3403,7 @@ function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
         <button
           onClick={submit}
           disabled={submitting}
-          className="w-full py-3.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60 flex items-center justify-center gap-2"
+          className="w-full py-3.5 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 transition disabled:opacity-60 flex items-center justify-center gap-2"
         >
           {submitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
           {submitting ? t("sending") : t("submitRegistration")}
@@ -3701,21 +3701,21 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
             key={p.id}
             onClick={() => setPlanId(p.id)}
             className={`text-left p-3 rounded-xl border-2 transition ${
-              planId === p.id ? "border-blue-900 bg-blue-50" : "border-slate-200 bg-white hover:border-slate-300"
+              planId === p.id ? "border-sky-900 bg-sky-50" : "border-slate-200 bg-white hover:border-slate-300"
             }`}
           >
             <div className="font-semibold text-slate-900 text-sm">{p.name}</div>
-            <div className="text-blue-900 font-bold text-sm">{p.price} EGP</div>
+            <div className="text-sky-900 font-bold text-sm">{p.price} EGP</div>
           </button>
         ))}
         <button
           onClick={() => setPlanId("custom")}
           className={`text-left p-3 rounded-xl border-2 transition ${
-            isCustom ? "border-blue-900 bg-blue-50" : "border-slate-200 bg-white hover:border-slate-300"
+            isCustom ? "border-sky-900 bg-sky-50" : "border-slate-200 bg-white hover:border-slate-300"
           }`}
         >
           <div className="font-semibold text-slate-900 text-sm">{t("openAmount")}</div>
-          <div className="text-blue-900 font-bold text-sm">{t("enterAmount")}</div>
+          <div className="text-sky-900 font-bold text-sm">{t("enterAmount")}</div>
         </button>
       </div>
 
@@ -3727,7 +3727,7 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
             min="1"
             value={customAmount}
             onChange={(e) => setCustomAmount(e.target.value)}
-            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900"
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900"
             placeholder={t("enterAmountPlaceholder")}
           />
         </div>
@@ -3750,10 +3750,10 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
         refParts={[swimmerId || "new", window.__academy?.id || "", monthKey()]}
       />
 
-      <div className="bg-blue-950 text-white rounded-2xl p-5 mb-6">
+      <div className="bg-sky-950 text-white rounded-2xl p-5 mb-6">
         {CONFIG.instapayHandle ? (
           <>
-            <div className="text-sm text-blue-100 mb-1">{t("orTransferVia").replace("{amount}", plan.price || "...")}</div>
+            <div className="text-sm text-sky-100 mb-1">{t("orTransferVia").replace("{amount}", plan.price || "...")}</div>
             <a
               href={CONFIG.instapayLink}
               target="_blank"
@@ -3761,7 +3761,7 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
               className="flex items-center justify-between bg-white/10 hover:bg-white/20 transition rounded-xl px-4 py-3 mb-2"
             >
               <span className="font-mono text-lg">{CONFIG.instapayHandle}</span>
-              <span className="flex items-center gap-2 text-blue-100">
+              <span className="flex items-center gap-2 text-sky-100">
                 <Send className="w-4 h-4" />
                 <button
                   onClick={(e) => {
@@ -3776,12 +3776,12 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
                 </button>
               </span>
             </a>
-            <div className="text-xs text-blue-200 mb-1">{t("tapToOpenInstapay")}</div>
-            {copied && <div className="text-xs text-blue-200 mb-2">{t("copied")}</div>}
-            <div className="text-xs text-blue-100">{t("orMobileNumber")} {CONFIG.instapayPhone}</div>
+            <div className="text-xs text-sky-200 mb-1">{t("tapToOpenInstapay")}</div>
+            {copied && <div className="text-xs text-sky-200 mb-2">{t("copied")}</div>}
+            <div className="text-xs text-sky-100">{t("orMobileNumber")} {CONFIG.instapayPhone}</div>
           </>
         ) : (
-          <div className="text-sm text-blue-100">
+          <div className="text-sm text-sky-100">
             {t("paymentNotSetUp")}
           </div>
         )}
@@ -3795,7 +3795,7 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl py-3 pl-10 pr-3 outline-none focus:border-blue-900"
+              className="w-full border border-slate-200 rounded-xl py-3 pl-10 pr-3 outline-none focus:border-sky-900"
               placeholder={t("yourName")}
             />
           </div>
@@ -3808,7 +3808,7 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
             <input
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl py-3 pl-10 pr-3 outline-none focus:border-blue-900"
+              className="w-full border border-slate-200 rounded-xl py-3 pl-10 pr-3 outline-none focus:border-sky-900"
               placeholder="01xxxxxxxxx"
             />
           </div>
@@ -3822,7 +3822,7 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
             <select
               value={swimmerId}
               onChange={(e) => setSwimmerId(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl py-3 px-3 outline-none focus:border-blue-900 bg-white"
+              className="w-full border border-slate-200 rounded-xl py-3 px-3 outline-none focus:border-sky-900 bg-white"
             >
               <option value="">{t("selectSwimmerName")}</option>
               {existingSwimmers.map((s) => (
@@ -3841,7 +3841,7 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
           {!preview ? (
             <button
               onClick={() => fileRef.current?.click()}
-              className="w-full border-2 border-dashed border-slate-300 rounded-xl py-8 flex flex-col items-center gap-2 text-slate-400 hover:border-blue-900 hover:text-blue-900 transition"
+              className="w-full border-2 border-dashed border-slate-300 rounded-xl py-8 flex flex-col items-center gap-2 text-slate-400 hover:border-sky-900 hover:text-sky-900 transition"
             >
               <Upload className="w-6 h-6" />
               <span className="text-sm">{t("uploadScreenshot")}</span>
@@ -3861,7 +3861,7 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
         <button
           onClick={submit}
           disabled={submitting || bookingLocked}
-          className="w-full py-3.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60 flex items-center justify-center gap-2"
+          className="w-full py-3.5 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 transition disabled:opacity-60 flex items-center justify-center gap-2"
         >
           {submitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
           {submitting ? t("sending") : bookingLocked ? t("notOpenYet") : t("sendRequest")}
@@ -4156,7 +4156,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
   };
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-5">
+    <div className="bg-slate-50 rounded-2xl p-5 mb-5">
       <h3 className="font-bold text-slate-900 mb-1">{initial ? "Edit swimmer" : "Register a new swimmer"}</h3>
       {isNew ? (
         <p className="text-xs text-slate-400 mb-4">Day & time aren't set here — they get assigned once this month's payment is activated.</p>
@@ -4166,7 +4166,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
       <div className="grid sm:grid-cols-2 gap-3 mb-3">
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Branch</label>
-          <select value={branch} onChange={(e) => handleBranchChange(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
+          <select value={branch} onChange={(e) => handleBranchChange(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white">
             {BRANCHES.map((b) => (
               <option key={b.id} value={b.id}>{b.name}</option>
             ))}
@@ -4174,23 +4174,23 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
         </div>
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Name</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Swimmer name" />
+          <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900" placeholder="Swimmer name" />
         </div>
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Age</label>
-          <input type="number" min="1" value={age} onChange={(e) => setAge(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Age" />
+          <input type="number" min="1" value={age} onChange={(e) => setAge(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900" placeholder="Age" />
         </div>
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Mobile number</label>
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="01xxxxxxxxx" />
+          <input value={phone} onChange={(e) => setPhone(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900" placeholder="01xxxxxxxxx" />
         </div>
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Second number (optional)</label>
-          <input value={altPhone} onChange={(e) => setAltPhone(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="01xxxxxxxxx" />
+          <input value={altPhone} onChange={(e) => setAltPhone(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900" placeholder="01xxxxxxxxx" />
         </div>
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Level</label>
-          <select value={level} onChange={(e) => handleLevelChange(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
+          <select value={level} onChange={(e) => handleLevelChange(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white">
             {LEVELS.map((l) => (
               <option key={l} value={l}>{l}</option>
             ))}
@@ -4198,20 +4198,20 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
         </div>
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Monthly plan</label>
-          <select value={planId} onChange={(e) => setPlanId(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
+          <select value={planId} onChange={(e) => setPlanId(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white">
             {PLANS.map((p) => <option key={p.id} value={p.id}>{p.name} — {p.price} EGP</option>)}
           </select>
         </div>
         {!isNew && (
         <div className="sm:col-span-2">
-          <div className={`rounded-xl border-2 p-3 ${scheduleMonth === (initial?.scheduleMonth || monthKey()) ? "border-slate-200 bg-slate-50" : "border-blue-400 bg-blue-50"}`}>
+          <div className={`rounded-xl border-2 p-3 ${scheduleMonth === (initial?.scheduleMonth || monthKey()) ? "border-slate-200 bg-slate-50" : "border-sky-400 bg-sky-50"}`}>
             <label className="text-xs font-semibold text-slate-700 mb-1 block">
               ⚠️ Which month are you editing the schedule for?
             </label>
             <select
               value={scheduleMonth}
               onChange={(e) => handleScheduleMonthChange(e.target.value)}
-              className="w-full border border-slate-300 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white font-medium"
+              className="w-full border border-slate-300 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white font-medium"
             >
               <option value={monthKey()}>{monthLabel(monthKey())} (current)</option>
               <option value={nextMonthKey()}>{monthLabel(nextMonthKey())} (next)</option>
@@ -4228,7 +4228,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
         {!isNew && (
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Day</label>
-          <select value={day} onChange={(e) => handleDayChange(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
+          <select value={day} onChange={(e) => handleDayChange(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white">
             <option value="">Not scheduled yet</option>
             {DAY_GROUPS.map((d) => (
               <option key={d.id} value={d.id}>{d.label}</option>
@@ -4239,9 +4239,9 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
         {!isNew && (
         <div>
           <label className="text-xs text-slate-500 mb-1 block">
-            Time {level === "Baby" && <span className="text-blue-900">(30 min class)</span>}
+            Time {level === "Baby" && <span className="text-sky-900">(30 min class)</span>}
           </label>
-          <select value={time} onChange={(e) => setTime(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
+          <select value={time} onChange={(e) => setTime(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white">
             <option value="">Not scheduled yet</option>
             {timeOptions.map((t) => (
               <option key={t} value={t}>
@@ -4257,7 +4257,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           <select
             value={sessionType}
             onChange={(e) => setSessionType(e.target.value)}
-            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
           >
             {SESSION_TYPES.map((t) => (
               <option key={t.id} value={t.id}>
@@ -4273,7 +4273,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           <select
             value={coachId}
             onChange={(e) => setCoachId(e.target.value)}
-            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
           >
             <option value="">No coach assigned yet</option>
             {(coaches || []).filter((c) => c.branch === branch && !isCoachClosedAt(c, day, time)).map((c) => (
@@ -4305,7 +4305,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
                   setWaitlistJoined(true);
                 }
               }}
-              className="text-xs text-blue-900 hover:underline mt-1"
+              className="text-xs text-sky-900 hover:underline mt-1"
             >
               This slot is full — add to waitlist instead
             </button>
@@ -4333,7 +4333,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           type="checkbox"
           checked={hasSecondSlot}
           onChange={(e) => setHasSecondSlot(e.target.checked)}
-          className="w-4 h-4 accent-blue-900"
+          className="w-4 h-4 accent-sky-900"
         />
         This swimmer also trains a second time each week
       </label>
@@ -4344,7 +4344,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           <div className="grid sm:grid-cols-2 gap-3 mb-3">
             <div>
               <label className="text-xs text-slate-500 mb-1 block">Day</label>
-              <select value={day2} onChange={(e) => handleDay2Change(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
+              <select value={day2} onChange={(e) => handleDay2Change(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white">
                 <option value="">— Choose —</option>
                 {DAY_GROUPS.map((d) => (
                   <option key={d.id} value={d.id}>{d.label}</option>
@@ -4353,7 +4353,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
             </div>
             <div>
               <label className="text-xs text-slate-500 mb-1 block">Time</label>
-              <select value={time2} onChange={(e) => setTime2(e.target.value)} disabled={!day2} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white disabled:bg-slate-100">
+              <select value={time2} onChange={(e) => setTime2(e.target.value)} disabled={!day2} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white disabled:bg-slate-100">
                 {timeOptions2.length === 0 && <option value="">— Choose a day first —</option>}
                 {timeOptions2.map((t) => (
                   <option key={t} value={t}>{t}</option>
@@ -4362,7 +4362,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
             </div>
             <div>
               <label className="text-xs text-slate-500 mb-1 block">Session type</label>
-              <select value={sessionType2} onChange={(e) => setSessionType2(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
+              <select value={sessionType2} onChange={(e) => setSessionType2(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white">
                 {SESSION_TYPES.map((t) => (
                   <option key={t.id} value={t.id}>{t.label}</option>
                 ))}
@@ -4370,7 +4370,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
             </div>
             <div>
               <label className="text-xs text-slate-500 mb-1 block">Coach</label>
-              <select value={coachId2} onChange={(e) => setCoachId2(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
+              <select value={coachId2} onChange={(e) => setCoachId2(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white">
                 <option value="">No coach assigned</option>
                 {(coaches || []).filter((c) => c.branch === branch && !isCoachClosedAt(c, day2, time2)).map((c) => (
                   <option key={c.id} value={c.id}>{c.name}</option>
@@ -4391,7 +4391,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
       )}
       <div className="mb-3">
         <label className="text-xs text-slate-500 mb-1 block">Notes</label>
-        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Any notes about the swimmer" />
+        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900" placeholder="Any notes about the swimmer" />
       </div>
       <div className="mb-3 flex items-center gap-3 bg-slate-50 rounded-lg px-3 py-2.5">
         <span className="text-xs text-slate-500">Parent portal PIN</span>
@@ -4399,7 +4399,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
         <button
           type="button"
           onClick={() => setParentPin(genParentPin())}
-          className="text-xs text-blue-800 hover:underline ml-auto"
+          className="text-xs text-sky-800 hover:underline ml-auto"
         >
           Generate new PIN
         </button>
@@ -4409,7 +4409,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
         <button
           onClick={save}
           disabled={saving}
-          className="flex-1 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60 flex items-center justify-center gap-2"
+          className="flex-1 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60 flex items-center justify-center gap-2"
         >
           {saving && <RefreshCw className="w-4 h-4 animate-spin" />}
           {saving ? "Saving..." : initial ? "Save changes" : "Register swimmer"}
@@ -5325,7 +5325,7 @@ function SwimmerSearchInput({ onSearch }) {
         value={value}
         onChange={(e) => setValue(e.target.value)}
         placeholder="Search by name or phone"
-        className="w-full border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-sm outline-none focus:border-blue-900"
+        className="w-full border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-sm outline-none focus:border-sky-900"
       />
     </div>
   );
@@ -5988,7 +5988,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       tab === id
         ? sidebarIsDark
           ? "bg-white/10 text-white font-semibold border-white"
-          : "bg-blue-50 text-blue-950 font-semibold border-blue-900"
+          : "bg-sky-50 text-sky-950 font-semibold border-sky-900"
         : sidebarIsDark
         ? "border-transparent text-white/70 hover:bg-white/10 hover:text-white"
         : "border-transparent text-slate-500 hover:bg-slate-50 hover:text-slate-700"
@@ -6338,7 +6338,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   // ---- Settings tab: academy details + time slots ----
   const [settingsName, setSettingsName] = useState("");
   const [settingsLogo, setSettingsLogo] = useState("");
-  const [settingsPrimaryColor, setSettingsPrimaryColor] = useState(CONFIG.primaryColor || "#0c1e3e");
+  const [settingsPrimaryColor, setSettingsPrimaryColor] = useState(CONFIG.primaryColor || "#0369a1");
   const [showContactModal, setShowContactModal] = useState(false);
   const [settingsWhatsapp, setSettingsWhatsapp] = useState("");
   const [settingsContactPhone, setSettingsContactPhone] = useState("");
@@ -6519,7 +6519,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     setSettingsInstapayHandle(CONFIG.instapayHandle);
     setSettingsInstapayPhone(CONFIG.instapayPhone);
     setSettingsSignature(CONFIG.signatureDataUri || "");
-    setSettingsPrimaryColor(CONFIG.primaryColor || "#0c1e3e");
+    setSettingsPrimaryColor(CONFIG.primaryColor || "#0369a1");
     loadCustomTimeSlots().then((custom) => setCustomTimeSlots(custom?.[BRANCHES[0].id] || {}));
   }, [tab]);
 
@@ -9522,7 +9522,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   setAuthMode("login");
                   setSignupSuccess(false);
                 }}
-                className="w-full py-2.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition"
+                className="w-full py-2.5 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 transition"
               >
                 Go to login
               </button>
@@ -9533,7 +9533,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 type="email"
                 value={authEmail}
                 onChange={(e) => setAuthEmail(e.target.value)}
-                className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+                className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900 mb-3"
                 placeholder="Email"
                 autoComplete="username"
               />
@@ -9544,7 +9544,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 onKeyDown={(e) => {
                   if (e.key === "Enter") (authMode === "signup" ? accountSignup() : accountLogin());
                 }}
-                className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+                className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900 mb-3"
                 placeholder={authMode === "signup" ? "Choose a password (6+ characters)" : "Password"}
                 autoComplete={authMode === "signup" ? "new-password" : "current-password"}
               />
@@ -9552,7 +9552,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <button
                 onClick={authMode === "signup" ? accountSignup : accountLogin}
                 disabled={authLoading}
-                className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition mb-2 disabled:opacity-60 flex items-center justify-center gap-2"
+                className="w-full py-3 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 transition mb-2 disabled:opacity-60 flex items-center justify-center gap-2"
               >
                 {authLoading && <RefreshCw className="w-4 h-4 animate-spin" />}
                 {authLoading ? (authMode === "signup" ? "Creating..." : "Signing in...") : (authMode === "signup" ? "Create account" : "Log in")}
@@ -9594,7 +9594,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     });
                   }
                 }}
-                className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+                className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900 mb-3"
                 placeholder="Old admin password"
               />
               {passError && <div className="text-red-500 text-sm mb-3">{passError}</div>}
@@ -9642,11 +9642,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     <div className="max-w-5xl mx-auto px-4 py-8">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-6">
         <div className="flex items-center gap-2">
-          <ShieldCheck className="w-5 h-5 text-blue-900" />
+          <ShieldCheck className="w-5 h-5 text-sky-900" />
           <h2 className="text-xl font-bold text-slate-900">Admin dashboard</h2>
           {accountName && <span className="text-xs text-slate-400">· {accountName}</span>}
           {!canEdit && myAccessLevel === "editor" && (
-            <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-medium">Editor — can't delete</span>
+            <span className="text-xs bg-sky-50 text-sky-700 px-2 py-0.5 rounded-full font-medium">Editor — can't delete</span>
           )}
           {!canEdit && myAccessLevel === "viewer" && (
             <span className="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full font-medium">View only</span>
@@ -9664,13 +9664,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <button
                   onClick={() => setScannerOpen(true)}
                   disabled={checkingInOut}
-                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-950 text-white hover:bg-blue-900 disabled:opacity-60"
+                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-semibold bg-sky-950 text-white hover:bg-sky-900 disabled:opacity-60"
                 >
                   <QrCode className="w-3.5 h-3.5" /> {!myAttendanceToday?.checkIn ? "Scan to check in" : "Scan to check out"}
                 </button>
               )}
             </div>
-            {scanMessage && <div className="text-xs text-center text-blue-800 bg-blue-50 rounded-lg py-1 mt-1">{scanMessage}</div>}
+            {scanMessage && <div className="text-xs text-center text-sky-800 bg-sky-50 rounded-lg py-1 mt-1">{scanMessage}</div>}
           </div>
         )}
         {scannerOpen && <QRScanner onScan={handleQRScan} onClose={() => setScannerOpen(false)} />}
@@ -10036,14 +10036,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 {pendingPaymentRequests > 0 && (
                   <button
                     onClick={() => setTab("requests")}
-                    className="flex items-center gap-2.5 bg-blue-50 rounded-xl px-4 py-3 text-left hover:bg-blue-100 transition"
+                    className="flex items-center gap-2.5 bg-sky-50 rounded-xl px-4 py-3 text-left hover:bg-sky-100 transition"
                   >
-                    <Bell className="w-5 h-5 text-blue-700 shrink-0" />
+                    <Bell className="w-5 h-5 text-sky-700 shrink-0" />
                     <div>
-                      <div className="text-sm font-semibold text-blue-900">
+                      <div className="text-sm font-semibold text-sky-900">
                         {pendingPaymentRequests} {pendingPaymentRequests === 1 ? t("paymentToConfirm") : t("paymentsToConfirm")} {t("toConfirm")}
                       </div>
-                      <div className="text-xs text-blue-600">{t("waitingForReview")}</div>
+                      <div className="text-xs text-sky-600">{t("waitingForReview")}</div>
                     </div>
                   </button>
                 )}
@@ -10086,7 +10086,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     <div key={i} className="flex-1 flex flex-col items-center gap-1">
                       <div className="text-[10px] text-slate-400 font-medium">{m.total > 0 ? m.total.toLocaleString() : ""}</div>
                       <div
-                        className="w-full rounded-t-md bg-blue-900"
+                        className="w-full rounded-t-md bg-sky-900"
                         style={{ height: `${Math.max((m.total / miniTrendMax) * 70, m.total > 0 ? 4 : 0)}px` }}
                       />
                       <div className="text-[10px] text-slate-400">{m.label}</div>
@@ -10125,9 +10125,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <button
                   key={action.label}
                   onClick={action.onClick}
-                  className="flex flex-col items-center gap-2 bg-slate-50 rounded-2xl p-4 hover:bg-blue-50 transition"
+                  className="flex flex-col items-center gap-2 bg-slate-50 rounded-2xl p-4 hover:bg-sky-50 transition"
                 >
-                  <action.icon className="w-5 h-5 text-blue-900" />
+                  <action.icon className="w-5 h-5 text-sky-900" />
                   <span className="text-xs font-medium text-slate-600">{action.label}</span>
                 </button>
               ))}
@@ -10154,7 +10154,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <select
             value={s.coachId || ""}
             onChange={(e) => assignCoach(s, e.target.value)}
-            className="border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-blue-900 bg-white"
+            className="border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-sky-900 bg-white"
           >
             <option value="">— No coach —</option>
             {coaches
@@ -10172,7 +10172,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           return (
             <button
               onClick={() => assignCoach(s, suggestion.coach.id)}
-              className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-800 hover:bg-blue-100 font-medium flex items-center gap-1 whitespace-nowrap"
+              className="text-xs px-2.5 py-1 rounded-full bg-sky-50 text-sky-800 hover:bg-sky-100 font-medium flex items-center gap-1 whitespace-nowrap"
               title={suggestion.reason}
             >
               ✨ Suggest: {suggestion.coach.name}
@@ -10268,12 +10268,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 type="date"
                 value={bookingOpenDateInput}
                 onChange={(e) => setBookingOpenDateInput(e.target.value)}
-                className="border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-blue-900 bg-white"
+                className="border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-sky-900 bg-white"
               />
               <button
                 onClick={saveBookingOpenDate}
                 disabled={bookingOpenDateSaving}
-                className="text-sm px-3 py-1.5 rounded-lg bg-blue-950 text-white font-medium hover:bg-blue-900 disabled:opacity-60"
+                className="text-sm px-3 py-1.5 rounded-lg bg-sky-950 text-white font-medium hover:bg-sky-900 disabled:opacity-60"
               >
                 {bookingOpenDateSaving ? "Saving..." : "Save"}
               </button>
@@ -10304,7 +10304,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   key={f.key}
                   onClick={() => setFilter(f.key)}
                   className={`px-3 py-1.5 rounded-full text-sm font-medium transition ${
-                    filter === f.key ? "bg-blue-950 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                    filter === f.key ? "bg-sky-950 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
                   }`}
                 >
                   {f.label} ({f.count})
@@ -10318,7 +10318,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   value={requestSearch}
                   onChange={(e) => setRequestSearch(e.target.value)}
                   placeholder="Search by name or receipt #"
-                  className="border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-sm outline-none focus:border-blue-900 w-56"
+                  className="border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-sm outline-none focus:border-sky-900 w-56"
                 />
                 {requestSearch && (
                   <button
@@ -10365,7 +10365,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         r.status === "pending"
                           ? "bg-amber-100 text-amber-700"
                           : r.status === "confirmed"
-                          ? "bg-blue-100 text-blue-900"
+                          ? "bg-sky-100 text-sky-900"
                           : r.status === "refunded"
                           ? "bg-slate-200 text-slate-600"
                           : "bg-red-100 text-red-600"
@@ -10394,7 +10394,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                           setReceiptTargetMonth(defaultPaymentMonth(bookingOpenDateInput));
                           setReceiptError("");
                         }}
-                        className="flex-1 py-2 rounded-lg bg-blue-950 text-white text-sm font-medium hover:bg-blue-900 flex items-center justify-center gap-1"
+                        className="flex-1 py-2 rounded-lg bg-sky-950 text-white text-sm font-medium hover:bg-sky-900 flex items-center justify-center gap-1"
                       >
                         <Check className="w-3.5 h-3.5" /> Confirm
                       </button>
@@ -10408,7 +10408,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   )}
                   {r.status === "confirmed" && (
                     <div>
-                      <div className="text-xs text-blue-900 flex items-center gap-1 mb-2">
+                      <div className="text-xs text-sky-900 flex items-center gap-1 mb-2">
                         <CheckCircle2 className="w-3.5 h-3.5" /> Linked swimmer marked as paid automatically
                         {r.receiptNo && <span className="ml-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium">Receipt #{r.receiptNo}</span>}
                       </div>
@@ -10497,7 +10497,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             {canEditContent && (
               <button
                 onClick={() => { setEditingSwimmer(null); setPendingActivationId(null); setShowForm(true); }}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 whitespace-nowrap"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 whitespace-nowrap"
               >
                 <Plus className="w-4 h-4" /> Add swimmer
               </button>
@@ -10509,7 +10509,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <select
                 value={branchFilter}
                 onChange={(e) => setBranchFilter(e.target.value)}
-                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
               >
                 <option value="all">All branches</option>
                 {BRANCHES.map((b) => (
@@ -10520,7 +10520,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <select
               value={paymentStatusFilter}
               onChange={(e) => setPaymentStatusFilter(e.target.value)}
-              className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+              className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
             >
               <option value="all">Any payment status</option>
               <option value="paid">Paid</option>
@@ -10539,7 +10539,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <button
               onClick={() => setShowMoreFilters((v) => !v)}
               className={`text-sm px-3 py-2 rounded-lg font-medium transition ${
-                showMoreFilters ? "bg-blue-50 text-blue-950" : "text-slate-500 hover:bg-slate-100"
+                showMoreFilters ? "bg-sky-50 text-sky-950" : "text-slate-500 hover:bg-slate-100"
               }`}
             >
               {showMoreFilters ? "Fewer filters ▲" : "More filters ▼"}
@@ -10576,7 +10576,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <select
                 value={levelFilter}
                 onChange={(e) => setLevelFilter(e.target.value)}
-                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
               >
                 <option value="all">All levels</option>
                 {LEVELS.map((lvl) => (
@@ -10586,7 +10586,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <select
                 value={dayFilter}
                 onChange={(e) => setDayFilter(e.target.value)}
-                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
               >
                 <option value="all">All days</option>
                 {DAY_GROUPS.map((d) => (
@@ -10596,7 +10596,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <select
                 value={timeFilter}
                 onChange={(e) => setTimeFilter(e.target.value)}
-                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
               >
                 <option value="all">All times</option>
                 {timeOptions.map((t) => (
@@ -10606,7 +10606,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <select
                 value={sessionTypeFilter}
                 onChange={(e) => setSessionTypeFilter(e.target.value)}
-                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
               >
                 <option value="all">All session sizes</option>
                 {SESSION_TYPES.map((t) => (
@@ -10618,7 +10618,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   type="checkbox"
                   checked={showUnscheduled}
                   onChange={(e) => setShowUnscheduled(e.target.checked)}
-                  className="w-4 h-4 accent-blue-900"
+                  className="w-4 h-4 accent-sky-900"
                 />
                 Include unscheduled
               </label>
@@ -10685,7 +10685,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               return (
               <div
                 key={s.id}
-                className="bg-white rounded-2xl border border-slate-200 p-4"
+                className="bg-slate-50 rounded-2xl p-4"
                 style={{ borderLeftWidth: "4px", borderLeftColor: isOverdue ? "#dc2626" : typeColor }}
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -10763,7 +10763,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                 setCashDiscountPercent("0");
                                 setCashDiscountReason("");
                               }}
-                              className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-950 text-white hover:bg-blue-900 transition"
+                              className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-full font-semibold bg-sky-950 text-white hover:bg-sky-900 transition"
                               title="Cash or card, paid in person — marks paid and logs it in the revenue report"
                             >
                               <Wallet className="w-3.5 h-3.5" /> In-person payment
@@ -10965,7 +10965,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                           <input
                             type="date"
                             id={`training-date-${s.id}`}
-                            className="flex-1 border border-slate-200 rounded-lg py-1.5 px-2 text-xs outline-none focus:border-blue-900"
+                            className="flex-1 border border-slate-200 rounded-lg py-1.5 px-2 text-xs outline-none focus:border-sky-900"
                           />
                           <button
                             onClick={() => {
@@ -10975,7 +10975,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                 input.value = "";
                               }
                             }}
-                            className="px-2.5 py-1.5 rounded-lg bg-blue-950 text-white text-xs font-semibold hover:bg-blue-900"
+                            className="px-2.5 py-1.5 rounded-lg bg-sky-950 text-white text-xs font-semibold hover:bg-sky-900"
                           >
                             Add
                           </button>
@@ -11095,7 +11095,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                       date: (inv.confirmedAt || inv.createdAt).slice(0, 10),
                                     })
                                   }
-                                  className="text-blue-900 hover:underline font-medium"
+                                  className="text-sky-900 hover:underline font-medium"
                                 >
                                   Reprint
                                 </button>
@@ -11125,7 +11125,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                             </div>
                             <button
                               onClick={() => printCertificate({ swimmerName: s.name, level: cert.level, date: cert.date })}
-                              className="text-blue-900 hover:underline font-medium"
+                              className="text-sky-900 hover:underline font-medium"
                             >
                               Print
                             </button>
@@ -11149,7 +11149,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               acceptedAt: s.waiverAcceptedAt,
                             })
                           }
-                          className="text-xs text-blue-900 hover:underline font-medium"
+                          className="text-xs text-sky-900 hover:underline font-medium"
                         >
                           View / print
                         </button>
@@ -11233,7 +11233,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               {(can("manageCoaches") || canEditContent) && (
                 <button
                   onClick={() => { setEditingCoach(null); setShowCoachForm(true); }}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900"
                 >
                   <Plus className="w-4 h-4" /> Add coach
                 </button>
@@ -11256,7 +11256,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               const load = coachLoadById[c.id] || 0;
               const perf = coachPerformanceById[c.id] || {};
               return (
-                <div key={c.id} className="bg-white rounded-2xl border border-slate-200 p-4">
+                <div key={c.id} className="bg-slate-50 rounded-2xl p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="flex items-center gap-3 min-w-[160px]">
                     <div className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center flex-shrink-0">
@@ -11336,7 +11336,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <button
                 onClick={syncAllSwimmersNow}
                 disabled={backfillRunning}
-                className="px-3 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold disabled:opacity-60"
+                className="px-3 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold disabled:opacity-60"
                 title="Fills in classes/enrollments for any swimmer added or edited before this page existed"
               >
                 {backfillRunning ? t("syncing") : t("syncAllSwimmers")}
@@ -11356,7 +11356,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             </div>
           </div>
           {backfillMessage && <div className="mb-4 bg-green-50 border border-green-100 text-green-800 rounded-xl px-3 py-2 text-sm">{backfillMessage}</div>}
-          {coreMigrationMessage && <div className="mb-4 bg-blue-50 border border-blue-100 text-blue-900 rounded-xl px-3 py-2 text-sm">{coreMigrationMessage}</div>}
+          {coreMigrationMessage && <div className="mb-4 bg-sky-50 border border-sky-100 text-sky-900 rounded-xl px-3 py-2 text-sm">{coreMigrationMessage}</div>}
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6 pb-6 border-b border-slate-200">
             {[["Families", coreFamilies.length], ["Classes", coreClasses.length], ["Enrollments", coreEnrollments.length], ["Ledger entries", coreLedger.length]].map(([label, n]) => (
@@ -11370,7 +11370,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <div className="bg-slate-50 rounded-xl overflow-hidden">
             <div className="flex gap-1 p-2 border-b border-slate-200 overflow-x-auto">
               {[["families",t("coreFamilies")],["classes",t("coreClasses")],["calendar",t("coreCalendar")],["enrollments",t("coreEnrollments")],["ledger",t("coreLedger")],["reminders",t("coreReminders")]].map(([id,label]) => (
-                <button key={id} onClick={() => setCoreTab(id)} className={`px-3 py-2 rounded-lg text-sm whitespace-nowrap ${coreTab === id ? "bg-blue-950 text-white font-semibold" : "text-slate-500 hover:bg-slate-100"}`}>{label}</button>
+                <button key={id} onClick={() => setCoreTab(id)} className={`px-3 py-2 rounded-lg text-sm whitespace-nowrap ${coreTab === id ? "bg-sky-950 text-white font-semibold" : "text-slate-500 hover:bg-slate-100"}`}>{label}</button>
               ))}
               {coreTab !== "calendar" && coreTab !== "reminders" && (
                 <input value={coreSearch} onChange={e => setCoreSearch(e.target.value)} placeholder="Search..." className="ml-auto min-w-40 border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none bg-white" />
@@ -11423,7 +11423,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 {coreTab === "classes" && (
                   <>
                     <div className="flex justify-end mb-1">
-                      <button onClick={openNewClassModal} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold">
+                      <button onClick={openNewClassModal} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold">
                         <Plus className="w-4 h-4" /> {t("newClass")}
                       </button>
                     </div>
@@ -11468,7 +11468,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 {coreTab === "enrollments" && (
                   <>
                     <div className="flex justify-end mb-1">
-                      <button onClick={openNewEnrollModal} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold">
+                      <button onClick={openNewEnrollModal} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold">
                         <Plus className="w-4 h-4" /> {t("newEnrollment")}
                       </button>
                     </div>
@@ -11505,7 +11505,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   </>
                 )}
                 {coreTab === "ledger" && coreLedger.filter(l => `${l.description} ${l.month} ${l.type}`.toLowerCase().includes(coreSearch.toLowerCase())).slice().reverse().map(l => (
-                  <div key={l.id} className="border border-slate-100 rounded-xl p-3 flex items-center justify-between gap-3"><div><div className="font-semibold flex items-center gap-1.5">{l.description || l.type}{l.autoRenewed && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 font-medium">Auto-renewed</span>}</div><div className="text-xs text-slate-400">{l.month} · {l.type} · Swimmer {l.swimmerId}</div></div><div className="text-sm font-semibold">{Number(l.amount || 0).toLocaleString()} EGP</div></div>
+                  <div key={l.id} className="border border-slate-100 rounded-xl p-3 flex items-center justify-between gap-3"><div><div className="font-semibold flex items-center gap-1.5">{l.description || l.type}{l.autoRenewed && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-sky-50 text-sky-700 font-medium">Auto-renewed</span>}</div><div className="text-xs text-slate-400">{l.month} · {l.type} · Swimmer {l.swimmerId}</div></div><div className="text-sm font-semibold">{Number(l.amount || 0).toLocaleString()} EGP</div></div>
                 ))}
               </div>
             ))}
@@ -11521,7 +11521,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <p className="text-sm text-slate-400">{t("posSub")}</p>
             </div>
             {canEditContent && (
-              <button onClick={openNewProductModal} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold">
+              <button onClick={openNewProductModal} className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold">
                 <Plus className="w-4 h-4" /> {t("posAddProduct")}
               </button>
             )}
@@ -11536,7 +11536,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <div className="lg:col-span-2">
                 <div className="text-sm font-semibold text-slate-800 mb-2">{t("posProducts")}</div>
                 {posProducts.filter((p) => p.active !== false).length === 0 ? (
-                  <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-sm text-slate-400">
+                  <div className="bg-slate-50 rounded-2xl p-8 text-center text-sm text-slate-400">
                     {t("posNoProducts")}
                   </div>
                 ) : (
@@ -11555,7 +11555,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                           )}
                         </div>
                         <div className="flex items-center justify-between">
-                          <span className="font-bold text-blue-950">{p.price.toLocaleString()} EGP</span>
+                          <span className="font-bold text-sky-950">{p.price.toLocaleString()} EGP</span>
                           <button
                             onClick={() => addToCart(p)}
                             disabled={p.stock <= 0}
@@ -11594,7 +11594,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 )}
               </div>
 
-              <div className="bg-white rounded-2xl border border-slate-200 p-4 h-fit sticky top-4">
+              <div className="bg-slate-50 rounded-2xl p-4 h-fit sticky top-4">
                 <div className="text-sm font-semibold text-slate-800 mb-3">{t("posCurrentSale")}</div>
                 {saleCart.length === 0 ? (
                   <div className="text-xs text-slate-400 text-center py-6">{t("posCartEmpty")}</div>
@@ -11660,7 +11660,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <button
                   onClick={completeSale}
                   disabled={saleCart.length === 0 || saleSaving}
-                  className="w-full py-2.5 rounded-xl bg-blue-950 text-white font-semibold disabled:opacity-50"
+                  className="w-full py-2.5 rounded-xl bg-sky-950 text-white font-semibold disabled:opacity-50"
                 >
                   {saleSaving ? "Processing..." : "Complete sale"}
                 </button>
@@ -11683,7 +11683,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <input
                   value={productModal.form.name}
                   onChange={(e) => setProductModal({ ...productModal, form: { ...productModal.form, name: e.target.value } })}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                   autoFocus
                 />
               </div>
@@ -11695,7 +11695,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     min="0"
                     value={productModal.form.price}
                     onChange={(e) => setProductModal({ ...productModal, form: { ...productModal.form, price: e.target.value } })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                   />
                 </div>
                 <div>
@@ -11705,7 +11705,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     min="0"
                     value={productModal.form.stock}
                     onChange={(e) => setProductModal({ ...productModal, form: { ...productModal.form, stock: e.target.value } })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                   />
                 </div>
               </div>
@@ -11714,12 +11714,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <input
                   value={productModal.form.sku}
                   onChange={(e) => setProductModal({ ...productModal, form: { ...productModal.form, sku: e.target.value } })}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 />
               </div>
               {productError && <div className="text-xs text-red-600">{productError}</div>}
               <div className="flex gap-2">
-                <button onClick={saveProductModal} className="flex-1 py-2.5 rounded-xl bg-blue-950 text-white font-semibold">
+                <button onClick={saveProductModal} className="flex-1 py-2.5 rounded-xl bg-sky-950 text-white font-semibold">
                   {t("posSave")}
                 </button>
                 {productModal.mode === "edit" && (
@@ -11752,7 +11752,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <input
                   value={classModal.form.name}
                   onChange={(e) => setClassModal({ ...classModal, form: { ...classModal.form, name: e.target.value } })}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                   placeholder="e.g. Level 4 · Sunday 5:30"
                 />
               </div>
@@ -11762,7 +11762,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <select
                     value={classModal.form.branch}
                     onChange={(e) => setClassModal({ ...classModal, form: { ...classModal.form, branch: e.target.value } })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
                   >
                     {BRANCHES.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
                   </select>
@@ -11773,7 +11773,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <select
                   value={classModal.form.level}
                   onChange={(e) => setClassModal({ ...classModal, form: { ...classModal.form, level: e.target.value } })}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
                 >
                   {LEVELS.map((lv) => <option key={lv} value={lv}>{lv}</option>)}
                 </select>
@@ -11784,7 +11784,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <select
                     value={classModal.form.day}
                     onChange={(e) => setClassModal({ ...classModal, form: { ...classModal.form, day: e.target.value, time: "" } })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
                   >
                     {DAY_GROUPS.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
                   </select>
@@ -11794,7 +11794,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <select
                     value={classModal.form.time}
                     onChange={(e) => setClassModal({ ...classModal, form: { ...classModal.form, time: e.target.value } })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
                   >
                     <option value="">— Choose —</option>
                     {(TIME_SLOTS[classModal.form.branch]?.[classModal.form.day] || []).map((t) => <option key={t} value={t}>{t}</option>)}
@@ -11807,7 +11807,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <select
                     value={classModal.form.sessionType}
                     onChange={(e) => setClassModal({ ...classModal, form: { ...classModal.form, sessionType: e.target.value } })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
                   >
                     {SESSION_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
                   </select>
@@ -11819,7 +11819,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     min="1"
                     value={classModal.form.capacity}
                     onChange={(e) => setClassModal({ ...classModal, form: { ...classModal.form, capacity: e.target.value } })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                   />
                 </div>
               </div>
@@ -11828,7 +11828,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <select
                   value={classModal.form.coachId || ""}
                   onChange={(e) => setClassModal({ ...classModal, form: { ...classModal.form, coachId: e.target.value || null } })}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
                 >
                   <option value="">No coach assigned yet</option>
                   {coreCoaches.filter((c) => c.branch === classModal.form.branch).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -11838,7 +11838,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             </div>
             <div className="flex gap-2 mt-5">
               <button onClick={closeClassModal} className="flex-1 px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-sm font-semibold">Cancel</button>
-              <button onClick={saveClassModal} disabled={classSaving} className="flex-1 px-4 py-2.5 rounded-xl bg-blue-950 text-white text-sm font-semibold disabled:opacity-60">
+              <button onClick={saveClassModal} disabled={classSaving} className="flex-1 px-4 py-2.5 rounded-xl bg-sky-950 text-white text-sm font-semibold disabled:opacity-60">
                 {classSaving ? "Saving..." : "Save"}
               </button>
             </div>
@@ -11880,7 +11880,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       onFocus={() => setEnrollSwimmerDropdownOpen(true)}
                       onBlur={() => setTimeout(() => setEnrollSwimmerDropdownOpen(false), 150)}
                       placeholder="Type a swimmer's name..."
-                      className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                      className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                     />
                     {enrollSwimmerDropdownOpen && (
                       <div className="absolute z-10 mt-1 w-full max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-lg">
@@ -11920,7 +11920,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <select
                     value={enrollCoachFilter}
                     onChange={(e) => setEnrollCoachFilter(e.target.value)}
-                    className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                    className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                   >
                     <option value="all">Any coach</option>
                     {coreCoaches.map((c) => (
@@ -11930,7 +11930,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <select
                     value={enrollPlanFilter}
                     onChange={(e) => setEnrollPlanFilter(e.target.value)}
-                    className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                    className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                   >
                     <option value="all">Any plan</option>
                     {SESSION_TYPES.map((st) => (
@@ -11957,7 +11957,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                           disabled={full}
                           onClick={() => setEnrollModal({ ...enrollModal, form: { ...enrollModal.form, classId: c.id } })}
                           className={`w-full flex items-center gap-2 text-left px-2.5 py-2 rounded-lg border transition disabled:opacity-40 disabled:cursor-not-allowed ${
-                            selected ? "border-blue-900 bg-blue-50" : "border-slate-100 hover:bg-slate-50"
+                            selected ? "border-sky-900 bg-sky-50" : "border-slate-100 hover:bg-slate-50"
                           }`}
                         >
                           <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: info.color }} />
@@ -11991,7 +11991,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       type="button"
                       onClick={() => setEnrollModal({ ...enrollModal, form: { ...enrollModal.form, kind: k.id } })}
                       className={`flex-1 text-xs px-2 py-2 rounded-lg border ${
-                        (enrollModal.form.kind || "recurring") === k.id ? "border-blue-900 bg-blue-50 text-blue-950 font-medium" : "border-slate-200 text-slate-500"
+                        (enrollModal.form.kind || "recurring") === k.id ? "border-sky-900 bg-sky-50 text-sky-950 font-medium" : "border-slate-200 text-slate-500"
                       }`}
                     >
                       {k.label}
@@ -12014,7 +12014,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     min="1"
                     value={enrollModal.form.dropInAmount}
                     onChange={(e) => setEnrollModal({ ...enrollModal, form: { ...enrollModal.form, dropInAmount: e.target.value } })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                   />
                 </div>
               )}
@@ -12022,7 +12022,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             </div>
             <div className="flex gap-2 mt-5">
               <button onClick={closeEnrollModal} className="flex-1 px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-sm font-semibold">Cancel</button>
-              <button onClick={saveEnrollModal} disabled={enrollSaving} className="flex-1 px-4 py-2.5 rounded-xl bg-blue-950 text-white text-sm font-semibold disabled:opacity-60">
+              <button onClick={saveEnrollModal} disabled={enrollSaving} className="flex-1 px-4 py-2.5 rounded-xl bg-sky-950 text-white text-sm font-semibold disabled:opacity-60">
                 {enrollSaving ? "Saving..." : "Enroll"}
               </button>
             </div>
@@ -12058,12 +12058,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     value={paymentAmount}
                     onChange={(e) => setPaymentAmount(e.target.value)}
                     placeholder="Amount (EGP)"
-                    className="flex-1 border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="flex-1 border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                   />
                   <select
                     value={paymentMethod}
                     onChange={(e) => setPaymentMethod(e.target.value)}
-                    className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                    className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
                   >
                     <option value="instapay">Instapay</option>
                     <option value="cash">Cash</option>
@@ -12075,7 +12075,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <button
                   onClick={recordFamilyPayment}
                   disabled={paymentSaving}
-                  className="w-full mt-2 px-4 py-2.5 rounded-xl bg-blue-950 text-white text-sm font-semibold disabled:opacity-60"
+                  className="w-full mt-2 px-4 py-2.5 rounded-xl bg-sky-950 text-white text-sm font-semibold disabled:opacity-60"
                 >
                   {paymentSaving ? "Saving..." : "Record payment"}
                 </button>
@@ -12085,7 +12085,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <div className="mt-3 flex gap-2">
                 <button
                   onClick={() => openAdjustmentModal(familyLedgerModal.familyId, "credit")}
-                  className="flex-1 px-4 py-2.5 rounded-xl border border-blue-200 text-blue-700 text-sm font-semibold hover:bg-blue-50"
+                  className="flex-1 px-4 py-2.5 rounded-xl border border-sky-200 text-sky-700 text-sm font-semibold hover:bg-sky-50"
                 >
                   Issue credit
                 </button>
@@ -12141,7 +12141,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   min="1"
                   value={adjustmentAmount}
                   onChange={(e) => setAdjustmentAmount(e.target.value)}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                   autoFocus
                 />
               </div>
@@ -12151,7 +12151,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   value={adjustmentReason}
                   onChange={(e) => setAdjustmentReason(e.target.value)}
                   placeholder={adjustmentModal.kind === "credit" ? "e.g. Pool closure goodwill" : "e.g. Cancelled before month started"}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 />
               </div>
               {adjustmentError && <div className="text-xs text-red-600">{adjustmentError}</div>}
@@ -12159,7 +12159,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 onClick={saveAdjustment}
                 disabled={adjustmentSaving}
                 className={`w-full py-2.5 rounded-xl text-white text-sm font-semibold disabled:opacity-60 ${
-                  adjustmentModal.kind === "credit" ? "bg-blue-950" : "bg-amber-600"
+                  adjustmentModal.kind === "credit" ? "bg-sky-950" : "bg-amber-600"
                 }`}
               >
                 {adjustmentSaving ? "Saving..." : adjustmentModal.kind === "credit" ? "Issue credit" : "Issue refund"}
@@ -12179,7 +12179,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <select
                 value={scheduleDayFilter}
                 onChange={(e) => { setScheduleDayFilter(e.target.value); setScheduleTimeFilter("all"); }}
-                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
               >
                 {DAY_GROUPS.map((d) => (
                   <option key={d.id} value={d.id}>{d.label}</option>
@@ -12188,7 +12188,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <select
                 value={scheduleTimeFilter}
                 onChange={(e) => setScheduleTimeFilter(e.target.value)}
-                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
               >
                 <option value="all">All times</option>
                 {(TIME_SLOTS[BRANCHES[0].id]?.[scheduleDayFilter] || []).slice().sort(
@@ -12201,13 +12201,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 type="month"
                 value={scheduleMonth}
                 onChange={(e) => setScheduleMonth(e.target.value)}
-                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                 title="Which month's attendance to include in the PDF"
               />
               <button
                 onClick={exportSessionRoster}
                 disabled={exportingRoster}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
               >
                 {exportingRoster ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
                 {exportingRoster ? "Loading..." : "Preview & Export"}
@@ -12230,7 +12230,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     type="date"
                     value={trainingWindow.startDate}
                     onChange={(e) => updateTrainingWindow({ ...trainingWindow, startDate: e.target.value })}
-                    className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                    className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                   />
                 </div>
                 <div>
@@ -12239,7 +12239,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     type="date"
                     value={trainingWindow.endDate}
                     onChange={(e) => updateTrainingWindow({ ...trainingWindow, endDate: e.target.value })}
-                    className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                    className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                   />
                 </div>
                 <div>
@@ -12249,7 +12249,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     min="1"
                     value={trainingWindow.cap}
                     onChange={(e) => updateTrainingWindow({ ...trainingWindow, cap: Number(e.target.value) || 8 })}
-                    className="w-20 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                    className="w-20 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                   />
                 </div>
                 <div className="text-xs text-slate-400 max-w-xs">
@@ -12408,7 +12408,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 These photos show up in a gallery on the public homepage — the first page parents see.
               </p>
             </div>
-            <label className="flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 cursor-pointer transition">
+            <label className="flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 cursor-pointer transition">
               {achievementUploading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ImageIcon className="w-4 h-4" />}
               {achievementUploading ? "Uploading..." : "Add photo"}
               <input
@@ -12463,7 +12463,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <button
             onClick={() => setReportsSubTab("ops")}
             className={`text-sm px-4 py-2 rounded-lg font-medium transition ${
-              reportsSubTab === "ops" ? "bg-blue-950 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+              reportsSubTab === "ops" ? "bg-sky-950 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
             }`}
           >
             Daily Ops
@@ -12471,7 +12471,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <button
             onClick={() => setReportsSubTab("insights")}
             className={`text-sm px-4 py-2 rounded-lg font-medium transition ${
-              reportsSubTab === "insights" ? "bg-blue-950 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+              reportsSubTab === "insights" ? "bg-sky-950 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
             }`}
           >
             Analytics & Insights
@@ -12788,7 +12788,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       setReportAnchor(t.id === "month" ? monthKey() : todayISO());
                     }}
                     className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${
-                      reportType === t.id ? "bg-white shadow text-blue-950" : "text-slate-500 hover:text-slate-700"
+                      reportType === t.id ? "bg-white shadow text-sky-950" : "text-slate-500 hover:text-slate-700"
                     }`}
                   >
                     {t.label}
@@ -12803,12 +12803,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   type={reportType === "month" ? "month" : "date"}
                   value={reportAnchor}
                   onChange={(e) => setReportAnchor(e.target.value)}
-                  className="border border-slate-200 rounded-lg py-2 px-3 outline-none focus:border-blue-900 bg-white text-sm"
+                  className="border border-slate-200 rounded-lg py-2 px-3 outline-none focus:border-sky-900 bg-white text-sm"
                 />
               </div>
               <button
                 onClick={exportReport}
-                className="ml-auto flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
+                className="ml-auto flex items-center gap-1.5 px-4 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900"
               >
                 <FileDown className="w-4 h-4" /> {t("exportPDF")}
               </button>
@@ -12823,7 +12823,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               {t("downloadsReportHint")}
             </div>
 
-            <div className="print:hidden bg-white rounded-2xl border border-slate-200 p-5">
+            <div className="print:hidden bg-slate-50 rounded-2xl p-5">
               <h3 className="font-bold text-slate-900 mb-1">{t("sessionRosterTitle")}</h3>
               <p className="text-xs text-slate-400 mb-3">
                 {t("sessionRosterSub")}
@@ -12832,7 +12832,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <select
                   value={scheduleDayFilter}
                   onChange={(e) => { setScheduleDayFilter(e.target.value); setScheduleTimeFilter("all"); }}
-                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                 >
                   {DAY_GROUPS.map((d) => (
                     <option key={d.id} value={d.id}>{d.label}</option>
@@ -12841,7 +12841,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <select
                   value={scheduleTimeFilter}
                   onChange={(e) => setScheduleTimeFilter(e.target.value)}
-                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                 >
                   <option value="all">All times</option>
                   {(TIME_SLOTS[BRANCHES[0].id]?.[scheduleDayFilter] || []).slice().sort(
@@ -12854,12 +12854,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   type="month"
                   value={scheduleMonth}
                   onChange={(e) => setScheduleMonth(e.target.value)}
-                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                 />
                 <button
                   onClick={exportSessionRoster}
                   disabled={exportingRoster}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
                 >
                   {exportingRoster ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
                   {exportingRoster ? "Loading..." : "Preview & Export"}
@@ -12921,7 +12921,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     </div>
                     {signupsTarget > 0 && (
                       <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
-                        <div className={`h-full ${signupsTargetPct >= 100 ? "bg-green-500" : "bg-blue-950"}`} style={{ width: `${Math.min(100, signupsTargetPct)}%` }} />
+                        <div className={`h-full ${signupsTargetPct >= 100 ? "bg-green-500" : "bg-sky-950"}`} style={{ width: `${Math.min(100, signupsTargetPct)}%` }} />
                       </div>
                     )}
                   </div>
@@ -12952,7 +12952,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     <div className="text-xs text-slate-400">Expenses (EGP)</div>
                   </div>
                   <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
-                    <div className={`text-2xl font-bold ${netTotal >= 0 ? "text-blue-950" : "text-red-500"}`}>
+                    <div className={`text-2xl font-bold ${netTotal >= 0 ? "text-sky-950" : "text-red-500"}`}>
                       {netTotal.toLocaleString()}
                     </div>
                     <div className="text-xs text-slate-400">Net (EGP)</div>
@@ -13110,7 +13110,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       <div key={m.key} className="flex-1 flex flex-col items-center gap-1">
                         <div className="text-[10px] text-slate-500 font-medium">{m.total > 0 ? m.total.toLocaleString() : ""}</div>
                         <div
-                          className="w-full rounded-t-md bg-blue-900"
+                          className="w-full rounded-t-md bg-sky-900"
                           style={{ height: `${Math.max((m.total / revenueTrendMax) * 84, m.total > 0 ? 4 : 0)}px` }}
                           title={`${m.label}: ${m.total} EGP`}
                         />
@@ -13133,7 +13133,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             {(can("manageExpenses") || canEdit) && (
               <div className="print:hidden">
                 <h3 className="font-bold text-slate-900 mb-3">Log an expense</h3>
-                <div className="bg-white rounded-2xl border border-slate-200 p-4">
+                <div className="bg-slate-50 rounded-2xl p-4">
                   <div className="grid sm:grid-cols-3 gap-3 mb-3">
                     <div>
                       <label className="text-xs text-slate-500 mb-1 block">Amount (EGP)</label>
@@ -13142,7 +13142,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         min="0"
                         value={expAmount}
                         onChange={(e) => setExpAmount(e.target.value)}
-                        className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                        className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                         placeholder="e.g. 500"
                       />
                     </div>
@@ -13152,7 +13152,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         type="date"
                         value={expDate}
                         onChange={(e) => setExpDate(e.target.value)}
-                        className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                        className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                       />
                     </div>
                     <div>
@@ -13160,7 +13160,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       <input
                         value={expNote}
                         onChange={(e) => setExpNote(e.target.value)}
-                        className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                        className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                         placeholder="e.g. Pool chemicals"
                       />
                     </div>
@@ -13169,7 +13169,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <button
                     onClick={addExpense}
                     disabled={expSaving}
-                    className="py-2.5 px-5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60 flex items-center gap-2"
+                    className="py-2.5 px-5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60 flex items-center gap-2"
                   >
                     {expSaving && <RefreshCw className="w-4 h-4 animate-spin" />}
                     {expSaving ? "Saving..." : "Add expense"}
@@ -13271,7 +13271,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <select
                 value={coachPerfCoachFilter}
                 onChange={(e) => setCoachPerfCoachFilter(e.target.value)}
-                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
               >
                 <option value="all">{t("allCoaches")}</option>
                 {coaches.map((c) => (
@@ -13281,7 +13281,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <select
                 value={selectedMonthKey}
                 onChange={(e) => setCoachPerfMonth(e.target.value)}
-                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
               >
                 {monthOptions.map((m) => (
                   <option key={m.key} value={m.key}>{m.label}</option>
@@ -13290,7 +13290,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             </div>
 
             {coachPerfCoachFilter === "all" && (
-              <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+              <div className="bg-slate-50 rounded-2xl p-5 mb-6">
                 <h3 className="font-bold text-slate-900 mb-1">{t("topCoachesTitle")}</h3>
                 <p className="text-xs text-slate-400 mb-4">{t("topCoachesSub")}</p>
                 {topThree.length === 0 ? (
@@ -13302,7 +13302,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         <div className="text-3xl mb-1">{medals[i]}</div>
                         <div className="font-semibold text-slate-800">{row.coach.name}</div>
                         <div className="text-xs text-slate-400 mb-2">{t("overallScore")}</div>
-                        <div className="text-2xl font-bold text-blue-950">{row.overallScore}%</div>
+                        <div className="text-2xl font-bold text-sky-950">{row.overallScore}%</div>
                       </div>
                     ))}
                   </div>
@@ -13311,7 +13311,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             )}
 
             {coachInsights.length > 0 && (
-              <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+              <div className="bg-slate-50 rounded-2xl p-5 mb-6">
                 <h3 className="font-bold text-slate-900 mb-1">Coach performance insights</h3>
                 <p className="text-xs text-slate-400 mb-4">Each coach compared to this academy's own average — not an outside benchmark.</p>
                 <div className="space-y-2">
@@ -13325,7 +13325,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </div>
             )}
 
-            <div className="bg-white rounded-2xl border border-slate-200 p-4">
+            <div className="bg-slate-50 rounded-2xl p-4">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
@@ -13503,7 +13503,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         const totalOutstanding = familyBalances.reduce((sum, r) => sum + r.summary.balance, 0);
         const totalOverdue = familyBalances.reduce((sum, r) => sum + r.summary.overdue, 0);
 
-        const barRow = (label, value, max, colorClass = "bg-blue-900") => (
+        const barRow = (label, value, max, colorClass = "bg-sky-900") => (
           <div key={label} className="flex items-center gap-2 mb-2">
             <div className="w-28 text-xs text-slate-500 shrink-0 truncate" title={label}>{label}</div>
             <div className="flex-1 bg-slate-100 rounded-full h-5 overflow-hidden">
@@ -13684,7 +13684,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     <div key={m.key} className="flex-1 flex flex-col items-center gap-1">
                       <div className="text-[10px] text-slate-400 font-medium">{m.total > 0 ? m.total.toLocaleString() : ""}</div>
                       <div
-                        className="w-full rounded-t-md bg-blue-900"
+                        className="w-full rounded-t-md bg-sky-900"
                         style={{ height: `${Math.max((m.total / Math.max(...revenueHistory6mo.map((x) => x.total), ...revenueForecast.forecasts, 1)) * 80, m.total > 0 ? 4 : 0)}px` }}
                       />
                       <div className="text-[10px] text-slate-400">{m.label}</div>
@@ -13792,12 +13792,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   if (e.key === "Enter") addLevel();
                 }}
                 placeholder="New level name, e.g. Level 9"
-                className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
               />
               <button
                 onClick={addLevel}
                 disabled={levelsSaving || !newLevelName.trim()}
-                className="px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                className="px-4 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
               >
                 Add
               </button>
@@ -13810,7 +13810,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               const skills = LEVEL_SKILLS[level] || [];
               const isCustomized = customLevelSkills[level] != null;
               return (
-                <div key={level} className="bg-white rounded-2xl border border-slate-200 p-4">
+                <div key={level} className="bg-slate-50 rounded-2xl p-4">
                   <div className="flex items-center justify-between mb-2">
                     <h4 className="font-semibold text-slate-800">{level}</h4>
                     <div className="flex items-center gap-2">
@@ -13846,7 +13846,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       <button
                         onClick={() => printCertificatesForLevel(level)}
                         disabled={bulkCertLevel === level}
-                        className="text-xs px-2.5 py-1 rounded-lg bg-blue-50 text-blue-800 font-medium hover:bg-blue-100 disabled:opacity-60"
+                        className="text-xs px-2.5 py-1 rounded-lg bg-sky-50 text-sky-800 font-medium hover:bg-sky-100 disabled:opacity-60"
                       >
                         {bulkCertLevel === level ? "Printing..." : "Print all certificates"}
                       </button>
@@ -13855,9 +13855,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <div className="flex flex-wrap gap-1.5 mb-2">
                     {skills.length === 0 && <span className="text-xs text-slate-400">No skills set for this level</span>}
                     {skills.map((skill) => (
-                      <span key={skill} className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-800 flex items-center gap-1.5">
+                      <span key={skill} className="text-xs px-2.5 py-1 rounded-full bg-sky-50 text-sky-800 flex items-center gap-1.5">
                         {skill}
-                        <button onClick={() => removeSkill(level, skill)} className="text-blue-400 hover:text-red-500">
+                        <button onClick={() => removeSkill(level, skill)} className="text-sky-400 hover:text-red-500">
                           <X className="w-3 h-3" />
                         </button>
                       </span>
@@ -13870,7 +13870,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       onKeyDown={(e) => {
                         if (e.key === "Enter") addSkill(level);
                       }}
-                      className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                      className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900"
                       placeholder="Add a skill..."
                     />
                     <button
@@ -13928,7 +13928,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       <input
                         value={draft.name}
                         onChange={(e) => setPlanDrafts((prev) => ({ ...prev, [defaultPlan.id]: { ...draft, name: e.target.value } }))}
-                        className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                        className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                       />
                     </div>
                     <div>
@@ -13938,7 +13938,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         min="0"
                         value={draft.price}
                         onChange={(e) => setPlanDrafts((prev) => ({ ...prev, [defaultPlan.id]: { ...draft, price: e.target.value } }))}
-                        className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                        className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                       />
                     </div>
                   </div>
@@ -13951,7 +13951,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <button
             onClick={savePlanPrices}
             disabled={plansSaving}
-            className="mt-4 px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+            className="mt-4 px-5 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
           >
             {plansSaving ? "Saving..." : "Save"}
           </button>
@@ -13975,7 +13975,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <input
                   value={settingsWhatsapp}
                   onChange={(e) => setSettingsWhatsapp(e.target.value)}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                   placeholder="e.g. 01012345678"
                 />
               </div>
@@ -13984,7 +13984,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <input
                   value={settingsContactPhone}
                   onChange={(e) => setSettingsContactPhone(e.target.value)}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                   placeholder="e.g. 0223456789"
                 />
               </div>
@@ -13993,7 +13993,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <input
                   value={settingsFacebook}
                   onChange={(e) => setSettingsFacebook(e.target.value)}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                   placeholder="https://facebook.com/..."
                 />
               </div>
@@ -14002,7 +14002,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <input
                   value={settingsInstagram}
                   onChange={(e) => setSettingsInstagram(e.target.value)}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                   placeholder="https://instagram.com/..."
                 />
               </div>
@@ -14012,7 +14012,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <button
               onClick={saveContactInfo}
               disabled={contactSaving}
-              className="w-full mt-4 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+              className="w-full mt-4 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
             >
               {contactSaving ? "Saving..." : "Save"}
             </button>
@@ -14055,7 +14055,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 type="month"
                 value={attendanceMonth}
                 onChange={(e) => setAttendanceMonth(e.target.value)}
-                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
               />
             </div>
           </div>
@@ -14067,7 +14067,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <select
                   value={payrollSettings.weeklyDayOff || ""}
                   onChange={(e) => updatePayrollSettings({ ...payrollSettings, weeklyDayOff: e.target.value || null })}
-                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                 >
                   <option value="">None</option>
                   {WEEKDAY_NAMES.map((d) => (
@@ -14093,7 +14093,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     type="date"
                     value={newHolidayDate}
                     onChange={(e) => setNewHolidayDate(e.target.value)}
-                    className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                    className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900"
                   />
                   <button onClick={addHolidayDate} disabled={!newHolidayDate} className="px-3 py-2 rounded-lg bg-slate-800 text-white text-sm font-medium hover:bg-slate-700 disabled:opacity-50">
                     Add
@@ -14243,7 +14243,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <select
                   value={payrollAdjType}
                   onChange={(e) => setPayrollAdjType(e.target.value)}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
                 >
                   <option value="bonus">{t("payrollBonus")}</option>
                   <option value="deduction">{t("payrollDeduction")}</option>
@@ -14257,7 +14257,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   min="1"
                   value={payrollAdjAmount}
                   onChange={(e) => setPayrollAdjAmount(e.target.value)}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 />
               </div>
               <div>
@@ -14265,7 +14265,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <input
                   value={payrollAdjNote}
                   onChange={(e) => setPayrollAdjNote(e.target.value)}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 />
               </div>
             </div>
@@ -14273,7 +14273,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <button onClick={() => setPayrollAdjustmentFormFor(null)} className="flex-1 px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-sm font-semibold">
                 {t("payrollCancel")}
               </button>
-              <button onClick={savePayrollAdjustment} disabled={!payrollAdjAmount} className="flex-1 px-4 py-2.5 rounded-xl bg-blue-950 text-white text-sm font-semibold disabled:opacity-60">
+              <button onClick={savePayrollAdjustment} disabled={!payrollAdjAmount} className="flex-1 px-4 py-2.5 rounded-xl bg-sky-950 text-white text-sm font-semibold disabled:opacity-60">
                 {t("payrollSave")}
               </button>
             </div>
@@ -14339,7 +14339,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <button onClick={() => setPayslipFor(null)} className="flex-1 px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-sm font-semibold">
                   {t("payrollClose")}
                 </button>
-                <button onClick={() => window.print()} className="flex-1 px-4 py-2.5 rounded-xl bg-blue-950 text-white text-sm font-semibold">
+                <button onClick={() => window.print()} className="flex-1 px-4 py-2.5 rounded-xl bg-sky-950 text-white text-sm font-semibold">
                   {t("payrollPrint")}
                 </button>
               </div>
@@ -14469,7 +14469,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             </div>
             <button
               onClick={openNewCourseForm}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900"
             >
               <Plus className="w-4 h-4" /> Add course
             </button>
@@ -14492,7 +14492,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       </div>
                       <div className="text-xs text-slate-400">{p.courseTitle} · {p.price} EGP</div>
                       {p.screenshotDataUri && (
-                        <a href={p.screenshotDataUri} target="_blank" rel="noreferrer" className="text-xs text-blue-900 hover:underline">
+                        <a href={p.screenshotDataUri} target="_blank" rel="noreferrer" className="text-xs text-sky-900 hover:underline">
                           View payment screenshot
                         </a>
                       )}
@@ -14518,13 +14518,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           )}
 
           {courseForm && (
-            <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-5">
+            <div className="bg-slate-50 rounded-2xl p-5 mb-5">
               <div className="mb-3">
                 <label className="text-xs text-slate-500 mb-1 block">Title</label>
                 <input
                   value={courseForm.title}
                   onChange={(e) => setCourseForm({ ...courseForm, title: e.target.value })}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 />
               </div>
               <div className="mb-3">
@@ -14532,7 +14532,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <input
                   value={courseForm.description}
                   onChange={(e) => setCourseForm({ ...courseForm, description: e.target.value })}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 />
               </div>
               <div className="mb-3">
@@ -14561,7 +14561,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   min="0"
                   value={courseForm.price ?? 0}
                   onChange={(e) => setCourseForm({ ...courseForm, price: Number(e.target.value) })}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 />
                 <div className="text-xs text-slate-400 mt-1">
                   {Number(courseForm.price) > 0
@@ -14589,7 +14589,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                           value={m.title}
                           onChange={(e) => updateModule(m.id, { title: e.target.value })}
                           placeholder="Module title"
-                          className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                          className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900"
                         />
                         <button onClick={() => moveModule(mi, -1)} disabled={mi === 0} className="p-1.5 text-slate-400 hover:text-slate-600 disabled:opacity-30">
                           ↑
@@ -14614,7 +14614,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                             value={m.videoUrl}
                             onChange={(e) => updateModule(m.id, { videoUrl: e.target.value })}
                             placeholder="YouTube, Vimeo, etc."
-                            className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                            className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                           />
                         </div>
                         <div>
@@ -14627,7 +14627,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                             value={m.linkUrl}
                             onChange={(e) => updateModule(m.id, { linkUrl: e.target.value })}
                             placeholder="https://..."
-                            className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                            className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                           />
                         </div>
                         <div>
@@ -14665,7 +14665,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <button
                     onClick={() => setCourseForm({ ...courseForm, assignedCoachIds: [] })}
                     className={`text-xs px-3 py-1.5 rounded-full border ${
-                      (courseForm.assignedCoachIds || []).length === 0 ? "border-blue-900 bg-blue-50 text-blue-950 font-medium" : "border-slate-200 text-slate-500"
+                      (courseForm.assignedCoachIds || []).length === 0 ? "border-sky-900 bg-sky-50 text-sky-950 font-medium" : "border-slate-200 text-slate-500"
                     }`}
                   >
                     All coaches
@@ -14687,7 +14687,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                             setCourseForm({ ...courseForm, assignedCoachIds: next });
                           }}
                           className={`text-xs px-3 py-1.5 rounded-full border ${
-                            selected ? "border-blue-900 bg-blue-50 text-blue-950 font-medium" : "border-slate-200 text-slate-500"
+                            selected ? "border-sky-900 bg-sky-50 text-sky-950 font-medium" : "border-slate-200 text-slate-500"
                           }`}
                         >
                           {co.name}
@@ -14727,7 +14727,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                             setCourseForm({ ...courseForm, quiz });
                           }}
                           placeholder={`Question ${qi + 1}`}
-                          className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                          className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900"
                         />
                         <button
                           onClick={() => setCourseForm({ ...courseForm, quiz: courseForm.quiz.filter((_, i) => i !== qi) })}
@@ -14758,7 +14758,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                 setCourseForm({ ...courseForm, quiz });
                               }}
                               placeholder={`Option ${oi + 1}`}
-                              className="flex-1 border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-blue-900"
+                              className="flex-1 border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-sky-900"
                             />
                             {q.options.length > 2 && (
                               <button
@@ -14786,7 +14786,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               quiz[qi] = { ...quiz[qi], options: [...quiz[qi].options, ""] };
                               setCourseForm({ ...courseForm, quiz });
                             }}
-                            className="text-xs text-blue-900 hover:underline"
+                            className="text-xs text-sky-900 hover:underline"
                           >
                             + Add option
                           </button>
@@ -14801,7 +14801,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <button
                   onClick={saveCourse}
                   disabled={courseSaving || !courseForm.title.trim()}
-                  className="px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                  className="px-5 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
                 >
                   {courseSaving ? "Saving..." : "Save"}
                 </button>
@@ -14867,13 +14867,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <div className="flex gap-2 mb-3">
                   <button
                     onClick={() => setGrantMode("coach")}
-                    className={`text-sm px-3 py-1.5 rounded-lg border ${grantMode === "coach" ? "border-blue-900 bg-blue-50 text-blue-950 font-medium" : "border-slate-200 text-slate-500"}`}
+                    className={`text-sm px-3 py-1.5 rounded-lg border ${grantMode === "coach" ? "border-sky-900 bg-sky-50 text-sky-950 font-medium" : "border-slate-200 text-slate-500"}`}
                   >
                     A coach
                   </button>
                   <button
                     onClick={() => setGrantMode("student")}
-                    className={`text-sm px-3 py-1.5 rounded-lg border ${grantMode === "student" ? "border-blue-900 bg-blue-50 text-blue-950 font-medium" : "border-slate-200 text-slate-500"}`}
+                    className={`text-sm px-3 py-1.5 rounded-lg border ${grantMode === "student" ? "border-sky-900 bg-sky-50 text-sky-950 font-medium" : "border-slate-200 text-slate-500"}`}
                   >
                     A public course account
                   </button>
@@ -14882,7 +14882,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <select
                     value={grantCoachId}
                     onChange={(e) => setGrantCoachId(e.target.value)}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white mb-4"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white mb-4"
                   >
                     <option value="">Choose a coach...</option>
                     {coaches.map((co) => (
@@ -14895,7 +14895,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       value={grantEmail}
                       onChange={(e) => setGrantEmail(e.target.value)}
                       placeholder="Their account email"
-                      className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                      className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                     />
                     <div className="text-xs text-slate-400 mt-1">They must already have an account (from signing up on the Courses page).</div>
                   </div>
@@ -14904,7 +14904,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <button
                     onClick={submitGrant}
                     disabled={granting || (grantMode === "coach" ? !grantCoachId : !grantEmail.trim())}
-                    className="px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                    className="px-5 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
                   >
                     {granting ? "Granting..." : "Grant access"}
                   </button>
@@ -14982,21 +14982,21 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             </div>
             <button
               onClick={openIncidentForm}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900"
             >
               <Plus className="w-4 h-4" /> Log an incident
             </button>
           </div>
 
           {incidentForm && (
-            <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-5">
+            <div className="bg-slate-50 rounded-2xl p-5 mb-5">
               <div className="grid sm:grid-cols-2 gap-3 mb-3">
                 <div>
                   <label className="text-xs text-slate-500 mb-1 block">Swimmer's name</label>
                   <input
                     value={incidentForm.swimmerName}
                     onChange={(e) => setIncidentForm({ ...incidentForm, swimmerName: e.target.value })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                   />
                 </div>
                 <div>
@@ -15005,7 +15005,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     type="date"
                     value={incidentForm.date}
                     onChange={(e) => setIncidentForm({ ...incidentForm, date: e.target.value })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                   />
                 </div>
               </div>
@@ -15033,7 +15033,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   value={incidentForm.description}
                   onChange={(e) => setIncidentForm({ ...incidentForm, description: e.target.value })}
                   rows={3}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 />
               </div>
               <div className="mb-4">
@@ -15042,14 +15042,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   value={incidentForm.actionTaken}
                   onChange={(e) => setIncidentForm({ ...incidentForm, actionTaken: e.target.value })}
                   rows={2}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 />
               </div>
               <div className="flex gap-2">
                 <button
                   onClick={saveIncident}
                   disabled={incidentSaving || !incidentForm.swimmerName.trim() || !incidentForm.description.trim()}
-                  className="px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                  className="px-5 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
                 >
                   {incidentSaving ? "Saving..." : "Save"}
                 </button>
@@ -15105,7 +15105,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <div className="grid sm:grid-cols-2 gap-3">
             <button
               onClick={openContactModal}
-              className="bg-white rounded-2xl border border-slate-200 p-4 flex items-center gap-3 hover:border-blue-200 hover:bg-blue-50/40 transition text-left"
+              className="bg-slate-50 rounded-2xl p-4 flex items-center gap-3 hover:border-sky-200 hover:bg-sky-50/40 transition text-left"
             >
               <div className="w-10 h-10 rounded-xl bg-green-50 flex items-center justify-center shrink-0">
                 <MessageSquare className="w-5 h-5 text-green-700" />
@@ -15118,7 +15118,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             {canManagePlans && (
               <button
                 onClick={() => setShowPricesModal(true)}
-                className="bg-white rounded-2xl border border-slate-200 p-4 flex items-center gap-3 hover:border-blue-200 hover:bg-blue-50/40 transition text-left"
+                className="bg-slate-50 rounded-2xl p-4 flex items-center gap-3 hover:border-sky-200 hover:bg-sky-50/40 transition text-left"
               >
                 <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center shrink-0">
                   <Wallet className="w-5 h-5 text-indigo-700" />
@@ -15132,7 +15132,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             {canEditContent && (
               <button
                 onClick={() => setShowAchievementsModal(true)}
-                className="bg-white rounded-2xl border border-slate-200 p-4 flex items-center gap-3 hover:border-blue-200 hover:bg-blue-50/40 transition text-left"
+                className="bg-slate-50 rounded-2xl p-4 flex items-center gap-3 hover:border-sky-200 hover:bg-sky-50/40 transition text-left"
               >
                 <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center shrink-0">
                   <Star className="w-5 h-5 text-amber-600" />
@@ -15146,10 +15146,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             {(can("manageCurriculum") || canEdit) && (
               <button
                 onClick={() => setShowSkillsModal(true)}
-                className="bg-white rounded-2xl border border-slate-200 p-4 flex items-center gap-3 hover:border-blue-200 hover:bg-blue-50/40 transition text-left"
+                className="bg-slate-50 rounded-2xl p-4 flex items-center gap-3 hover:border-sky-200 hover:bg-sky-50/40 transition text-left"
               >
-                <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
-                  <Award className="w-5 h-5 text-blue-700" />
+                <div className="w-10 h-10 rounded-xl bg-sky-50 flex items-center justify-center shrink-0">
+                  <Award className="w-5 h-5 text-sky-700" />
                 </div>
                 <div>
                   <div className="font-semibold text-slate-900 text-sm">Skills</div>
@@ -15176,7 +15176,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 key={t.id}
                 onClick={() => (t.id === "skills" ? setShowSkillsModal(true) : setSettingsSubTab(t.id))}
                 className={`text-sm px-3 py-1.5 rounded-lg font-medium transition ${
-                  settingsSubTab === t.id ? "bg-blue-950 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                  settingsSubTab === t.id ? "bg-sky-950 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
                 }`}
               >
                 {t.label}
@@ -15189,7 +15189,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <div>
             <h3 className="font-bold text-slate-900 mb-1">Academy details</h3>
             <p className="text-sm text-slate-500 mb-4">Shows up on receipts, reminders, and the login screen.</p>
-            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+            <div className="bg-slate-50 rounded-2xl p-5">
               <div className="flex items-center gap-4 mb-4">
                 <img src={settingsLogo} alt="" className="w-16 h-16 rounded-xl object-contain border border-slate-100" />
                 <div>
@@ -15214,7 +15214,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <input
                     value={settingsName}
                     onChange={(e) => setSettingsName(e.target.value)}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                   />
                 </div>
                 <div>
@@ -15229,8 +15229,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     <input
                       value={settingsPrimaryColor}
                       onChange={(e) => setSettingsPrimaryColor(e.target.value)}
-                      className="flex-1 border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 font-mono text-sm"
-                      placeholder="#0c1e3e"
+                      className="flex-1 border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 font-mono text-sm"
+                      placeholder="#0369a1"
                     />
                   </div>
                 </div>
@@ -15239,7 +15239,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <input
                     value={settingsInstapayHandle}
                     onChange={(e) => setSettingsInstapayHandle(e.target.value)}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                   />
                 </div>
                 <div>
@@ -15247,7 +15247,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <input
                     value={settingsInstapayPhone}
                     onChange={(e) => setSettingsInstapayPhone(e.target.value)}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                   />
                 </div>
               </div>
@@ -15256,7 +15256,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <button
                 onClick={saveGeneralSettings}
                 disabled={settingsSaving}
-                className="px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                className="px-5 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
               >
                 {settingsSaving ? "Saving..." : "Save"}
               </button>
@@ -15268,7 +15268,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <p className="text-sm text-slate-500 mb-4">
               Optional — printed at the bottom of payment receipts if set. A small image of a handwritten signature or stamp works well.
             </p>
-            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+            <div className="bg-slate-50 rounded-2xl p-5">
               <div className="flex items-center gap-4">
                 {settingsSignature ? (
                   <img src={settingsSignature} alt="" className="w-32 h-16 rounded-lg object-contain border border-slate-100 bg-slate-50" />
@@ -15313,14 +15313,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <p className="text-sm text-slate-500 mb-4">
               Controls the look of the "Certificate of Achievement" printed when a swimmer levels up.
             </p>
-            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+            <div className="bg-slate-50 rounded-2xl p-5">
               <div className="mb-4">
                 <label className="text-xs text-slate-500 mb-1 block">Color</label>
                 <div className="flex items-center gap-2 flex-wrap">
                   <button
                     onClick={() => updateCertDesign({ ...certDesign, color: "auto" })}
                     className={`flex items-center gap-2 text-sm px-3 py-2 rounded-lg border ${
-                      certDesign.color === "auto" ? "border-blue-900 bg-blue-50" : "border-slate-200 hover:bg-slate-50"
+                      certDesign.color === "auto" ? "border-sky-900 bg-sky-50" : "border-slate-200 hover:bg-slate-50"
                     }`}
                   >
                     <span className="w-4 h-4 rounded-full border border-slate-200" style={{ background: certAutoColor }} />
@@ -15351,7 +15351,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       key={key}
                       onClick={() => updateCertDesign({ ...certDesign, font: key })}
                       className={`text-sm px-3 py-2 rounded-lg border ${
-                        certDesign.font === key ? "border-blue-900 bg-blue-50 text-blue-950 font-medium" : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                        certDesign.font === key ? "border-sky-900 bg-sky-50 text-sky-950 font-medium" : "border-slate-200 text-slate-600 hover:bg-slate-50"
                       }`}
                       style={{ fontFamily: f.body }}
                     >
@@ -15377,7 +15377,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                           className="hidden"
                           onChange={(e) => uploadVenueLogo(e.target.files?.[0])}
                         />
-                        <label htmlFor="venue-logo-input" className="cursor-pointer text-xs text-blue-900 hover:underline">
+                        <label htmlFor="venue-logo-input" className="cursor-pointer text-xs text-sky-900 hover:underline">
                           Change
                         </label>
                         <button onClick={removeVenueLogo} className="text-xs text-red-500 hover:underline text-left">
@@ -15394,7 +15394,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                           max="100"
                           value={venueLogo.x}
                           onChange={(e) => saveVenue({ ...venueLogo, x: Number(e.target.value) })}
-                          className="w-full border border-slate-200 rounded-lg py-1.5 px-2 text-sm outline-none focus:border-blue-900"
+                          className="w-full border border-slate-200 rounded-lg py-1.5 px-2 text-sm outline-none focus:border-sky-900"
                         />
                       </div>
                       <div>
@@ -15405,7 +15405,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                           max="100"
                           value={venueLogo.y}
                           onChange={(e) => saveVenue({ ...venueLogo, y: Number(e.target.value) })}
-                          className="w-full border border-slate-200 rounded-lg py-1.5 px-2 text-sm outline-none focus:border-blue-900"
+                          className="w-full border border-slate-200 rounded-lg py-1.5 px-2 text-sm outline-none focus:border-sky-900"
                         />
                       </div>
                       <div>
@@ -15416,7 +15416,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                           max="60"
                           value={venueLogo.width}
                           onChange={(e) => saveVenue({ ...venueLogo, width: Number(e.target.value) })}
-                          className="w-full border border-slate-200 rounded-lg py-1.5 px-2 text-sm outline-none focus:border-blue-900"
+                          className="w-full border border-slate-200 rounded-lg py-1.5 px-2 text-sm outline-none focus:border-sky-900"
                         />
                       </div>
                     </div>
@@ -15457,7 +15457,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <p className="text-sm text-slate-500 mb-4">
               Upload a certificate image you like, and the system prints it instead — the swimmer's name, level, date, and signature get placed on top of it. Overrides everything above.
             </p>
-            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+            <div className="bg-slate-50 rounded-2xl p-5">
               {certTemplate?.imageDataUri ? (
                 <>
                   <img src={certTemplate.imageDataUri} alt="" className="w-full max-w-md rounded-lg border border-slate-200 mb-4" />
@@ -15479,7 +15479,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               max="100"
                               value={certTemplate.positions?.[f.key]?.x ?? 50}
                               onChange={(e) => updateTemplatePosition(f.key, "x", e.target.value)}
-                              className="w-full border border-slate-200 rounded-lg py-1.5 px-2 text-sm outline-none focus:border-blue-900"
+                              className="w-full border border-slate-200 rounded-lg py-1.5 px-2 text-sm outline-none focus:border-sky-900"
                             />
                           </div>
                           <div className="flex-1">
@@ -15490,7 +15490,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               max="100"
                               value={certTemplate.positions?.[f.key]?.y ?? 50}
                               onChange={(e) => updateTemplatePosition(f.key, "y", e.target.value)}
-                              className="w-full border border-slate-200 rounded-lg py-1.5 px-2 text-sm outline-none focus:border-blue-900"
+                              className="w-full border border-slate-200 rounded-lg py-1.5 px-2 text-sm outline-none focus:border-sky-900"
                             />
                           </div>
                         </div>
@@ -15552,7 +15552,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 const slots = TIME_SLOTS[BRANCHES[0].id]?.[dg.id] || [];
                 const isCustomized = customTimeSlots[dg.id] != null;
                 return (
-                  <div key={dg.id} className="bg-white rounded-2xl border border-slate-200 p-4">
+                  <div key={dg.id} className="bg-slate-50 rounded-2xl p-4">
                     <div className="flex items-center justify-between mb-2">
                       <h4 className="font-semibold text-slate-800">{dg.label}</h4>
                       {isCustomized && (
@@ -15564,9 +15564,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     <div className="flex flex-wrap gap-1.5 mb-2">
                       {slots.length === 0 && <span className="text-xs text-slate-400">No times set for this day</span>}
                       {slots.map((slot) => (
-                        <span key={slot} className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-800 flex items-center gap-1.5">
+                        <span key={slot} className="text-xs px-2.5 py-1 rounded-full bg-sky-50 text-sky-800 flex items-center gap-1.5">
                           {slot}
-                          <button onClick={() => removeTimeSlot(dg.id, slot)} className="text-blue-400 hover:text-red-500">
+                          <button onClick={() => removeTimeSlot(dg.id, slot)} className="text-sky-400 hover:text-red-500">
                             <X className="w-3 h-3" />
                           </button>
                         </span>
@@ -15580,7 +15580,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                           if (e.key === "Enter") addTimeSlot(dg.id);
                         }}
                         placeholder="e.g. 7:30 PM"
-                        className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                        className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900"
                       />
                       <button
                         onClick={() => addTimeSlot(dg.id)}
@@ -15601,7 +15601,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               You're on one branch right now — this is here so you can add more later if the academy expands. A new branch won't have
               its own schedule/time slots set up automatically; you'd still manage those from the "Day & time slots" section above.
             </p>
-            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+            <div className="bg-slate-50 rounded-2xl p-5">
               <div className="space-y-3 mb-4">
                 {branchesDraft.map((b) => (
                   <div key={b.id} className="border border-slate-100 rounded-xl p-3">
@@ -15613,7 +15613,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         onKeyDown={(e) => {
                           if (e.key === "Enter") commitBranchRename();
                         }}
-                        className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                        className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900"
                       />
                       {branchesDraft.length > 1 && (
                         <button onClick={() => removeBranch(b.id)} className="p-2 text-slate-300 hover:text-red-500">
@@ -15643,7 +15643,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         <button
                           onClick={() => captureBranchLocation(b.id)}
                           disabled={locatingBranchId === b.id}
-                          className="text-blue-900 hover:underline disabled:opacity-60"
+                          className="text-sky-900 hover:underline disabled:opacity-60"
                         >
                           {locatingBranchId === b.id ? "Getting your location..." : "📍 Set GPS location (stand at the pool, then click)"}
                         </button>
@@ -15664,7 +15664,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     if (e.key === "Enter") addBranch();
                   }}
                   placeholder="New branch name"
-                  className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                  className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900"
                 />
                 <button
                   onClick={addBranch}
@@ -15684,13 +15684,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <div>
             <h3 className="font-bold text-slate-900 mb-1">Public homepage — hero section</h3>
             <p className="text-sm text-slate-500 mb-4">The banner text and big background photos at the top of your public page.</p>
-            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+            <div className="bg-slate-50 rounded-2xl p-5">
               <div className="mb-3">
                 <label className="text-xs text-slate-500 mb-1 block">Small tagline (above the title)</label>
                 <input
                   value={heroTagline}
                   onChange={(e) => setHeroTagline(e.target.value)}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 />
               </div>
               <div className="mb-4">
@@ -15699,7 +15699,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   value={heroSubtitle}
                   onChange={(e) => setHeroSubtitle(e.target.value)}
                   rows={3}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 />
               </div>
               <div className="mb-4">
@@ -15738,7 +15738,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <button
                 onClick={saveHeroContent}
                 disabled={heroSaving}
-                className="px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                className="px-5 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
               >
                 {heroSaving ? "Saving..." : "Save"}
               </button>
@@ -15750,7 +15750,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <p className="text-sm text-slate-500 mb-4">The three program cards on the public page.</p>
             <div className="space-y-4">
               {programsDraft.map((p, idx) => (
-                <div key={idx} className="bg-white rounded-2xl border border-slate-200 p-4">
+                <div key={idx} className="bg-slate-50 rounded-2xl p-4">
                   <div className="flex items-start gap-4 mb-3">
                     <div>
                       <img src={p.photo} alt="" className="w-20 h-20 object-cover rounded-lg border border-slate-200 mb-1" />
@@ -15761,7 +15761,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         className="hidden"
                         onChange={(e) => updateProgramPhoto(idx, e.target.files?.[0])}
                       />
-                      <label htmlFor={`program-photo-${idx}`} className="block text-center cursor-pointer text-xs text-blue-900 hover:underline">
+                      <label htmlFor={`program-photo-${idx}`} className="block text-center cursor-pointer text-xs text-sky-900 hover:underline">
                         Change
                       </label>
                     </div>
@@ -15770,13 +15770,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         value={p.title}
                         onChange={(e) => updateProgramField(idx, "title", e.target.value)}
                         placeholder="Title"
-                        className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm font-semibold outline-none focus:border-blue-900"
+                        className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm font-semibold outline-none focus:border-sky-900"
                       />
                       <input
                         value={p.subtitle}
                         onChange={(e) => updateProgramField(idx, "subtitle", e.target.value)}
                         placeholder="Subtitle"
-                        className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                        className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900"
                       />
                     </div>
                   </div>
@@ -15785,7 +15785,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     onChange={(e) => updateProgramField(idx, "desc", e.target.value)}
                     rows={2}
                     placeholder="Description"
-                    className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 mb-2"
+                    className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 mb-2"
                   />
                   <label className="text-xs text-slate-500 mb-1 block">Bullet points</label>
                   <div className="space-y-1.5 mb-2">
@@ -15794,7 +15794,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         <input
                           value={pt}
                           onChange={(e) => updateProgramPoint(idx, pointIdx, e.target.value)}
-                          className="flex-1 border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-blue-900"
+                          className="flex-1 border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-sky-900"
                         />
                         <button onClick={() => removeProgramPoint(idx, pointIdx)} className="p-1.5 text-slate-300 hover:text-red-500">
                           <X className="w-4 h-4" />
@@ -15802,7 +15802,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       </div>
                     ))}
                   </div>
-                  <button onClick={() => addProgramPoint(idx)} className="text-xs text-blue-900 hover:underline">
+                  <button onClick={() => addProgramPoint(idx)} className="text-xs text-sky-900 hover:underline">
                     + Add a bullet point
                   </button>
                 </div>
@@ -15811,7 +15811,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <button
                 onClick={saveProgramsContent}
                 disabled={programsSaving}
-                className="px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                className="px-5 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
               >
                 {programsSaving ? "Saving..." : "Save"}
               </button>
@@ -15821,7 +15821,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <div>
             <h3 className="font-bold text-slate-900 mb-1">Announcement for parents</h3>
             <p className="text-sm text-slate-500 mb-4">Shows as a banner to every parent next time they open the Parent Portal.</p>
-            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+            <div className="bg-slate-50 rounded-2xl p-5">
               {currentBroadcast && (
                 <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 mb-4 flex items-start justify-between gap-3">
                   <div>
@@ -15840,13 +15840,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 onChange={(e) => setBroadcastText(e.target.value)}
                 rows={3}
                 placeholder="e.g. The academy will be closed this Friday for maintenance."
-                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 mb-3"
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 mb-3"
               />
               {broadcastSaved && <div className="text-green-700 text-sm mb-3 bg-green-50 rounded-lg px-3 py-2">Sent to all parents.</div>}
               <button
                 onClick={sendBroadcast}
                 disabled={broadcastSaving || !broadcastText.trim()}
-                className="px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                className="px-5 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
               >
                 {broadcastSaving ? "Sending..." : "Send announcement"}
               </button>
@@ -15863,7 +15863,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             </p>
             {paymentCredsError && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-3">{paymentCredsError}</div>}
 
-            <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-4">
+            <div className="bg-slate-50 rounded-2xl p-5 mb-4">
               <div className="flex items-center justify-between mb-3">
                 <h4 className="font-semibold text-slate-800">Fawry</h4>
                 <span className={`text-xs px-2 py-0.5 rounded-full ${paymentCredsStatus.fawry ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"}`}>
@@ -15876,7 +15876,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <input
                     value={paymentCreds.fawryMerchantCode}
                     onChange={(e) => setPaymentCreds({ ...paymentCreds, fawryMerchantCode: e.target.value })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                     placeholder={paymentCredsStatus.fawry ? "•••••••• (already set)" : "From your Fawry business portal"}
                   />
                 </div>
@@ -15886,7 +15886,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     type="password"
                     value={paymentCreds.fawrySecureKey}
                     onChange={(e) => setPaymentCreds({ ...paymentCreds, fawrySecureKey: e.target.value })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                     placeholder={paymentCredsStatus.fawry ? "•••••••• (already set)" : "From your Fawry business portal"}
                   />
                 </div>
@@ -15894,14 +15894,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <button
                 onClick={() => savePaymentCreds("fawry")}
                 disabled={paymentCredsSaving || !paymentCreds.fawryMerchantCode.trim() || !paymentCreds.fawrySecureKey.trim()}
-                className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                className="px-5 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
               >
                 {paymentCredsSaving ? "Saving..." : "Save"}
               </button>
               {paymentCredsSaved === "fawry" && <span className="ml-2 text-sm text-green-700">Saved.</span>}
             </div>
 
-            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+            <div className="bg-slate-50 rounded-2xl p-5">
               <div className="flex items-center justify-between mb-3">
                 <h4 className="font-semibold text-slate-800">Paymob</h4>
                 <span className={`text-xs px-2 py-0.5 rounded-full ${paymentCredsStatus.paymob ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"}`}>
@@ -15915,7 +15915,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     type="password"
                     value={paymentCreds.paymobSecretKey}
                     onChange={(e) => setPaymentCreds({ ...paymentCreds, paymobSecretKey: e.target.value })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                     placeholder={paymentCredsStatus.paymob ? "•••••••• (already set)" : "sk_..."}
                   />
                 </div>
@@ -15924,7 +15924,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <input
                     value={paymentCreds.paymobPublicKey}
                     onChange={(e) => setPaymentCreds({ ...paymentCreds, paymobPublicKey: e.target.value })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                     placeholder={paymentCredsStatus.paymob ? "•••••••• (already set)" : "pk_..."}
                   />
                 </div>
@@ -15933,7 +15933,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <input
                     value={paymentCreds.paymobIntegrationId}
                     onChange={(e) => setPaymentCreds({ ...paymentCreds, paymobIntegrationId: e.target.value })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                     placeholder={paymentCredsStatus.paymob ? "•••••••• (already set)" : "From Payment Integrations"}
                   />
                 </div>
@@ -15943,7 +15943,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     type="password"
                     value={paymentCreds.paymobHmacSecret}
                     onChange={(e) => setPaymentCreds({ ...paymentCreds, paymobHmacSecret: e.target.value })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                     placeholder={paymentCredsStatus.paymob ? "•••••••• (already set)" : "From Account Info"}
                   />
                 </div>
@@ -15956,7 +15956,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   !paymentCreds.paymobPublicKey.trim() ||
                   !paymentCreds.paymobIntegrationId.trim()
                 }
-                className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                className="px-5 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
               >
                 {paymentCredsSaving ? "Saving..." : "Save"}
               </button>
@@ -15973,7 +15973,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             </p>
             {whatsappError && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-3">{whatsappError}</div>}
 
-            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+            <div className="bg-slate-50 rounded-2xl p-5">
               <div className="flex items-center justify-between mb-3">
                 <h4 className="font-semibold text-slate-800">Connection</h4>
                 <span className={`text-xs px-2 py-0.5 rounded-full ${whatsappStatus.configured ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"}`}>
@@ -15986,7 +15986,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <input
                     value={whatsappCreds.whatsappPhoneNumberId}
                     onChange={(e) => setWhatsappCreds({ ...whatsappCreds, whatsappPhoneNumberId: e.target.value })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                     placeholder={whatsappStatus.configured ? "•••••••• (already set)" : "From Meta developer console"}
                   />
                 </div>
@@ -15996,7 +15996,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     type="password"
                     value={whatsappCreds.whatsappAccessToken}
                     onChange={(e) => setWhatsappCreds({ ...whatsappCreds, whatsappAccessToken: e.target.value })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                     placeholder={whatsappStatus.configured ? "•••••••• (already set)" : "A permanent System User token"}
                   />
                 </div>
@@ -16005,7 +16005,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <input
                     value={whatsappCreds.whatsappTemplateName}
                     onChange={(e) => setWhatsappCreds({ ...whatsappCreds, whatsappTemplateName: e.target.value })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                     placeholder={whatsappStatus.templateName || "e.g. payment_reminder"}
                   />
                   <div className="text-xs text-slate-400 mt-1">
@@ -16020,14 +16020,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     max="15"
                     value={whatsappReminderDays}
                     onChange={(e) => setWhatsappReminderDays(Number(e.target.value))}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                   />
                 </div>
               </div>
               <button
                 onClick={saveWhatsappCreds}
                 disabled={whatsappSaving}
-                className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                className="px-5 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
               >
                 {whatsappSaving ? "Saving..." : "Save"}
               </button>
@@ -16044,7 +16044,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             </p>
             {telegramError && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-3">{telegramError}</div>}
 
-            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+            <div className="bg-slate-50 rounded-2xl p-5">
               <div className="flex items-center justify-between mb-3">
                 <h4 className="font-semibold text-slate-800">Connection</h4>
                 <span className={`text-xs px-2 py-0.5 rounded-full ${telegramStatus.configured ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"}`}>
@@ -16058,7 +16058,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     type="password"
                     value={telegramCreds.telegramBotToken}
                     onChange={(e) => setTelegramCreds({ ...telegramCreds, telegramBotToken: e.target.value })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                     placeholder={telegramStatus.configured ? "•••••••• (already set)" : "From @BotFather"}
                   />
                 </div>
@@ -16067,7 +16067,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <input
                     value={telegramCreds.telegramChatId}
                     onChange={(e) => setTelegramCreds({ ...telegramCreds, telegramChatId: e.target.value })}
-                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                    className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                     placeholder={telegramStatus.configured ? "•••••••• (already set)" : "Your Telegram chat ID"}
                   />
                 </div>
@@ -16078,7 +16078,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <button
                 onClick={saveTelegramCreds}
                 disabled={telegramSaving}
-                className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                className="px-5 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
               >
                 {telegramSaving ? "Saving..." : "Save"}
               </button>
@@ -16093,7 +16093,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <p className="text-sm text-slate-500 mb-4">
               Download everything — swimmers, payments, coaches, accounts, expenses, achievements, activity log, and more — as one file, for your own records.
             </p>
-            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+            <div className="bg-slate-50 rounded-2xl p-5">
               <button
                 onClick={downloadFullBackup}
                 disabled={backupRunning}
@@ -16107,7 +16107,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <p className="text-sm text-slate-500 mb-4">
               Search, session rosters, and the paginated swimmers list read from a separate fast lookup table. It updates automatically on every save going forward — run this once if it's ever out of sync (e.g. after importing swimmers a different way).
             </p>
-            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+            <div className="bg-slate-50 rounded-2xl p-5">
               <button
                 onClick={rebuildSwimmersIndex}
                 disabled={indexRebuilding}
@@ -16149,7 +16149,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               type="password"
               value={currentAdminPass}
               onChange={(e) => setCurrentAdminPass(e.target.value)}
-              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
             />
           </div>
           <div className="mb-3">
@@ -16158,7 +16158,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               type="password"
               value={newAdminPass}
               onChange={(e) => setNewAdminPass(e.target.value)}
-              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
             />
           </div>
           <div className="mb-4">
@@ -16170,7 +16170,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               onKeyDown={(e) => {
                 if (e.key === "Enter") changeAdminPassword();
               }}
-              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
             />
           </div>
           {adminPassError && <div className="text-red-500 text-sm mb-3">{adminPassError}</div>}
@@ -16178,7 +16178,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <button
             onClick={changeAdminPassword}
             disabled={adminPassSaving}
-            className="w-full py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+            className="w-full py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
           >
             {adminPassSaving ? "Saving..." : "Change password"}
           </button>
@@ -16240,7 +16240,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   setEditingAccount(null);
                   setShowAccountForm(true);
                 }}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900"
               >
                 <Plus className="w-4 h-4" /> Add account
               </button>
@@ -16268,7 +16268,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           ) : (
             <div className="space-y-2">
               {accounts.map((a) => (
-                <div key={a.id} className="bg-white rounded-2xl border border-slate-200 p-4 flex flex-wrap items-center gap-3">
+                <div key={a.id} className="bg-slate-50 rounded-2xl p-4 flex flex-wrap items-center gap-3">
                   <div className="min-w-[140px] flex-1">
                     <div className="font-semibold text-slate-900">{a.name}</div>
                     <div className="text-xs text-slate-400">Username: {a.username}</div>
@@ -16290,7 +16290,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         setEmailLoginError("");
                         setEmailLoginSuccess(false);
                       }}
-                      className="text-xs px-2.5 py-1 rounded-full bg-blue-50 text-blue-800 font-medium hover:bg-blue-100"
+                      className="text-xs px-2.5 py-1 rounded-full bg-sky-50 text-sky-800 font-medium hover:bg-sky-100"
                     >
                       Create email login
                     </button>
@@ -16338,7 +16338,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   setConfirmAction(null);
                   await action.onConfirm();
                 }}
-                className="flex-1 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
+                className="flex-1 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900"
               >
                 Confirm
               </button>
@@ -16372,7 +16372,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 </div>
                 <button
                   onClick={() => setEmailLoginModal(null)}
-                  className="w-full py-2.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition"
+                  className="w-full py-2.5 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 transition"
                 >
                   Done
                 </button>
@@ -16387,14 +16387,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   type="email"
                   value={emailLoginEmail}
                   onChange={(e) => setEmailLoginEmail(e.target.value)}
-                  className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+                  className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900 mb-3"
                   placeholder="Their email"
                 />
                 <input
                   type="text"
                   value={emailLoginPassword}
                   onChange={(e) => setEmailLoginPassword(e.target.value)}
-                  className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+                  className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900 mb-3"
                   placeholder="Choose a password for them (6+ characters)"
                 />
                 {emailLoginError && <div className="text-red-500 text-sm mb-3">{emailLoginError}</div>}
@@ -16402,7 +16402,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <button
                     onClick={createEmailLoginForAccount}
                     disabled={emailLoginSaving}
-                    className="flex-1 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60 flex items-center justify-center gap-2"
+                    className="flex-1 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60 flex items-center justify-center gap-2"
                   >
                     {emailLoginSaving && <RefreshCw className="w-4 h-4 animate-spin" />}
                     {emailLoginSaving ? "Creating..." : "Create"}
@@ -16437,7 +16437,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 autoFocus
                 value={refundAmount}
                 onChange={(e) => setRefundAmount(e.target.value)}
-                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
               />
               <p className="text-xs text-slate-400 mt-1">
                 Maximum refundable: {Math.max(0, (Number(refundModal.price) || 0) - (Number(refundModal.refundedAmount) || 0))} EGP
@@ -16448,7 +16448,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <input
                 value={refundReason}
                 onChange={(e) => setRefundReason(e.target.value)}
-                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 placeholder="e.g. Cancelled before the month started"
               />
             </div>
@@ -16488,7 +16488,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   type="button"
                   onClick={() => setCashMethod("cash")}
                   className={`flex-1 py-2 rounded-lg text-sm font-medium border transition ${
-                    cashMethod === "cash" ? "bg-blue-950 text-white border-blue-950" : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"
+                    cashMethod === "cash" ? "bg-sky-950 text-white border-sky-950" : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"
                   }`}
                 >
                   Cash
@@ -16497,7 +16497,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   type="button"
                   onClick={() => setCashMethod("card")}
                   className={`flex-1 py-2 rounded-lg text-sm font-medium border transition ${
-                    cashMethod === "card" ? "bg-blue-950 text-white border-blue-950" : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"
+                    cashMethod === "card" ? "bg-sky-950 text-white border-sky-950" : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"
                   }`}
                 >
                   Card (Visa)
@@ -16513,7 +16513,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 .filter((pay) => pay.paidMonth === paymentMonthFilter || pay.month === paymentMonthFilter)
                 .reduce((sum, pay) => sum + (Number(pay.price ?? pay.amount) || 0), 0);
               const remaining = Math.max(0, final - alreadyPaid);
-              return <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 mb-3">
+              return <div className="bg-sky-50 border border-sky-100 rounded-xl p-3 mb-3">
                 <div className="flex justify-between text-sm"><span>Plan</span><strong>{p.name}</strong></div>
                 <div className="flex justify-between text-sm"><span>Original price</span><strong>{p.price} EGP</strong></div>
                 <div className="grid grid-cols-2 gap-2 mt-2">
@@ -16521,27 +16521,27 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <div><label className="text-xs text-slate-500 mb-1 block">Final amount</label><input value={`${final} EGP`} readOnly className="w-full border border-slate-200 rounded-lg py-2 px-3 bg-slate-100" /></div>
                 </div>
                 {alreadyPaid > 0 && (
-                  <div className="mt-2 pt-2 border-t border-blue-200 space-y-1">
+                  <div className="mt-2 pt-2 border-t border-sky-200 space-y-1">
                     <div className="flex justify-between text-sm text-slate-600"><span>Already paid this month</span><strong>{alreadyPaid} EGP</strong></div>
-                    <div className="flex justify-between text-sm font-semibold text-blue-900"><span>Remaining balance</span><strong>{remaining} EGP</strong></div>
+                    <div className="flex justify-between text-sm font-semibold text-sky-900"><span>Remaining balance</span><strong>{remaining} EGP</strong></div>
                   </div>
                 )}
               </div>;
             })()}
             <div className="mb-3">
               <label className="text-xs text-slate-500 mb-1 block">Amount actually paid (EGP)</label>
-              <input type="number" min="0" autoFocus value={cashAmount} onChange={(e) => setCashAmount(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") recordCashPayment(); }} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Leave blank to use final amount" />
+              <input type="number" min="0" autoFocus value={cashAmount} onChange={(e) => setCashAmount(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") recordCashPayment(); }} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900" placeholder="Leave blank to use final amount" />
             </div>
             <div className="mb-3">
               <label className="text-xs text-slate-500 mb-1 block">Discount reason (optional)</label>
-              <input value={cashDiscountReason} onChange={(e) => setCashDiscountReason(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Sibling / Staff / Special discount" />
+              <input value={cashDiscountReason} onChange={(e) => setCashDiscountReason(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900" placeholder="Sibling / Staff / Special discount" />
             </div>
             <div className="mb-3">
               <label className="text-xs text-slate-500 mb-1 block">Note (optional)</label>
               <input
                 value={cashNote}
                 onChange={(e) => setCashNote(e.target.value)}
-                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 placeholder="e.g. Group plan — August"
               />
             </div>
@@ -16550,7 +16550,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <input
                 value={cashReceiptNo}
                 onChange={(e) => setCashReceiptNo(e.target.value)}
-                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 placeholder="e.g. 0452"
               />
             </div>
@@ -16568,7 +16568,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <button
                 onClick={recordCashPayment}
                 disabled={cashSaving}
-                className="flex-1 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60 flex items-center justify-center gap-2"
+                className="flex-1 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60 flex items-center justify-center gap-2"
               >
                 {cashSaving && <RefreshCw className="w-4 h-4 animate-spin" />}
                 {cashSaving ? "Saving..." : "Confirm payment"}
@@ -16598,7 +16598,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 onClick={confirmMarkPaidOnly}
                 disabled={markPaidSaving}
                 autoFocus
-                className="flex-1 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60 flex items-center justify-center gap-2"
+                className="flex-1 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60 flex items-center justify-center gap-2"
               >
                 {markPaidSaving && <RefreshCw className="w-4 h-4 animate-spin" />}
                 {markPaidSaving ? "Saving..." : "Yes, paid"}
@@ -16633,7 +16633,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 onKeyDown={(e) => {
                   if (e.key === "Enter") confirmFreeze();
                 }}
-                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 placeholder="e.g. 7"
               />
             </div>
@@ -16642,7 +16642,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <input
                 value={freezeNote}
                 onChange={(e) => setFreezeNote(e.target.value)}
-                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 placeholder="e.g. travelling"
               />
             </div>
@@ -16680,7 +16680,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <select
                 value={attendanceEditModal.accountName}
                 onChange={(e) => setAttendanceEditModal({ ...attendanceEditModal, accountName: e.target.value })}
-                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
               >
                 {[...accounts, ...coaches].map((a) => (
                   <option key={a.id} value={a.name}>{a.name}</option>
@@ -16693,7 +16693,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 type="date"
                 value={attendanceEditModal.date}
                 onChange={(e) => setAttendanceEditModal({ ...attendanceEditModal, date: e.target.value })}
-                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
               />
             </div>
             <div className="grid grid-cols-2 gap-3 mb-3">
@@ -16703,7 +16703,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   type="time"
                   value={attendanceEditModal.checkInTime}
                   onChange={(e) => setAttendanceEditModal({ ...attendanceEditModal, checkInTime: e.target.value })}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 />
               </div>
               <div>
@@ -16712,7 +16712,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   type="time"
                   value={attendanceEditModal.checkOutTime}
                   onChange={(e) => setAttendanceEditModal({ ...attendanceEditModal, checkOutTime: e.target.value })}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 />
               </div>
             </div>
@@ -16724,7 +16724,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 step="0.5"
                 value={attendanceEditModal.overtimeHours}
                 onChange={(e) => setAttendanceEditModal({ ...attendanceEditModal, overtimeHours: e.target.value })}
-                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 placeholder="e.g. 2"
               />
               <div className="text-xs text-slate-400 mt-1">Added to net pay at this person's own overtime rate (set in Accounts).</div>
@@ -16742,7 +16742,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <button
                 onClick={saveAttendanceEdit}
                 disabled={attendanceEditSaving}
-                className="flex-1 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                className="flex-1 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
               >
                 {attendanceEditSaving ? "Saving..." : "Save"}
               </button>
@@ -16795,7 +16795,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     onClick={() => setRosterHeaderAlign(opt.id)}
                     title={opt.label}
                     className={`w-8 h-8 rounded-md flex items-center justify-center ${
-                      rosterHeaderAlign === opt.id ? "bg-white text-blue-950 shadow-sm" : "text-slate-500 hover:bg-white"
+                      rosterHeaderAlign === opt.id ? "bg-white text-sky-950 shadow-sm" : "text-slate-500 hover:bg-white"
                     }`}
                   >
                     <opt.icon className="w-4 h-4" />
@@ -16814,7 +16814,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     onClick={() => setRosterAlign(opt.id)}
                     title={opt.label}
                     className={`w-8 h-8 rounded-md flex items-center justify-center ${
-                      rosterAlign === opt.id ? "bg-white text-blue-950 shadow-sm" : "text-slate-500 hover:bg-white"
+                      rosterAlign === opt.id ? "bg-white text-sky-950 shadow-sm" : "text-slate-500 hover:bg-white"
                     }`}
                   >
                     <opt.icon className="w-4 h-4" />
@@ -16857,7 +16857,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <div className="p-4 border-t border-slate-100 flex gap-2">
               <button
                 onClick={downloadRosterPdf}
-                className="flex-1 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 flex items-center justify-center gap-2"
+                className="flex-1 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 flex items-center justify-center gap-2"
               >
                 <FileDown className="w-4 h-4" /> Download PDF
               </button>
@@ -16887,7 +16887,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   value={makeupDate}
                   min={todayISO()}
                   onChange={(e) => setMakeupDate(e.target.value)}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 />
               </div>
               <div>
@@ -16895,7 +16895,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <select
                   value={makeupTime}
                   onChange={(e) => setMakeupTime(e.target.value)}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
                 >
                   <option value="">— Choose —</option>
                   {Array.from(new Set(Object.values(TIME_SLOTS[BRANCHES[0].id] || {}).flat())).map((t) => (
@@ -16909,7 +16909,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <select
                 value={makeupCoachId}
                 onChange={(e) => setMakeupCoachId(e.target.value)}
-                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
               >
                 <option value="">No coach assigned</option>
                 {coaches.map((c) => (
@@ -16922,7 +16922,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <input
                 value={makeupNote}
                 onChange={(e) => setMakeupNote(e.target.value)}
-                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 placeholder="e.g. making up for the missed session on Aug 3"
               />
             </div>
@@ -16931,7 +16931,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <button
                 onClick={saveMakeupSession}
                 disabled={makeupSaving}
-                className="flex-1 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                className="flex-1 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
               >
                 {makeupSaving ? "Saving..." : "Add makeup session"}
               </button>
@@ -16996,7 +16996,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <select
                 value={receiptTargetMonth}
                 onChange={(e) => setReceiptTargetMonth(e.target.value)}
-                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
               >
                 {[-1, 0, 1, 2].map((offset) => {
                   const d = new Date();
@@ -17017,7 +17017,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 onKeyDown={(e) => {
                   if (e.key === "Enter") confirmWithReceipt();
                 }}
-                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 placeholder="e.g. 0452 — leave blank to skip"
               />
             </div>
@@ -17026,7 +17026,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <button
                 onClick={confirmWithReceipt}
                 disabled={receiptSaving}
-                className="flex-1 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60 flex items-center justify-center gap-2"
+                className="flex-1 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60 flex items-center justify-center gap-2"
               >
                 {receiptSaving && <RefreshCw className="w-4 h-4 animate-spin" />}
                 {receiptSaving ? "Confirming..." : "Confirm payment"}
@@ -17048,7 +17048,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <div className="bg-white rounded-2xl p-5 max-w-lg w-full shadow-xl max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-bold text-slate-900 mb-1">Import swimmers</h3>
             {importPreview.fullHistoryNote && (
-              <div className={`text-xs rounded-lg px-3 py-2 mb-3 ${importPreview.fullHistoryNote.startsWith("No month") ? "bg-amber-50 text-amber-800" : "bg-blue-50 text-blue-800"}`}>{importPreview.fullHistoryNote}</div>
+              <div className={`text-xs rounded-lg px-3 py-2 mb-3 ${importPreview.fullHistoryNote.startsWith("No month") ? "bg-amber-50 text-amber-800" : "bg-sky-50 text-sky-800"}`}>{importPreview.fullHistoryNote}</div>
             )}
             <p className="text-sm text-slate-500 mb-4">
               Found {importPreview.valid.length + importPreview.duplicates.length + importPreview.errors.length} row
@@ -17111,7 +17111,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <button
                 onClick={confirmImport}
                 disabled={importing || importPreview.valid.length === 0}
-                className="flex-1 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60 flex items-center justify-center gap-2"
+                className="flex-1 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60 flex items-center justify-center gap-2"
               >
                 {importing && <RefreshCw className="w-4 h-4 animate-spin" />}
                 {importing ? "Importing..." : `Import ${importPreview.valid.length} swimmer${importPreview.valid.length === 1 ? "" : "s"}`}
@@ -17196,12 +17196,12 @@ function CoachForm({ initial, onSave, onCancel }) {
   };
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-5">
+    <div className="bg-slate-50 rounded-2xl p-5 mb-5">
       <h3 className="font-bold text-slate-900 mb-4">{initial ? "Edit coach" : "Add a coach"}</h3>
       <div className="grid sm:grid-cols-2 gap-3 mb-3">
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Branch</label>
-          <select value={branch} onChange={(e) => setBranch(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
+          <select value={branch} onChange={(e) => setBranch(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white">
             {BRANCHES.map((b) => (
               <option key={b.id} value={b.id}>{b.name}</option>
             ))}
@@ -17209,18 +17209,18 @@ function CoachForm({ initial, onSave, onCancel }) {
         </div>
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Name</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Coach name" />
+          <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900" placeholder="Coach name" />
         </div>
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Phone (optional)</label>
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="01xxxxxxxxx" />
+          <input value={phone} onChange={(e) => setPhone(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900" placeholder="01xxxxxxxxx" />
         </div>
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Login PIN (optional)</label>
           <input
             value={pin}
             onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 6))}
-            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
             placeholder="e.g. 1234"
             inputMode="numeric"
           />
@@ -17267,7 +17267,7 @@ function CoachForm({ initial, onSave, onCancel }) {
                 setNewOffSlotDay(e.target.value);
                 setNewOffSlotTime("");
               }}
-              className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+              className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
             >
               {DAY_GROUPS.map((d) => (
                 <option key={d.id} value={d.id}>{d.label}</option>
@@ -17276,7 +17276,7 @@ function CoachForm({ initial, onSave, onCancel }) {
             <select
               value={newOffSlotTime}
               onChange={(e) => setNewOffSlotTime(e.target.value)}
-              className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+              className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
             >
               <option value="">— Time —</option>
               {(TIME_SLOTS[BRANCHES[0].id]?.[newOffSlotDay] || []).map((t) => (
@@ -17302,7 +17302,7 @@ function CoachForm({ initial, onSave, onCancel }) {
             type="time"
             value={expectedStartTime}
             onChange={(e) => setExpectedStartTime(e.target.value)}
-            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
           />
           <div className="text-xs text-slate-400 mt-1">
             Used for late-checkin deductions in the Attendance tab.
@@ -17315,7 +17315,7 @@ function CoachForm({ initial, onSave, onCancel }) {
             min="0"
             value={monthlySalary}
             onChange={(e) => setMonthlySalary(e.target.value)}
-            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
             placeholder="e.g. 5000"
           />
           <div className="text-xs text-slate-400 mt-1">
@@ -17329,7 +17329,7 @@ function CoachForm({ initial, onSave, onCancel }) {
             min="0"
             value={overtimeHourlyRate}
             onChange={(e) => setOvertimeHourlyRate(e.target.value)}
-            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
             placeholder="e.g. 50"
           />
         </div>
@@ -17363,7 +17363,7 @@ function CoachForm({ initial, onSave, onCancel }) {
         <button
           onClick={save}
           disabled={saving}
-          className="flex-1 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60 flex items-center justify-center gap-2"
+          className="flex-1 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60 flex items-center justify-center gap-2"
         >
           {saving && <RefreshCw className="w-4 h-4 animate-spin" />}
           {saving ? "Saving..." : initial ? "Save changes" : "Add coach"}
@@ -17469,16 +17469,16 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
   };
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-5">
+    <div className="bg-slate-50 rounded-2xl p-5 mb-5">
       <h3 className="font-bold text-slate-900 mb-4">{initial ? "Edit account" : "Add a staff account"}</h3>
       <div className="grid sm:grid-cols-2 gap-3 mb-3">
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Name</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Staff member's name" />
+          <input value={name} onChange={(e) => setName(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900" placeholder="Staff member's name" />
         </div>
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Role</label>
-          <select value={role} onChange={(e) => { const r=e.target.value; setRole(r); setPermissions(prev => ({ ...ROLE_DEFAULT_PERMISSIONS[r], ...prev })); }} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
+          <select value={role} onChange={(e) => { const r=e.target.value; setRole(r); setPermissions(prev => ({ ...ROLE_DEFAULT_PERMISSIONS[r], ...prev })); }} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white">
             {ROLES.map((r) => (
               <option key={r.id} value={r.id}>{r.label}</option>
             ))}
@@ -17487,7 +17487,7 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
         {role !== "admin" && role !== "technical" && (
           <div>
             <label className="text-xs text-slate-500 mb-1 block">Access level</label>
-            <select value={accessLevel} onChange={(e) => setAccessLevel(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
+            <select value={accessLevel} onChange={(e) => setAccessLevel(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white">
               <option value="full">Full access — everything, including delete & Accounts</option>
               <option value="editor">Editor — add/edit swimmers, coaches & schedules, no deleting</option>
               <option value="viewer">Viewer — view only, no changes</option>
@@ -17496,11 +17496,11 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
         )}
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Username</label>
-          <input value={username} onChange={(e) => setUsername(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="e.g. sara" />
+          <input value={username} onChange={(e) => setUsername(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900" placeholder="e.g. sara" />
         </div>
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Password</label>
-          <input value={password} onChange={(e) => setPassword(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Choose a password" />
+          <input value={password} onChange={(e) => setPassword(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900" placeholder="Choose a password" />
         </div>
         {!initial?.authUserId && (
           <>
@@ -17510,7 +17510,7 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 placeholder="their.name@gmail.com"
               />
             </div>
@@ -17519,7 +17519,7 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
               <input
                 value={emailPassword}
                 onChange={(e) => setEmailPassword(e.target.value)}
-                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 placeholder="6+ characters"
               />
             </div>
@@ -17537,7 +17537,7 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
                     type="button"
                     onClick={() => setLevelAccess(checked ? levelAccess.filter((x) => x !== l) : [...levelAccess, l])}
                     className={`text-xs px-2.5 py-1.5 rounded-full border ${
-                      checked ? "border-blue-900 bg-blue-50 text-blue-950 font-medium" : "border-slate-200 text-slate-500"
+                      checked ? "border-sky-900 bg-sky-50 text-sky-950 font-medium" : "border-slate-200 text-slate-500"
                     }`}
                   >
                     {l}
@@ -17558,7 +17558,7 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
             <select
               value={branchRestriction}
               onChange={(e) => setBranchRestriction(e.target.value)}
-              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
             >
               <option value="">All branches</option>
               {BRANCHES.map((b) => (
@@ -17576,7 +17576,7 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
             <select
               value={linkedCoachId}
               onChange={(e) => setLinkedCoachId(e.target.value)}
-              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
             >
               <option value="">+ Create a new coach profile named "{name.trim() || "..."}"</option>
               {coaches.map((c) => (
@@ -17596,7 +17596,7 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
             type="time"
             value={expectedStartTime}
             onChange={(e) => setExpectedStartTime(e.target.value)}
-            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
           />
           <div className="text-xs text-slate-400 mt-1">
             Used for late-checkin deductions in the Attendance tab. 10 min grace period, then 1–10 min late = half hour deducted, more than 10 min late = half day deducted.
@@ -17609,7 +17609,7 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
             min="0"
             value={monthlySalary}
             onChange={(e) => setMonthlySalary(e.target.value)}
-            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
             placeholder="e.g. 5000"
           />
           <div className="text-xs text-slate-400 mt-1">
@@ -17623,7 +17623,7 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
             min="0"
             value={overtimeHourlyRate}
             onChange={(e) => setOvertimeHourlyRate(e.target.value)}
-            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
             placeholder="e.g. 50"
           />
           <div className="text-xs text-slate-400 mt-1">
@@ -17685,7 +17685,7 @@ function AccountForm({ initial, coaches = [], onSave, onCancel }) {
         <button
           onClick={save}
           disabled={saving}
-          className="flex-1 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60 flex items-center justify-center gap-2"
+          className="flex-1 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60 flex items-center justify-center gap-2"
         >
           {saving && <RefreshCw className="w-4 h-4 animate-spin" />}
           {saving ? "Saving..." : initial ? "Save changes" : "Add account"}
@@ -17778,12 +17778,12 @@ function ChatPanel({ myName, myRole, contacts }) {
   return (
     <div>
       {pushSubscribed === false && (
-        <div className="flex items-center justify-between gap-3 bg-blue-50 text-blue-900 text-sm rounded-xl px-4 py-2.5 mb-3">
+        <div className="flex items-center justify-between gap-3 bg-sky-50 text-sky-900 text-sm rounded-xl px-4 py-2.5 mb-3">
           <span>Turn on notifications to hear about new messages even when this tab is closed.</span>
           <button
             onClick={enableNotifications}
             disabled={pushSubscribing}
-            className="px-3 py-1.5 rounded-full bg-blue-950 text-white text-xs font-semibold hover:bg-blue-900 disabled:opacity-60 whitespace-nowrap"
+            className="px-3 py-1.5 rounded-full bg-sky-950 text-white text-xs font-semibold hover:bg-sky-900 disabled:opacity-60 whitespace-nowrap"
           >
             {pushSubscribing ? "Enabling..." : "Enable notifications"}
           </button>
@@ -17804,7 +17804,7 @@ function ChatPanel({ myName, myRole, contacts }) {
                   key={c.name}
                   onClick={() => setSelected(c.name)}
                   className={`w-full text-left px-4 py-3 border-b border-slate-50 hover:bg-slate-50 transition ${
-                    selected === c.name ? "bg-blue-50" : ""
+                    selected === c.name ? "bg-sky-50" : ""
                   }`}
                 >
                   <div className="flex items-center justify-between">
@@ -17830,11 +17830,11 @@ function ChatPanel({ myName, myRole, contacts }) {
                   <div key={m.id} className={`flex ${m.senderName === myName ? "justify-end" : "justify-start"}`}>
                     <div
                       className={`max-w-[75%] rounded-2xl px-3 py-2 text-sm ${
-                        m.senderName === myName ? "bg-blue-950 text-white" : "bg-slate-100 text-slate-700"
+                        m.senderName === myName ? "bg-sky-950 text-white" : "bg-slate-100 text-slate-700"
                       }`}
                     >
                       {m.text}
-                      <div className={`text-[10px] mt-1 ${m.senderName === myName ? "text-blue-200" : "text-slate-400"}`}>
+                      <div className={`text-[10px] mt-1 ${m.senderName === myName ? "text-sky-200" : "text-slate-400"}`}>
                         {new Date(m.createdAt).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
                       </div>
                     </div>
@@ -17849,12 +17849,12 @@ function ChatPanel({ myName, myRole, contacts }) {
                     if (e.key === "Enter") send();
                   }}
                   placeholder="Type a message..."
-                  className="flex-1 border border-slate-200 rounded-full py-2 px-4 text-sm outline-none focus:border-blue-900"
+                  className="flex-1 border border-slate-200 rounded-full py-2 px-4 text-sm outline-none focus:border-sky-900"
                 />
                 <button
                   onClick={send}
                   disabled={sending || !draft.trim()}
-                  className="px-4 py-2 rounded-full bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-50"
+                  className="px-4 py-2 rounded-full bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-50"
                 >
                   <Send className="w-4 h-4" />
                 </button>
@@ -17885,7 +17885,7 @@ function QRPosterModal({ onClose }) {
         <canvas ref={canvasRef} className="mx-auto" />
         <button
           onClick={() => window.print()}
-          className="mt-4 w-full py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
+          className="mt-4 w-full py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900"
         >
           Print
         </button>
@@ -18249,7 +18249,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
                 else setPassError("Wrong password");
               }
             }}
-            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900 mb-3"
             placeholder="Password"
           />
           {passError && <div className="text-red-500 text-sm mb-3">{passError}</div>}
@@ -18258,7 +18258,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
               if (pass === CONFIG.staffPassword) setAuthed(true);
               else setPassError("Wrong password");
             }}
-            className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition mb-2"
+            className="w-full py-3 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 transition mb-2"
           >
             Log in
           </button>
@@ -18304,13 +18304,13 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
               <button
                 onClick={() => setScannerOpen(true)}
                 disabled={checkingInOut}
-                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-950 text-white hover:bg-blue-900 disabled:opacity-60"
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-semibold bg-sky-950 text-white hover:bg-sky-900 disabled:opacity-60"
               >
                 <QrCode className="w-3.5 h-3.5" /> {!myAttendanceToday?.checkIn ? "Scan to check in" : "Scan to check out"}
               </button>
             )}
           </div>
-          {scanMessage && <div className="text-xs text-center text-blue-800 bg-blue-50 rounded-lg py-1.5 mt-1.5">{scanMessage}</div>}
+          {scanMessage && <div className="text-xs text-center text-sky-800 bg-sky-50 rounded-lg py-1.5 mt-1.5">{scanMessage}</div>}
         </div>
       )}
 
@@ -18350,7 +18350,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
               setBranch(nextBranch);
               setTime(getTimeOptions(nextBranch, dayGroup, effectiveLevel)[0]);
             }}
-            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
           >
             {BRANCHES.map((b) => (
               <option key={b.id} value={b.id}>{b.name}</option>
@@ -18373,9 +18373,9 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
               setBabyMode(checked);
               setTime(getTimeOptions(branch, dayGroup, checked ? "Baby" : null)[0]);
             }}
-            className="w-4 h-4 accent-blue-900"
+            className="w-4 h-4 accent-sky-900"
           />
-          <Baby className="w-4 h-4 text-blue-900" /> Baby class times (30 min)
+          <Baby className="w-4 h-4 text-sky-900" /> Baby class times (30 min)
         </label>
       )}
 
@@ -18389,7 +18389,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
               setDayGroup(nextDay);
               setTime(getTimeOptions(branch, nextDay, effectiveLevel)[0]);
             }}
-            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
           >
             {DAY_GROUPS.map((d) => (
               <option key={d.id} value={d.id}>{d.label}{d.id === todaysGroup ? " (today)" : ""}</option>
@@ -18401,7 +18401,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
           <select
             value={time}
             onChange={(e) => setTime(e.target.value)}
-            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
           >
             {getTimeOptions(branch, dayGroup, effectiveLevel).map((t) => (
               <option key={t} value={t}>{t}</option>
@@ -18481,7 +18481,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
         {sessionSwimmers.map((s) => {
           const status = (s.attendance || {})[today];
           return (
-            <div key={s.id} className="bg-white rounded-2xl border border-slate-200 p-4">
+            <div key={s.id} className="bg-slate-50 rounded-2xl p-4">
               <div className="flex flex-wrap items-center gap-3 mb-3">
                 <div className="min-w-[120px] flex-1">
                   <div className="font-semibold text-slate-900">{s.name}</div>
@@ -18505,7 +18505,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
                       const latest = s.certificates[s.certificates.length - 1];
                       printCertificate({ swimmerName: s.name, level: latest.level, date: latest.date });
                     }}
-                    className="px-3 py-1.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-800 hover:bg-blue-100 whitespace-nowrap"
+                    className="px-3 py-1.5 rounded-full text-xs font-semibold bg-sky-50 text-sky-800 hover:bg-sky-100 whitespace-nowrap"
                     title="Print their latest certificate"
                   >
                     🎓 Certificate
@@ -18533,12 +18533,12 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
                   value={noteDraft[s.id] ?? s.sessionNotes?.[today] ?? ""}
                   onChange={(e) => setNoteDraft((prev) => ({ ...prev, [s.id]: e.target.value }))}
                   placeholder="Note for today's session (optional)"
-                  className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                  className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900"
                 />
                 <button
                   onClick={() => saveNote(s)}
                   disabled={noteStatus[s.id] === "saving"}
-                  className="px-3 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60 flex items-center gap-1.5 whitespace-nowrap"
+                  className="px-3 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60 flex items-center gap-1.5 whitespace-nowrap"
                 >
                   {noteStatus[s.id] === "saving" && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
                   {noteStatus[s.id] === "saving" ? "Saving..." : noteStatus[s.id] === "saved" ? "Saved ✓" : "Save"}
@@ -18728,7 +18728,7 @@ function ModuleContent({ module: m, protect = false }) {
         ))}
       {m.text && <div className="text-sm text-slate-600 select-none" dangerouslySetInnerHTML={{ __html: m.text }} />}
       {m.linkUrl && (
-        <a href={m.linkUrl} target="_blank" rel="noreferrer" className="text-sm text-blue-900 hover:underline block">
+        <a href={m.linkUrl} target="_blank" rel="noreferrer" className="text-sm text-sky-900 hover:underline block">
           Open resource ↗
         </a>
       )}
@@ -18738,7 +18738,7 @@ function ModuleContent({ module: m, protect = false }) {
         ) : (
           <div className="text-sm text-slate-500">
             This module's file ({m.fileName}) can only be opened directly —{" "}
-            <a href={m.fileUrl} target="_blank" rel="noreferrer" className="text-blue-900 hover:underline">
+            <a href={m.fileUrl} target="_blank" rel="noreferrer" className="text-sky-900 hover:underline">
               open it
             </a>
             .
@@ -18866,7 +18866,7 @@ function CoachTrainingSection({ coachId, coachName }) {
   if (loading) return null;
 
   return (
-    <div className="mb-6 bg-white rounded-2xl border border-slate-200 p-4">
+    <div className="mb-6 bg-slate-50 rounded-2xl p-4">
       <div className="flex items-center justify-between mb-3">
         <h3 className="font-bold text-slate-900 flex items-center gap-2">
           <GraduationCap className="w-4 h-4" /> Training courses
@@ -18926,7 +18926,7 @@ function CoachTrainingSection({ coachId, coachName }) {
                           <button
                             onClick={() => submitCoursePayment(c)}
                             disabled={!paymentScreenshot || paymentSubmitting}
-                            className="text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-950 text-white hover:bg-blue-900 disabled:opacity-60"
+                            className="text-xs px-3 py-1.5 rounded-full font-semibold bg-sky-950 text-white hover:bg-sky-900 disabled:opacity-60"
                           >
                             {paymentSubmitting ? "Sending..." : "Submit payment"}
                           </button>
@@ -18938,7 +18938,7 @@ function CoachTrainingSection({ coachId, coachName }) {
                     ) : (
                       <button
                         onClick={() => setPayingCourseId(c.id)}
-                        className="text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-950 text-white hover:bg-blue-900"
+                        className="text-xs px-3 py-1.5 rounded-full font-semibold bg-sky-950 text-white hover:bg-sky-900"
                       >
                         Pay {c.price} EGP to unlock
                       </button>
@@ -18961,7 +18961,7 @@ function CoachTrainingSection({ coachId, coachName }) {
                                 {!quizResult.passed && (
                                   <button
                                     onClick={() => startQuiz(c)}
-                                    className="text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-950 text-white hover:bg-blue-900"
+                                    className="text-xs px-3 py-1.5 rounded-full font-semibold bg-sky-950 text-white hover:bg-sky-900"
                                   >
                                     Try again
                                   </button>
@@ -18993,7 +18993,7 @@ function CoachTrainingSection({ coachId, coachName }) {
                                 <button
                                   onClick={() => submitQuiz(c)}
                                   disabled={Object.keys(quizAnswers).length < c.quiz.length}
-                                  className="mt-4 text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-950 text-white hover:bg-blue-900 disabled:opacity-50"
+                                  className="mt-4 text-xs px-3 py-1.5 rounded-full font-semibold bg-sky-950 text-white hover:bg-sky-900 disabled:opacity-50"
                                 >
                                   Submit answers
                                 </button>
@@ -19013,7 +19013,7 @@ function CoachTrainingSection({ coachId, coachName }) {
                             {isDone && (
                               <button
                                 onClick={() => printCourseCertificate({ coachName, courseTitle: c.title, date: todayISO() })}
-                                className="text-xs px-3 py-1.5 rounded-full font-medium bg-blue-50 text-blue-800 hover:bg-blue-100"
+                                className="text-xs px-3 py-1.5 rounded-full font-medium bg-sky-50 text-sky-800 hover:bg-sky-100"
                               >
                                 🎓 Print certificate
                               </button>
@@ -19033,7 +19033,7 @@ function CoachTrainingSection({ coachId, coachName }) {
                           {isDone && (
                             <button
                               onClick={() => printCourseCertificate({ coachName, courseTitle: c.title, date: todayISO() })}
-                              className="text-xs px-3 py-1.5 rounded-full font-medium bg-blue-50 text-blue-800 hover:bg-blue-100"
+                              className="text-xs px-3 py-1.5 rounded-full font-medium bg-sky-50 text-sky-800 hover:bg-sky-100"
                             >
                               🎓 Print certificate
                             </button>
@@ -19297,7 +19297,7 @@ function CoachView({ onExit, preAuthedCoach = null }) {
           <select
             value={selectedCoachId}
             onChange={(e) => setSelectedCoachId(e.target.value)}
-            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3 bg-white"
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900 mb-3 bg-white"
           >
             <option value="">Choose your name</option>
             {coaches.map((c) => (
@@ -19315,13 +19315,13 @@ function CoachView({ onExit, preAuthedCoach = null }) {
             onKeyDown={(e) => {
               if (e.key === "Enter") login();
             }}
-            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900 mb-3"
             placeholder="PIN"
           />
           {loginError && <div className="text-red-500 text-sm mb-3">{loginError}</div>}
           <button
             onClick={login}
-            className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition mb-2"
+            className="w-full py-3 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 transition mb-2"
           >
             Log in
           </button>
@@ -19350,7 +19350,7 @@ function CoachView({ onExit, preAuthedCoach = null }) {
         <div>
           <h2 className="text-xl font-bold text-slate-900">Hi, {authedCoach.name}</h2>
           <div className="text-sm text-slate-400">Your weekly schedule</div>
-          {canFollowProgram && <div className="text-xs text-blue-700 mt-1">Technical access: {coachProgramAccess.concat(coachLevelAccess).join(" · ")}</div>}
+          {canFollowProgram && <div className="text-xs text-sky-700 mt-1">Technical access: {coachProgramAccess.concat(coachLevelAccess).join(" · ")}</div>}
         </div>
         <div className="flex items-center gap-1">
           <button onClick={loadSwimmers} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
@@ -19387,13 +19387,13 @@ function CoachView({ onExit, preAuthedCoach = null }) {
             <button
               onClick={() => setScannerOpen(true)}
               disabled={checkingInOut}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-950 text-white hover:bg-blue-900 disabled:opacity-60"
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-semibold bg-sky-950 text-white hover:bg-sky-900 disabled:opacity-60"
             >
               <QrCode className="w-3.5 h-3.5" /> {!myAttendanceToday?.checkIn ? "Scan to check in" : "Scan to check out"}
             </button>
           )}
         </div>
-        {scanMessage && <div className="text-xs text-center text-blue-800 bg-blue-50 rounded-lg py-1.5 mt-1.5">{scanMessage}</div>}
+        {scanMessage && <div className="text-xs text-center text-sky-800 bg-sky-50 rounded-lg py-1.5 mt-1.5">{scanMessage}</div>}
       </div>
 
       {scannerOpen && <QRScanner onScan={handleQRScan} onClose={() => setScannerOpen(false)} />}
@@ -19413,14 +19413,14 @@ function CoachView({ onExit, preAuthedCoach = null }) {
       )}
 
       {authedCoach?.canWriteWorkouts && (
-        <div className="mb-6 bg-white rounded-2xl border border-slate-200 p-4">
+        <div className="mb-6 bg-slate-50 rounded-2xl p-4">
           <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
             <h3 className="font-bold text-slate-900">Daily training plan</h3>
             <input
               type="date"
               value={workoutDate}
               onChange={(e) => setWorkoutDate(e.target.value)}
-              className="border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-blue-900 bg-white"
+              className="border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-sky-900 bg-white"
             />
           </div>
           <div className="space-y-3">
@@ -19430,7 +19430,7 @@ function CoachView({ onExit, preAuthedCoach = null }) {
                 value={warmUp}
                 onChange={(e) => setWarmUp(e.target.value)}
                 rows={3}
-                className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900"
                 placeholder="e.g. 400m easy freestyle, 200m kick"
               />
             </div>
@@ -19440,7 +19440,7 @@ function CoachView({ onExit, preAuthedCoach = null }) {
                 value={mainSet}
                 onChange={(e) => setMainSet(e.target.value)}
                 rows={4}
-                className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900"
                 placeholder="e.g. 8x100m freestyle @1:30, 4x50m sprint"
               />
             </div>
@@ -19450,7 +19450,7 @@ function CoachView({ onExit, preAuthedCoach = null }) {
                 value={coolDown}
                 onChange={(e) => setCoolDown(e.target.value)}
                 rows={2}
-                className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900"
+                className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900"
                 placeholder="e.g. 200m easy swim"
               />
             </div>
@@ -19459,7 +19459,7 @@ function CoachView({ onExit, preAuthedCoach = null }) {
             <button
               onClick={saveWorkout}
               disabled={workoutSaving}
-              className="flex-1 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+              className="flex-1 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
             >
               {workoutSaving ? "Saving..." : workoutSaved ? "Saved ✓" : "Save"}
             </button>
@@ -19479,7 +19479,7 @@ function CoachView({ onExit, preAuthedCoach = null }) {
                     key={w.id}
                     onClick={() => setWorkoutDate(w.date)}
                     className={`text-xs px-2.5 py-1 rounded-full font-medium ${
-                      w.date === workoutDate ? "bg-blue-950 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      w.date === workoutDate ? "bg-sky-950 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                     }`}
                   >
                     {w.date}
@@ -19501,12 +19501,12 @@ function CoachView({ onExit, preAuthedCoach = null }) {
         {byDay.map((d) => (
           <div
             key={d.id}
-            className={`rounded-2xl border p-4 ${d.isToday ? "border-blue-900 bg-blue-50/40" : "border-slate-200 bg-white"}`}
+            className={`rounded-2xl border p-4 ${d.isToday ? "border-sky-900 bg-sky-50/40" : "border-slate-200 bg-white"}`}
           >
             <div className="flex items-center gap-2 mb-3">
-              <CalendarDays className="w-4 h-4 text-blue-900" />
+              <CalendarDays className="w-4 h-4 text-sky-900" />
               <div className="font-semibold text-slate-900">{d.label}</div>
-              {d.isToday && <span className="text-xs bg-blue-900 text-white px-2 py-0.5 rounded-full">Today</span>}
+              {d.isToday && <span className="text-xs bg-sky-900 text-white px-2 py-0.5 rounded-full">Today</span>}
               <span className="text-xs text-slate-400 ml-auto">
                 {d.sessions.length} session{d.sessions.length === 1 ? "" : "s"}
               </span>
@@ -19536,7 +19536,7 @@ function CoachView({ onExit, preAuthedCoach = null }) {
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
-                          <div className="text-sm font-semibold text-blue-900 whitespace-nowrap">
+                          <div className="text-sm font-semibold text-sky-900 whitespace-nowrap">
                             {s.time} - {end}
                           </div>
                           {canExpand && (
@@ -19665,7 +19665,7 @@ function TechnicalView({ accountName, onExit }) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Type a swimmer's name..."
-          className="w-full border border-slate-200 rounded-xl py-3 pl-10 pr-3 outline-none focus:border-blue-900"
+          className="w-full border border-slate-200 rounded-xl py-3 pl-10 pr-3 outline-none focus:border-sky-900"
           autoFocus
         />
       </div>
@@ -19681,7 +19681,7 @@ function TechnicalView({ accountName, onExit }) {
           const already = (s.attendance || {})[today] === "present" || justCheckedIn[s.id];
           const nextLvl = nextLevelOf(s.level);
           return (
-            <div key={s.id} className="bg-white rounded-2xl border border-slate-200 p-4 flex items-center justify-between gap-3">
+            <div key={s.id} className="bg-slate-50 rounded-2xl p-4 flex items-center justify-between gap-3">
               <div>
                 <div className="font-semibold text-slate-900">{s.name}</div>
                 <div className="text-xs text-slate-400">
@@ -19702,7 +19702,7 @@ function TechnicalView({ accountName, onExit }) {
                   onClick={() => checkIn(s)}
                   disabled={already}
                   className={`px-4 py-2 rounded-full text-xs font-semibold whitespace-nowrap ${
-                    already ? "bg-green-100 text-green-700" : "bg-blue-950 text-white hover:bg-blue-900"
+                    already ? "bg-green-100 text-green-700" : "bg-sky-950 text-white hover:bg-sky-900"
                   }`}
                 >
                   {already ? "Checked in ✓" : "Check in"}
@@ -19812,7 +19812,7 @@ function StaffPortal({ onExit }) {
             type="email"
             value={authEmail}
             onChange={(e) => setAuthEmail(e.target.value)}
-            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900 mb-3"
             placeholder="Email"
             autoComplete="username"
           />
@@ -19823,7 +19823,7 @@ function StaffPortal({ onExit }) {
             onKeyDown={(e) => {
               if (e.key === "Enter") login();
             }}
-            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900 mb-3"
             placeholder="Password"
             autoComplete="current-password"
           />
@@ -19831,7 +19831,7 @@ function StaffPortal({ onExit }) {
           <button
             onClick={login}
             disabled={authLoading}
-            className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition mb-2 disabled:opacity-60 flex items-center justify-center gap-2"
+            className="w-full py-3 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 transition mb-2 disabled:opacity-60 flex items-center justify-center gap-2"
           >
             {authLoading && <RefreshCw className="w-4 h-4 animate-spin" />}
             {authLoading ? "Signing in..." : "Log in"}
@@ -19919,7 +19919,7 @@ function AchievementsSlideshow({ achievements }) {
               key={a.id}
               onClick={() => setIndex(i)}
               aria-label={`Go to photo ${i + 1}`}
-              className={`w-2 h-2 rounded-full transition ${i === index ? "bg-blue-950 w-5" : "bg-slate-300"}`}
+              className={`w-2 h-2 rounded-full transition ${i === index ? "bg-sky-950 w-5" : "bg-slate-300"}`}
             />
           ))}
         </div>
@@ -20135,14 +20135,14 @@ function CoursesPortalView({ onBack }) {
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Your name"
-              className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+              className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-sky-900"
             />
           )}
           <input
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder={authMode === "signup" ? "Email" : "Email or coach username"}
-            className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+            className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-sky-900"
           />
           <input
             type="password"
@@ -20152,13 +20152,13 @@ function CoursesPortalView({ onBack }) {
             onKeyDown={(e) => {
               if (e.key === "Enter") submitAuth();
             }}
-            className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+            className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-sky-900"
           />
           {authError && <div className="text-red-500 text-sm">{authError}</div>}
           <button
             onClick={submitAuth}
             disabled={authSubmitting}
-            className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 disabled:opacity-60"
+            className="w-full py-3 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 disabled:opacity-60"
           >
             {authSubmitting ? "..." : authMode === "signup" ? "Sign up" : "Log in"}
           </button>
@@ -20194,30 +20194,30 @@ function CoursesPortalView({ onBack }) {
           {activeCourse.description && <p className="text-sm text-slate-500 mb-6">{activeCourse.description}</p>}
 
           {!student ? (
-            <div className="bg-white rounded-2xl border border-slate-200 p-6 text-center">
+            <div className="bg-slate-50 rounded-2xl p-6 text-center">
               <p className="text-sm text-slate-500 mb-4">Log in or create an account to {isFree ? "start" : "buy"} this course.</p>
               <button
                 onClick={() => {
                   setPendingCourse(activeCourse);
                   setAuthOpen(true);
                 }}
-                className="px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
+                className="px-5 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900"
               >
                 Log in / Sign up
               </button>
             </div>
           ) : paidFor || isFree ? (
-            <div className="bg-white rounded-2xl border border-slate-200 p-5">
+            <div className="bg-slate-50 rounded-2xl p-5">
               <ModuleList modules={getCourseModules(activeCourse)} protect />
             </div>
           ) : pendingPay ? (
-            <div className="bg-white rounded-2xl border border-slate-200 p-6 text-center">
+            <div className="bg-slate-50 rounded-2xl p-6 text-center">
               <p className="text-sm text-amber-600 bg-amber-50 rounded-lg px-4 py-3">
                 Your payment screenshot is being reviewed — this course will unlock once it's confirmed.
               </p>
             </div>
           ) : payingCourseId === activeCourse.id ? (
-            <div className="bg-white rounded-2xl border border-slate-200 p-6">
+            <div className="bg-slate-50 rounded-2xl p-6">
               <p className="text-sm text-slate-600 mb-3">
                 {CONFIG.instapayHandle
                   ? <>Pay <strong>{activeCourse.price} EGP</strong> via Instapay to <strong>{CONFIG.instapayHandle}</strong> ({CONFIG.instapayPhone}), then upload the screenshot below.</>
@@ -20237,7 +20237,7 @@ function CoursesPortalView({ onBack }) {
                 <button
                   onClick={() => submitPayment(activeCourse)}
                   disabled={!paymentScreenshot || paymentSubmitting}
-                  className="px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+                  className="px-5 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
                 >
                   {paymentSubmitting ? "Sending..." : "Submit payment"}
                 </button>
@@ -20247,11 +20247,11 @@ function CoursesPortalView({ onBack }) {
               </div>
             </div>
           ) : (
-            <div className="bg-white rounded-2xl border border-slate-200 p-6 text-center">
+            <div className="bg-slate-50 rounded-2xl p-6 text-center">
               <p className="text-sm text-slate-500 mb-4">This course costs {activeCourse.price} EGP.</p>
               <button
                 onClick={() => setPayingCourseId(activeCourse.id)}
-                className="px-5 py-2.5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
+                className="px-5 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900"
               >
                 Pay {activeCourse.price} EGP to unlock
               </button>
@@ -20283,7 +20283,7 @@ function CoursesPortalView({ onBack }) {
                 setPendingCourse(null);
                 setAuthOpen(true);
               }}
-              className="text-sm text-blue-900 hover:underline"
+              className="text-sm text-sky-900 hover:underline"
             >
               Log in
             </button>
@@ -20301,7 +20301,7 @@ function CoursesPortalView({ onBack }) {
               const paidFor = myPayments.find((p) => p.courseId === c.id && p.status === "confirmed");
               const pending = myPayments.find((p) => p.courseId === c.id && p.status === "pending");
               return (
-                <div key={c.id} className="bg-white rounded-2xl border border-slate-200 p-5">
+                <div key={c.id} className="bg-slate-50 rounded-2xl p-5">
                   <div className="flex items-start justify-between gap-3 flex-wrap">
                     <div className="flex items-start gap-3">
                       {c.thumbnailDataUri && <img src={c.thumbnailDataUri} alt="" className="w-14 h-14 rounded-xl object-cover shrink-0" />}
@@ -20317,7 +20317,7 @@ function CoursesPortalView({ onBack }) {
                     <div className="shrink-0">
                       <button
                         onClick={() => setActiveCourseId(c.id)}
-                        className="px-4 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
+                        className="px-4 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900"
                       >
                         {paidFor || Number(c.price) === 0 ? "Open" : "Open"}
                       </button>
@@ -20809,7 +20809,7 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
     <div dir={dir}>
       <button
         onClick={() => setLang(lang === "en" ? "ar" : "en")}
-        className="fixed top-4 z-50 px-3 py-1.5 rounded-full bg-white/95 shadow-lg text-xs font-semibold text-blue-950 hover:bg-white transition"
+        className="fixed top-4 z-50 px-3 py-1.5 rounded-full bg-white/95 shadow-lg text-xs font-semibold text-sky-950 hover:bg-white transition"
         style={dir === "rtl" ? { left: "1rem" } : { right: "1rem" }}
       >
         {lang === "en" ? "العربية" : "English"}
@@ -20819,7 +20819,7 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
         <div>
         <button
           onClick={() => setMenuOpen((v) => !v)}
-          className="w-11 h-11 rounded-full bg-white/95 shadow-lg flex items-center justify-center text-blue-950 hover:bg-white transition shrink-0"
+          className="w-11 h-11 rounded-full bg-white/95 shadow-lg flex items-center justify-center text-sky-950 hover:bg-white transition shrink-0"
         >
           <Menu className="w-5 h-5" />
         </button>
@@ -20844,7 +20844,7 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
         </div>
         <div className="h-11 flex items-center gap-2 px-3 rounded-full bg-white/95 shadow-lg">
           {platformBrandingLive.logoDataUri && <img src={platformBrandingLive.logoDataUri} alt="" className="w-5 h-5 rounded object-contain" />}
-          <span className="text-sm font-bold text-blue-950">{platformBrandingLive.name}</span>
+          <span className="text-sm font-bold text-sky-950">{platformBrandingLive.name}</span>
         </div>
       </div>
 
@@ -20863,9 +20863,9 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
                 <button
                   key={opt.label}
                   onClick={() => { setLoginPickerOpen(false); opt.onClick(); }}
-                  className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-slate-200 hover:border-blue-900 hover:bg-blue-50/50 transition text-left"
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-slate-200 hover:border-sky-900 hover:bg-sky-50/50 transition text-left"
                 >
-                  <opt.icon className="w-5 h-5 text-blue-900 shrink-0" />
+                  <opt.icon className="w-5 h-5 text-sky-900 shrink-0" />
                   <div>
                     <div className="text-sm font-semibold text-slate-900">{opt.label}</div>
                     <div className="text-xs text-slate-400">{opt.sub}</div>
@@ -20891,16 +20891,16 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
         )}
         <div className="max-w-5xl mx-auto px-4 py-20 text-center relative z-10">
           <img src={CONFIG.logoDataUri} alt={CONFIG.academyName} className="w-20 h-20 mx-auto mb-5 object-contain" />
-          <div className="inline-flex items-center gap-2 bg-white/10 rounded-full px-4 py-1.5 text-sm text-blue-100 mb-6">
+          <div className="inline-flex items-center gap-2 bg-white/10 rounded-full px-4 py-1.5 text-sm text-sky-100 mb-6">
             <Waves className="w-4 h-4" /> {HOMEPAGE_CONTENT.heroTagline}
           </div>
           <h1 className="text-4xl sm:text-5xl font-extrabold mb-4 leading-tight">{CONFIG.academyName}</h1>
-          <p className="text-blue-100/90 text-lg max-w-xl mx-auto mb-8">
+          <p className="text-sky-100/90 text-lg max-w-xl mx-auto mb-8">
             {HOMEPAGE_CONTENT.heroSubtitle}
           </p>
           <button
             onClick={() => onChoosePlan(null)}
-            className="bg-white hover:bg-blue-50 font-bold px-8 py-3.5 rounded-full transition"
+            className="bg-white hover:bg-sky-50 font-bold px-8 py-3.5 rounded-full transition"
             style={{ color: CONFIG.primaryColor }}
           >
             Subscribe now
@@ -20950,11 +20950,11 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
                       <p.icon className="w-6 h-6 text-white" />
                     </div>
                     <div className="font-bold text-white text-lg mb-1">{p.title}</div>
-                    <div className="text-sm text-blue-200 font-medium mb-3">{p.subtitle}</div>
-                    <p className="text-sm text-blue-100/90 mb-4">{p.desc}</p>
+                    <div className="text-sm text-sky-200 font-medium mb-3">{p.subtitle}</div>
+                    <p className="text-sm text-sky-100/90 mb-4">{p.desc}</p>
                     <ul className="space-y-2 mt-auto">
                       {p.points.map((pt) => (
-                        <li key={pt} className="flex items-start gap-2 text-sm text-blue-50">
+                        <li key={pt} className="flex items-start gap-2 text-sm text-sky-50">
                           <CheckCircle2 className="w-4 h-4 text-white shrink-0 mt-0.5" />
                           <span>{pt}</span>
                         </li>
@@ -20964,16 +20964,16 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
                 </div>
               ) : (
                 <div key={p.title} className="bg-white rounded-2xl p-6 border border-slate-200 flex flex-col">
-                  <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center mb-4">
-                    <p.icon className="w-6 h-6 text-blue-900" />
+                  <div className="w-12 h-12 rounded-full bg-sky-50 flex items-center justify-center mb-4">
+                    <p.icon className="w-6 h-6 text-sky-900" />
                   </div>
                   <div className="font-bold text-slate-900 text-lg mb-1">{p.title}</div>
-                  <div className="text-sm text-blue-900 font-medium mb-3">{p.subtitle}</div>
+                  <div className="text-sm text-sky-900 font-medium mb-3">{p.subtitle}</div>
                   <p className="text-sm text-slate-500 mb-4">{p.desc}</p>
                   <ul className="space-y-2 mt-auto">
                     {p.points.map((pt) => (
                       <li key={pt} className="flex items-start gap-2 text-sm text-slate-600">
-                        <CheckCircle2 className="w-4 h-4 text-blue-900 shrink-0 mt-0.5" />
+                        <CheckCircle2 className="w-4 h-4 text-sky-900 shrink-0 mt-0.5" />
                         <span>{pt}</span>
                       </li>
                     ))}
@@ -20995,8 +20995,8 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
               { icon: Upload, t: "Send the screenshot", d: "Upload your transfer proof and we'll confirm" },
             ].map((s, i) => (
               <div key={i} className="bg-white rounded-2xl p-6 border border-slate-200">
-                <div className="mx-auto w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center mb-3">
-                  <s.icon className="w-5 h-5 text-blue-900" />
+                <div className="mx-auto w-12 h-12 rounded-full bg-sky-50 flex items-center justify-center mb-3">
+                  <s.icon className="w-5 h-5 text-sky-900" />
                 </div>
                 <div className="font-semibold text-slate-900 mb-1">{s.t}</div>
                 <div className="text-sm text-slate-500">{s.d}</div>
@@ -21025,7 +21025,7 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
             {window.__academy?.contactPhone && (
               <a
                 href={`tel:${window.__academy.contactPhone}`}
-                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-blue-50 flex items-center justify-center text-slate-500 hover:text-blue-700 transition"
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-sky-50 flex items-center justify-center text-slate-500 hover:text-sky-700 transition"
                 title="Call"
               >
                 <Phone className="w-4 h-4" />
@@ -21036,7 +21036,7 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
                 href={window.__academy.facebookUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-blue-50 flex items-center justify-center text-slate-500 hover:text-blue-700 transition"
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-sky-50 flex items-center justify-center text-slate-500 hover:text-sky-700 transition"
                 title="Facebook"
               >
                 <Facebook className="w-4 h-4" />
@@ -21155,7 +21155,7 @@ function ParentPortalView({ onRenew, onExit }) {
       <div dir={lang === "ar" ? "rtl" : "ltr"} className="min-h-screen flex items-center justify-center px-4 bg-slate-50">
         <button
           onClick={() => setLang(lang === "en" ? "ar" : "en")}
-          className="fixed top-4 z-50 px-3 py-1.5 rounded-full bg-white shadow-lg text-xs font-semibold text-blue-950 hover:bg-slate-50 transition"
+          className="fixed top-4 z-50 px-3 py-1.5 rounded-full bg-white shadow-lg text-xs font-semibold text-sky-950 hover:bg-slate-50 transition"
           style={lang === "ar" ? { left: "1rem" } : { right: "1rem" }}
         >
           {lang === "en" ? "العربية" : "English"}
@@ -21167,7 +21167,7 @@ function ParentPortalView({ onRenew, onExit }) {
           <input
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
-            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900 mb-3"
             placeholder="Phone number on file"
             inputMode="numeric"
           />
@@ -21175,7 +21175,7 @@ function ParentPortalView({ onRenew, onExit }) {
             value={pin}
             onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
             onKeyDown={(e) => { if (e.key === "Enter") login(); }}
-            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900 mb-3"
             placeholder="4-digit PIN"
             inputMode="numeric"
           />
@@ -21183,7 +21183,7 @@ function ParentPortalView({ onRenew, onExit }) {
           <button
             onClick={login}
             disabled={loading}
-            className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60"
+            className="w-full py-3 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 transition disabled:opacity-60"
           >
             {loading ? "Checking..." : "View progress"}
           </button>
@@ -21213,7 +21213,7 @@ function ParentPortalView({ onRenew, onExit }) {
     <div dir={lang === "ar" ? "rtl" : "ltr"} className="min-h-screen bg-slate-50 px-4 py-10">
       <button
         onClick={() => setLang(lang === "en" ? "ar" : "en")}
-        className="fixed top-4 z-50 px-3 py-1.5 rounded-full bg-white shadow-lg text-xs font-semibold text-blue-950 hover:bg-slate-50 transition"
+        className="fixed top-4 z-50 px-3 py-1.5 rounded-full bg-white shadow-lg text-xs font-semibold text-sky-950 hover:bg-slate-50 transition"
         style={lang === "ar" ? { left: "1rem" } : { right: "1rem" }}
       >
         {lang === "en" ? "العربية" : "English"}
@@ -21237,7 +21237,7 @@ function ParentPortalView({ onRenew, onExit }) {
                 key={sw.id}
                 onClick={() => setSelectedId(sw.id)}
                 className={`shrink-0 px-4 py-2 rounded-full text-sm font-medium border transition ${
-                  sw.id === s.id ? "bg-blue-950 text-white border-blue-950" : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"
+                  sw.id === s.id ? "bg-sky-950 text-white border-sky-950" : "bg-white text-slate-600 border-slate-200 hover:border-slate-300"
                 }`}
               >
                 {sw.name}
@@ -21266,7 +21266,7 @@ function ParentPortalView({ onRenew, onExit }) {
               {paidThisMonth ? `Paid · ${monthLabel(monthKey())}` : `Not paid · ${monthLabel(monthKey())}`}
             </span>
             {(s.makeupCredits || 0) > 0 && (
-              <span className="text-xs px-3 py-1.5 rounded-full font-semibold bg-blue-50 text-blue-800">
+              <span className="text-xs px-3 py-1.5 rounded-full font-semibold bg-sky-50 text-sky-800">
                 {s.makeupCredits} makeup session{s.makeupCredits === 1 ? "" : "s"} owed
               </span>
             )}
@@ -21293,7 +21293,7 @@ function ParentPortalView({ onRenew, onExit }) {
                   </div>
                   <button
                     onClick={() => printCertificate({ swimmerName: s.name, level: cert.level, date: cert.date })}
-                    className="text-blue-900 hover:underline font-medium text-xs shrink-0"
+                    className="text-sky-900 hover:underline font-medium text-xs shrink-0"
                   >
                     Download
                   </button>
@@ -21349,7 +21349,7 @@ function ParentPortalView({ onRenew, onExit }) {
 
         <button
           onClick={() => onRenew(s)}
-          className="w-full py-3.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition"
+          className="w-full py-3.5 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 transition"
         >
           Renew subscription for {s.name}
         </button>
@@ -21405,7 +21405,7 @@ function FeedbackCard({ swimmer }) {
   if (existing === undefined) return null;
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-4">
+    <div className="bg-slate-50 rounded-2xl p-6 mb-4">
       <h3 className="font-bold text-slate-900 mb-1">How are we doing?</h3>
       {existing || saved ? (
         <div className="text-sm text-slate-500">
@@ -21427,12 +21427,12 @@ function FeedbackCard({ swimmer }) {
             onChange={(e) => setComment(e.target.value)}
             rows={2}
             placeholder="Any comments (optional)"
-            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 mb-3 text-sm"
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 mb-3 text-sm"
           />
           <button
             onClick={submit}
             disabled={!rating || saving}
-            className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-50"
+            className="px-5 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-50"
           >
             {saving ? "Sending..." : "Submit feedback"}
           </button>
@@ -21510,7 +21510,7 @@ function AcademyPicker({ value, onChange }) {
           if (value) onChange(null);
         }}
         onFocus={() => setOpen(true)}
-        className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900"
+        className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900"
         placeholder="Your academy's name"
       />
       {open && results.length > 0 && (
@@ -21564,7 +21564,7 @@ function GatewayView() {
     return (
       <div className="min-h-screen flex items-center justify-center px-4 bg-slate-50">
         <div className="max-w-sm w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
-          <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-blue-950 flex items-center justify-center">
+          <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-sky-950 flex items-center justify-center">
             <Waves className="w-7 h-7 text-white" />
           </div>
           <h2 className="text-xl font-bold text-slate-900 mb-1 text-center">{PLATFORM_BRAND.name}</h2>
@@ -21586,9 +21586,9 @@ function GatewayView() {
               <button
                 key={opt.id}
                 onClick={() => goToRole(opt.id)}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-slate-200 hover:border-blue-900 hover:bg-blue-50/50 transition text-left"
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-slate-200 hover:border-sky-900 hover:bg-sky-50/50 transition text-left"
               >
-                <opt.icon className="w-5 h-5 text-blue-900 shrink-0" />
+                <opt.icon className="w-5 h-5 text-sky-900 shrink-0" />
                 <div>
                   <div className="text-sm font-semibold text-slate-900">{opt.label}</div>
                   <div className="text-xs text-slate-400">{opt.sub}</div>
@@ -21656,7 +21656,7 @@ function AdminGatewayLogin({ onBack }) {
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+          className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900 mb-3"
           placeholder="Email"
           autoComplete="username"
         />
@@ -21665,7 +21665,7 @@ function AdminGatewayLogin({ onBack }) {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") login(); }}
-          className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+          className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900 mb-3"
           placeholder="Password"
           autoComplete="current-password"
         />
@@ -21673,7 +21673,7 @@ function AdminGatewayLogin({ onBack }) {
         <button
           onClick={login}
           disabled={loading}
-          className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60"
+          className="w-full py-3 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 transition disabled:opacity-60"
         >
           {loading ? "Signing in..." : "Log in"}
         </button>
@@ -21717,7 +21717,7 @@ function AcademyScopedGatewayLogin({ role, onBack }) {
         <button
           onClick={go}
           disabled={!academy}
-          className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60"
+          className="w-full py-3 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 transition disabled:opacity-60"
         >
           Continue
         </button>
@@ -21802,7 +21802,7 @@ function AcademyNameGateView() {
         Super Admin login
       </a>
       <div className="max-w-sm w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100 relative z-10">
-        <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-blue-950 flex items-center justify-center">
+        <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-sky-950 flex items-center justify-center">
           <Waves className="w-7 h-7 text-white" />
         </div>
         <h2 className="text-xl font-bold text-slate-900 mb-1 text-center">{PLATFORM_BRAND.name}</h2>
@@ -21814,7 +21814,7 @@ function AcademyNameGateView() {
           onKeyDown={(e) => {
             if (e.key === "Enter") go();
           }}
-          className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+          className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900 mb-3"
           placeholder="Your academy's name"
           autoFocus
         />
@@ -21822,12 +21822,12 @@ function AcademyNameGateView() {
         <button
           onClick={go}
           disabled={loading}
-          className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60"
+          className="w-full py-3 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 transition disabled:opacity-60"
         >
           {loading ? "Looking..." : "Continue"}
         </button>
         <div className="text-center mt-5">
-          <a href="/_signup" className="text-sm text-blue-900 underline font-medium">
+          <a href="/_signup" className="text-sm text-sky-900 underline font-medium">
             Register a new academy
           </a>
         </div>
@@ -21847,7 +21847,7 @@ function AcademyNameGateView() {
             {contact.phone && (
               <a
                 href={`tel:${contact.phone}`}
-                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-blue-50 flex items-center justify-center text-slate-500 hover:text-blue-700 transition"
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-sky-50 flex items-center justify-center text-slate-500 hover:text-sky-700 transition"
                 title="Call"
               >
                 <Phone className="w-4 h-4" />
@@ -21858,7 +21858,7 @@ function AcademyNameGateView() {
                 href={contact.facebook}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-blue-50 flex items-center justify-center text-slate-500 hover:text-blue-700 transition"
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-sky-50 flex items-center justify-center text-slate-500 hover:text-sky-700 transition"
                 title="Facebook"
               >
                 <Facebook className="w-4 h-4" />
@@ -21959,7 +21959,7 @@ function RenewSubscriptionView({ academy, onExit }) {
             Your {pendingPayment.planLabel.toLowerCase()} plan ({pendingPayment.finalPrice} EGP) is being reviewed. Your academy unlocks again as soon as it's confirmed.
           </p>
           {onExit && (
-            <button onClick={onExit} className="text-sm text-blue-900 hover:underline">
+            <button onClick={onExit} className="text-sm text-sky-900 hover:underline">
               Back
             </button>
           )}
@@ -21987,14 +21987,14 @@ function RenewSubscriptionView({ academy, onExit }) {
                 key={id}
                 onClick={() => setSelectedPlan(id)}
                 className={`w-full text-left px-4 py-3 rounded-xl border-2 transition ${
-                  selectedPlan === id ? "border-blue-900 bg-blue-50" : "border-slate-200 hover:bg-slate-50"
+                  selectedPlan === id ? "border-sky-900 bg-sky-50" : "border-slate-200 hover:bg-slate-50"
                 }`}
               >
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-slate-800">{plan.label}</span>
                   <span className="text-right">
                     {plan.discount > 0 && <span className="text-xs text-slate-400 line-through mr-1.5">{plan.price} EGP</span>}
-                    <span className="font-bold text-blue-950">{finalPrice} EGP</span>
+                    <span className="font-bold text-sky-950">{finalPrice} EGP</span>
                   </span>
                 </div>
                 {plan.discount > 0 && <div className="text-xs text-green-600 mt-0.5">{plan.discount}% off</div>}
@@ -22004,10 +22004,10 @@ function RenewSubscriptionView({ academy, onExit }) {
         </div>
 
         {platformInstapay.handle ? (
-          <div className="bg-blue-950 text-white rounded-xl p-4 mb-4">
-            <div className="text-xs text-blue-200 mb-1">Pay via Instapay to:</div>
+          <div className="bg-sky-950 text-white rounded-xl p-4 mb-4">
+            <div className="text-xs text-sky-200 mb-1">Pay via Instapay to:</div>
             <div className="font-mono text-base">{platformInstapay.handle}</div>
-            {platformInstapay.phone && <div className="text-xs text-blue-200 mt-1">or mobile number: {platformInstapay.phone}</div>}
+            {platformInstapay.phone && <div className="text-xs text-sky-200 mt-1">or mobile number: {platformInstapay.phone}</div>}
           </div>
         ) : (
           <div className="bg-amber-50 text-amber-700 rounded-xl p-4 mb-4 text-sm">
@@ -22034,7 +22034,7 @@ function RenewSubscriptionView({ academy, onExit }) {
         <button
           onClick={submit}
           disabled={submitting || !screenshot}
-          className="w-full py-3.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60"
+          className="w-full py-3.5 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 transition disabled:opacity-60"
         >
           {submitting ? "Submitting..." : "Submit payment"}
         </button>
@@ -22144,7 +22144,7 @@ function SignupView() {
           <p className="text-sm text-slate-500 mb-4">
             Your {TRIAL_DAYS}-day free trial has started. Here's your academy's own link:
           </p>
-          <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 mb-4 text-sm font-mono text-blue-900 break-all">
+          <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 mb-4 text-sm font-mono text-sky-900 break-all">
             {link}
           </div>
           {emailAccountWarning ? (
@@ -22156,7 +22156,7 @@ function SignupView() {
           )}
           <a
             href={link}
-            className="inline-block px-6 py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900"
+            className="inline-block px-6 py-3 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900"
           >
             Go to my academy
           </a>
@@ -22168,7 +22168,7 @@ function SignupView() {
   return (
     <div className="min-h-screen flex items-center justify-center px-4 py-10 bg-slate-50">
       <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
-        <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-blue-950 flex items-center justify-center">
+        <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-sky-950 flex items-center justify-center">
           <Waves className="w-7 h-7 text-white" />
         </div>
         <h2 className="text-xl font-bold text-slate-900 mb-1 text-center">Register your academy</h2>
@@ -22181,13 +22181,13 @@ function SignupView() {
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+              className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-sky-900"
               placeholder="e.g. Blue Waves Swim Academy"
             />
           </div>
           <div>
             <label className="text-xs text-slate-500 mb-1 block">Choose your link</label>
-            <div className="flex items-center border border-slate-200 rounded-xl overflow-hidden focus-within:border-blue-900">
+            <div className="flex items-center border border-slate-200 rounded-xl overflow-hidden focus-within:border-sky-900">
               <span className="text-xs text-slate-400 pl-3 whitespace-nowrap">{window.location.host}/</span>
               <input
                 value={slug}
@@ -22202,7 +22202,7 @@ function SignupView() {
             <input
               value={contactPhone}
               onChange={(e) => setContactPhone(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+              className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-sky-900"
             />
           </div>
           <div>
@@ -22211,7 +22211,7 @@ function SignupView() {
               type="email"
               value={contactEmail}
               onChange={(e) => setContactEmail(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+              className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-sky-900"
               autoComplete="username"
             />
           </div>
@@ -22221,7 +22221,7 @@ function SignupView() {
               type="password"
               value={adminPassword}
               onChange={(e) => setAdminPassword(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+              className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-sky-900"
               autoComplete="new-password"
             />
           </div>
@@ -22234,7 +22234,7 @@ function SignupView() {
               onKeyDown={(e) => {
                 if (e.key === "Enter") submit();
               }}
-              className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-blue-900"
+              className="w-full border border-slate-200 rounded-xl py-2.5 px-3 outline-none focus:border-sky-900"
             />
           </div>
 
@@ -22243,7 +22243,7 @@ function SignupView() {
           <button
             onClick={submit}
             disabled={submitting}
-            className="w-full py-3.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60"
+            className="w-full py-3.5 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 transition disabled:opacity-60"
           >
             {submitting ? "Setting up..." : "Start free trial"}
           </button>
@@ -22655,7 +22655,7 @@ function SuperAdminView() {
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900 mb-3"
             placeholder="Email"
           />
           <input
@@ -22663,14 +22663,14 @@ function SuperAdminView() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") login(); }}
-            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-blue-900 mb-3"
+            className="w-full border border-slate-200 rounded-xl py-3 px-4 outline-none focus:border-sky-900 mb-3"
             placeholder="Password"
           />
           {loginError && <div className="text-red-500 text-sm mb-3">{loginError}</div>}
           <button
             onClick={login}
             disabled={loginLoading}
-            className="w-full py-3 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition disabled:opacity-60"
+            className="w-full py-3 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 transition disabled:opacity-60"
           >
             {loginLoading ? "Signing in..." : "Log in"}
           </button>
@@ -22684,16 +22684,16 @@ function SuperAdminView() {
       <h2 className="text-2xl font-bold text-slate-900 mb-1">{PLATFORM_BRAND.name} — Super Admin</h2>
       <p className="text-slate-500 mb-8 text-sm">Signed in as {session.email}</p>
 
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+      <div className="bg-slate-50 rounded-2xl p-5 mb-6">
         <h3 className="font-bold text-slate-900 mb-1">Step 1 — Register a new academy</h3>
         <p className="text-xs text-slate-400 mb-4">
           The "link name" becomes their web address, e.g. "blue-waves" → yoursite.com/blue-waves
         </p>
         <div className="grid sm:grid-cols-2 gap-3 mb-3">
-          <input value={newName} onChange={(e) => setNewName(e.target.value)} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Academy name" />
-          <input value={newSlug} onChange={(e) => setNewSlug(e.target.value.toLowerCase())} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Link name (e.g. blue-waves)" />
-          <input value={newInstapayHandle} onChange={(e) => setNewInstapayHandle(e.target.value)} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Instapay handle (optional)" />
-          <input value={newInstapayPhone} onChange={(e) => setNewInstapayPhone(e.target.value)} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="Instapay phone (optional)" />
+          <input value={newName} onChange={(e) => setNewName(e.target.value)} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900" placeholder="Academy name" />
+          <input value={newSlug} onChange={(e) => setNewSlug(e.target.value.toLowerCase())} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900" placeholder="Link name (e.g. blue-waves)" />
+          <input value={newInstapayHandle} onChange={(e) => setNewInstapayHandle(e.target.value)} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900" placeholder="Instapay handle (optional)" />
+          <input value={newInstapayPhone} onChange={(e) => setNewInstapayPhone(e.target.value)} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900" placeholder="Instapay phone (optional)" />
         </div>
         <div className="mb-3">
           <label className="text-xs text-slate-500 mb-1 block">Logo (optional — uses the default logo if skipped)</label>
@@ -22738,21 +22738,21 @@ function SuperAdminView() {
         <button
           onClick={createAcademy}
           disabled={creatingAcademy}
-          className="py-2.5 px-5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+          className="py-2.5 px-5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
         >
           {creatingAcademy ? "Creating..." : "Create academy"}
         </button>
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+      <div className="bg-slate-50 rounded-2xl p-5 mb-6">
         <h3 className="font-bold text-slate-900 mb-1">Step 2 — Give them a login</h3>
         <p className="text-xs text-slate-400 mb-4">
           In Supabase → Authentication → Users → "Add user" → "Create new user", make an account with their
           email/password (tick "Auto Confirm User"). Copy the User ID it gives you and paste it below.
         </p>
         <div className="grid sm:grid-cols-2 gap-3 mb-3">
-          <input value={linkUserId} onChange={(e) => setLinkUserId(e.target.value)} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900" placeholder="User ID (UUID) from Supabase" />
-          <select value={linkAcademyId} onChange={(e) => setLinkAcademyId(e.target.value)} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white">
+          <input value={linkUserId} onChange={(e) => setLinkUserId(e.target.value)} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900" placeholder="User ID (UUID) from Supabase" />
+          <select value={linkAcademyId} onChange={(e) => setLinkAcademyId(e.target.value)} className="border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white">
             <option value="">Choose academy...</option>
             {academies.map((a) => (
               <option key={a.id} value={a.id}>{a.name}</option>
@@ -22764,13 +22764,13 @@ function SuperAdminView() {
         <button
           onClick={linkUserToAcademy}
           disabled={linking}
-          className="py-2.5 px-5 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+          className="py-2.5 px-5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
         >
           {linking ? "Linking..." : "Link account to academy"}
         </button>
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+      <div className="bg-slate-50 rounded-2xl p-5 mb-6">
         <h3 className="font-bold text-slate-900 mb-1">Landing page background</h3>
         <p className="text-sm text-slate-500 mb-3">
           The photo shown behind the "type your academy's name" page — one image for the whole platform, not tied to any academy.
@@ -22801,7 +22801,7 @@ function SuperAdminView() {
           <button
             onClick={saveGateHero}
             disabled={gateHeroSaving}
-            className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+            className="px-5 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
           >
             {gateHeroSaving ? "Saving..." : "Save"}
           </button>
@@ -22809,7 +22809,7 @@ function SuperAdminView() {
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+      <div className="bg-slate-50 rounded-2xl p-5 mb-6">
         <h3 className="font-bold text-slate-900 mb-1">Platform contact info</h3>
         <p className="text-sm text-slate-500 mb-3">
           Shown on the "type your academy's name" landing page — for the platform itself, not tied to any one academy.
@@ -22820,7 +22820,7 @@ function SuperAdminView() {
             <input
               value={platformWhatsapp}
               onChange={(e) => setPlatformWhatsapp(e.target.value)}
-              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
               placeholder="e.g. 01012345678"
             />
           </div>
@@ -22829,7 +22829,7 @@ function SuperAdminView() {
             <input
               value={platformPhone}
               onChange={(e) => setPlatformPhone(e.target.value)}
-              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
               placeholder="e.g. 0223456789"
             />
           </div>
@@ -22838,7 +22838,7 @@ function SuperAdminView() {
             <input
               value={platformFacebook}
               onChange={(e) => setPlatformFacebook(e.target.value)}
-              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
               placeholder="https://facebook.com/..."
             />
           </div>
@@ -22847,7 +22847,7 @@ function SuperAdminView() {
             <input
               value={platformInstagram}
               onChange={(e) => setPlatformInstagram(e.target.value)}
-              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
               placeholder="https://instagram.com/..."
             />
           </div>
@@ -22855,14 +22855,14 @@ function SuperAdminView() {
         <button
           onClick={savePlatformContact}
           disabled={platformContactSaving}
-          className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+          className="px-5 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
         >
           {platformContactSaving ? "Saving..." : "Save"}
         </button>
         {platformContactSaved && <span className="ml-2 text-sm text-green-700">Saved.</span>}
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+      <div className="bg-slate-50 rounded-2xl p-5 mb-6">
         <h3 className="font-bold text-slate-900 mb-1">Subscription plans</h3>
         <p className="text-xs text-slate-400 mb-4">Prices and discounts academies see on their renewal page. Set a discount to 0 for no discount.</p>
         <div className="space-y-3 mb-4">
@@ -22879,7 +22879,7 @@ function SuperAdminView() {
                   min="0"
                   value={plan.price}
                   onChange={(e) => setSubscriptionPlans({ ...subscriptionPlans, [id]: { ...plan, price: Number(e.target.value) } })}
-                  className="w-full border border-slate-200 rounded-lg py-2 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2 px-3 outline-none focus:border-sky-900"
                 />
               </div>
               <div>
@@ -22890,11 +22890,11 @@ function SuperAdminView() {
                   max="100"
                   value={plan.discount || 0}
                   onChange={(e) => setSubscriptionPlans({ ...subscriptionPlans, [id]: { ...plan, discount: Number(e.target.value) } })}
-                  className="w-full border border-slate-200 rounded-lg py-2 px-3 outline-none focus:border-blue-900"
+                  className="w-full border border-slate-200 rounded-lg py-2 px-3 outline-none focus:border-sky-900"
                 />
               </div>
               <div className="text-sm text-slate-500">
-                Final: <strong className="text-blue-950">{Math.round(plan.price * (1 - (plan.discount || 0) / 100))} EGP</strong>
+                Final: <strong className="text-sky-950">{Math.round(plan.price * (1 - (plan.discount || 0) / 100))} EGP</strong>
               </div>
             </div>
           ))}
@@ -22902,14 +22902,14 @@ function SuperAdminView() {
         <button
           onClick={savePlans}
           disabled={plansSaving}
-          className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+          className="px-5 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
         >
           {plansSaving ? "Saving..." : "Save plans"}
         </button>
         {plansSaved && <span className="ml-2 text-sm text-green-700">Saved.</span>}
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+      <div className="bg-slate-50 rounded-2xl p-5 mb-6">
         <h3 className="font-bold text-slate-900 mb-1">Your Instapay details (temporary)</h3>
         <p className="text-xs text-slate-400 mb-4">
           Where academies send their subscription payment — separate from each academy's own Instapay, which is for their own swim parents.
@@ -22920,7 +22920,7 @@ function SuperAdminView() {
             <input
               value={platformInstapay.handle}
               onChange={(e) => setPlatformInstapay({ ...platformInstapay, handle: e.target.value })}
-              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
               placeholder="you@instapay"
             />
           </div>
@@ -22929,7 +22929,7 @@ function SuperAdminView() {
             <input
               value={platformInstapay.phone}
               onChange={(e) => setPlatformInstapay({ ...platformInstapay, phone: e.target.value })}
-              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
               placeholder="01xxxxxxxxx"
             />
           </div>
@@ -22937,14 +22937,14 @@ function SuperAdminView() {
         <button
           onClick={saveInstapay}
           disabled={instapaySaving}
-          className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+          className="px-5 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
         >
           {instapaySaving ? "Saving..." : "Save"}
         </button>
         {instapaySaved && <span className="ml-2 text-sm text-green-700">Saved.</span>}
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+      <div className="bg-slate-50 rounded-2xl p-5 mb-6">
         <h3 className="font-bold text-slate-900 mb-1">Platform branding</h3>
         <p className="text-xs text-slate-400 mb-4">
           The name and logo shown top-left across every academy's interface, and the admin sidebar's accent color — applies everywhere at once, not per academy.
@@ -22956,7 +22956,7 @@ function SuperAdminView() {
             <input
               value={platformBranding.name}
               onChange={(e) => setPlatformBranding({ ...platformBranding, name: e.target.value })}
-              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
               placeholder="Swim Junior"
             />
           </div>
@@ -22972,7 +22972,7 @@ function SuperAdminView() {
               <input
                 value={platformBranding.sidebarColor}
                 onChange={(e) => setPlatformBranding({ ...platformBranding, sidebarColor: e.target.value })}
-                className="flex-1 border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900"
+                className="flex-1 border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
                 placeholder="Leave blank for default (white)"
               />
             </div>
@@ -23003,14 +23003,14 @@ function SuperAdminView() {
         <button
           onClick={saveBranding}
           disabled={brandingSaving}
-          className="px-5 py-2 rounded-lg bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900 disabled:opacity-60"
+          className="px-5 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
         >
           {brandingSaving ? "Saving..." : "Save"}
         </button>
         {brandingSaved && <span className="ml-2 text-sm text-green-700">Saved.</span>}
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+      <div className="bg-slate-50 rounded-2xl p-5 mb-6">
         <h3 className="font-bold text-slate-900 mb-1">Online payment gateways</h3>
         <p className="text-xs text-slate-400 mb-4">
           Switch these on once you've tested a gateway end-to-end — until then, academies only see Instapay, even if the Vercel environment variables are already set.
@@ -23031,7 +23031,7 @@ function SuperAdminView() {
               <button
                 onClick={() => toggleGateway(gw.key)}
                 disabled={gatewaysSaving}
-                className={`relative w-11 h-6 rounded-full transition disabled:opacity-60 ${gatewaysEnabled[gw.key] ? "bg-blue-950" : "bg-slate-300"}`}
+                className={`relative w-11 h-6 rounded-full transition disabled:opacity-60 ${gatewaysEnabled[gw.key] ? "bg-sky-950" : "bg-slate-300"}`}
               >
                 <span
                   className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition ${gatewaysEnabled[gw.key] ? "left-5" : "left-0.5"}`}
@@ -23042,7 +23042,7 @@ function SuperAdminView() {
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+      <div className="bg-slate-50 rounded-2xl p-5 mb-6">
         <div className="flex items-center justify-between mb-1">
           <h3 className="font-bold text-slate-900">Subscription payments</h3>
           <button onClick={loadSubscriptionPaymentsList} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
@@ -23071,7 +23071,7 @@ function SuperAdminView() {
                           {p.planLabel} · {p.finalPrice} EGP{p.discount > 0 ? ` (${p.discount}% off ${p.price})` : ""}
                         </div>
                         {p.screenshotDataUri && (
-                          <a href={p.screenshotDataUri} target="_blank" rel="noreferrer" className="text-xs text-blue-900 hover:underline">
+                          <a href={p.screenshotDataUri} target="_blank" rel="noreferrer" className="text-xs text-sky-900 hover:underline">
                             View payment screenshot
                           </a>
                         )}
@@ -23113,7 +23113,7 @@ function SuperAdminView() {
         })()}
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 p-5">
+      <div className="bg-slate-50 rounded-2xl p-5">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-bold text-slate-900">All academies ({academies.length})</h3>
           <button onClick={loadAcademies} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
@@ -23140,7 +23140,7 @@ function SuperAdminView() {
                   </span>
                   <button
                     onClick={() => extendSubscription(a.id)}
-                    className="text-xs px-2.5 py-1 rounded-full bg-blue-950 text-white font-medium hover:bg-blue-900"
+                    className="text-xs px-2.5 py-1 rounded-full bg-sky-950 text-white font-medium hover:bg-sky-900"
                   >
                     +1 month
                   </button>
@@ -23256,10 +23256,10 @@ function AcademyEditRow({ academy, onSaved, onClose }) {
   return (
     <div className="bg-slate-50 rounded-lg p-3 mt-2">
       <div className="grid sm:grid-cols-2 gap-2 mb-2">
-        <input value={name} onChange={(e) => setName(e.target.value)} className="border border-slate-200 rounded-lg py-2 px-2.5 text-sm outline-none focus:border-blue-900" placeholder="Academy name" />
-        <input value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} className="border border-slate-200 rounded-lg py-2 px-2.5 text-sm outline-none focus:border-blue-900" placeholder="Link name" />
-        <input value={instapayHandle} onChange={(e) => setInstapayHandle(e.target.value)} className="border border-slate-200 rounded-lg py-2 px-2.5 text-sm outline-none focus:border-blue-900" placeholder="New Instapay handle (optional)" />
-        <input value={instapayPhone} onChange={(e) => setInstapayPhone(e.target.value)} className="border border-slate-200 rounded-lg py-2 px-2.5 text-sm outline-none focus:border-blue-900" placeholder="New Instapay phone (optional)" />
+        <input value={name} onChange={(e) => setName(e.target.value)} className="border border-slate-200 rounded-lg py-2 px-2.5 text-sm outline-none focus:border-sky-900" placeholder="Academy name" />
+        <input value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} className="border border-slate-200 rounded-lg py-2 px-2.5 text-sm outline-none focus:border-sky-900" placeholder="Link name" />
+        <input value={instapayHandle} onChange={(e) => setInstapayHandle(e.target.value)} className="border border-slate-200 rounded-lg py-2 px-2.5 text-sm outline-none focus:border-sky-900" placeholder="New Instapay handle (optional)" />
+        <input value={instapayPhone} onChange={(e) => setInstapayPhone(e.target.value)} className="border border-slate-200 rounded-lg py-2 px-2.5 text-sm outline-none focus:border-sky-900" placeholder="New Instapay phone (optional)" />
       </div>
       <div className="flex items-center gap-2 mb-2">
         <span className="text-xs text-slate-400 w-14 shrink-0">Logo</span>
@@ -23291,7 +23291,7 @@ function AcademyEditRow({ academy, onSaved, onClose }) {
       </div>
       {error && <div className="text-red-500 text-xs mb-2">{error}</div>}
       <div className="flex gap-2">
-        <button onClick={save} disabled={saving} className="text-xs px-3 py-1.5 rounded-lg bg-blue-950 text-white font-semibold hover:bg-blue-900 disabled:opacity-60">
+        <button onClick={save} disabled={saving} className="text-xs px-3 py-1.5 rounded-lg bg-sky-950 text-white font-semibold hover:bg-sky-900 disabled:opacity-60">
           {saving ? "Saving..." : "Save"}
         </button>
         <button onClick={onClose} disabled={saving} className="text-xs px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-500 hover:bg-slate-100">
@@ -23332,7 +23332,7 @@ class ErrorBoundary extends React.Component {
             </p>
             <button
               onClick={() => window.location.reload()}
-              className="w-full py-2.5 rounded-xl bg-blue-950 text-white font-semibold hover:bg-blue-900 transition"
+              className="w-full py-2.5 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 transition"
             >
               Reload the page
             </button>
@@ -23573,7 +23573,7 @@ function App() {
           </p>
           <button
             onClick={() => setView("home")}
-            className="px-6 py-2.5 rounded-xl bg-blue-950 text-white text-sm font-semibold hover:bg-blue-900"
+            className="px-6 py-2.5 rounded-xl bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900"
           >
             Back to home
           </button>
@@ -23729,7 +23729,7 @@ function ClassCalendarGrid({ classes = [], enrollments = [], coaches = [], swimm
                           <button
                             key={c.id}
                             onClick={() => onClassClick(c)}
-                            className={`w-full text-left rounded-lg px-2 py-1.5 ${full ? "bg-red-50 hover:bg-red-100" : "bg-blue-50 hover:bg-blue-100"}`}
+                            className={`w-full text-left rounded-lg px-2 py-1.5 ${full ? "bg-red-50 hover:bg-red-100" : "bg-sky-50 hover:bg-sky-100"}`}
                           >
                             <div className="font-semibold text-slate-800">{c.level}</div>
                             <div className="text-slate-400">{coachName || "No coach"} · {count}/{c.capacity}</div>
@@ -23741,7 +23741,7 @@ function ClassCalendarGrid({ classes = [], enrollments = [], coaches = [], swimm
                       })}
                       <button
                         onClick={() => onCellClick(d.id, t)}
-                        className="w-full text-slate-300 hover:text-blue-900 hover:bg-blue-50 rounded-lg py-1 flex items-center justify-center"
+                        className="w-full text-slate-300 hover:text-sky-900 hover:bg-sky-50 rounded-lg py-1 flex items-center justify-center"
                         title="New class at this slot"
                       >
                         <Plus className="w-3.5 h-3.5" />
@@ -23775,7 +23775,7 @@ function FamilyLedgerSummaryCard({ charges = [], familyId }) {
         <div className="rounded-xl border border-slate-200 bg-white p-3">
           <div className="text-xs text-slate-400">Credits / Refunds</div>
           <div className="font-bold">
-            {s.totalCredits > 0 && <span className="text-blue-700">-{s.totalCredits.toLocaleString()}</span>}
+            {s.totalCredits > 0 && <span className="text-sky-700">-{s.totalCredits.toLocaleString()}</span>}
             {s.totalCredits > 0 && s.totalRefunds > 0 && " / "}
             {s.totalRefunds > 0 && <span className="text-amber-600">+{s.totalRefunds.toLocaleString()}</span>}
           </div>
