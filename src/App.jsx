@@ -9970,25 +9970,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       if (age != null && age !== "") bucket[key].ages.push(Number(age));
       bucket[key].names.push({ name: swimmerName, id: swimmerId, level });
     };
-    // Only swimmers actually scheduled for the month currently being
-    // viewed — either their live schedule (if it's already tagged for
-    // this month) or a pending nextSchedule pre-booked for it — so a
-    // swimmer booked for next month doesn't show up (or count against
-    // capacity) on this month's grid, and vice versa. A swimmer saved
-    // before scheduleMonth existed is treated as "this month".
+    // Uses the exact same month resolver as the PDF export (getMonthlySchedule)
+    // instead of separately checking top-level fields AND nextSchedule as if
+    // they were two different bookings — that's what let a swimmer get
+    // counted under two coaches at once here while the PDF (which always
+    // used the single resolver) showed them correctly under just one.
     swimmers.forEach((s) => {
-      if ((s.scheduleMonth || monthKey()) === scheduleMonth) {
-        addBooking(s.coachId, s.day, s.time, s.sessionType, s.level, s.age, s.name, s.id);
-        // A swimmer with a second weekly session (different coach or slot)
-        // shows up under that booking too — same swimmer, two commitments.
-        if (s.day2 && s.time2) addBooking(s.coachId2, s.day2, s.time2, s.sessionType2, s.level, s.age, s.name, s.id);
-      }
-      if (s.nextSchedule && s.nextSchedule.scheduleMonth === scheduleMonth) {
-        addBooking(s.nextSchedule.coachId, s.nextSchedule.day, s.nextSchedule.time, s.nextSchedule.sessionType, s.level, s.age, s.name, s.id);
-        if (s.nextSchedule.day2 && s.nextSchedule.time2) {
-          addBooking(s.nextSchedule.coachId2, s.nextSchedule.day2, s.nextSchedule.time2, s.nextSchedule.sessionType2, s.level, s.age, s.name, s.id);
-        }
-      }
+      const ms = getMonthlySchedule(s, scheduleMonth);
+      if (!ms) return;
+      addBooking(ms.coachId, ms.day, ms.time, ms.sessionType, s.level, s.age, s.name, s.id);
+      // A swimmer with a second weekly session (different coach or slot)
+      // shows up under that booking too — same swimmer, two commitments.
+      if (ms.day2 && ms.time2) addBooking(ms.coachId2, ms.day2, ms.time2, ms.sessionType2, s.level, s.age, s.name, s.id);
     });
     const bookingsById = {};
     Object.keys(bookingsMapById).forEach((coachId) => {
