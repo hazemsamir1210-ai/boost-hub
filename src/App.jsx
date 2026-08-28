@@ -78,6 +78,38 @@ function secondPathSegment() {
   return seg || null;
 }
 
+// Every toggleable tab the super admin can switch off per academy, from
+// /_admin → All academies. Dashboard and Settings are deliberately left
+// out — every academy needs at least those two to function at all.
+const TOGGLEABLE_FEATURES = [
+  { key: "swimmers", label: "Swimmers" },
+  { key: "coaches", label: "Coaches" },
+  { key: "coachassign", label: "Coach Assignments" },
+  { key: "coachperformance", label: "Coach Performance" },
+  { key: "accounts", label: "Accounts" },
+  { key: "schedule", label: "Schedule" },
+  { key: "management", label: "Family & Billing" },
+  { key: "pos", label: "POS" },
+  { key: "registrations", label: "Registrations" },
+  { key: "waitlist", label: "Waitlist" },
+  { key: "attendance", label: "Attendance / Payroll" },
+  { key: "incidents", label: "Incident log" },
+  { key: "requests", label: "Payment requests" },
+  { key: "reports", label: "Reports" },
+  { key: "feedback", label: "Feedback" },
+  { key: "courses", label: "Courses" },
+  { key: "chat", label: "Chat" },
+  { key: "activity", label: "Activity log" },
+];
+
+// True unless the super admin has explicitly switched this tab off for
+// the current academy — an academy nobody's ever touched this setting
+// for (disabledFeatures missing or empty) keeps every tab, same as
+// before this feature existed.
+function isTabEnabled(key) {
+  return !(window.__academy?.disabledFeatures || []).includes(key);
+}
+
 async function resolveAcademy() {
   const slug = academySlugFromPath();
   // No slug in the URL — this is the plain link that was already shared
@@ -88,13 +120,13 @@ async function resolveAcademy() {
     if (slug) {
       result = await supabase
         .from("academies")
-        .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone, hero_data_uri, subscription_paid_until, primary_color, contact_phone, whatsapp, facebook_url, instagram_url")
+        .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone, hero_data_uri, subscription_paid_until, primary_color, contact_phone, whatsapp, facebook_url, instagram_url, disabled_features")
         .eq("slug", slug)
         .maybeSingle();
     } else {
       result = await supabase
         .from("academies")
-        .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone, hero_data_uri, subscription_paid_until, primary_color, contact_phone, whatsapp, facebook_url, instagram_url")
+        .select("id, name, slug, logo_data_uri, instapay_handle, instapay_phone, hero_data_uri, subscription_paid_until, primary_color, contact_phone, whatsapp, facebook_url, instagram_url, disabled_features")
         .eq("id", "354f7151-03f6-4511-b40a-19db46f28e29")
         .maybeSingle();
     }
@@ -127,6 +159,11 @@ async function resolveAcademy() {
     whatsapp: data.whatsapp || "",
     facebookUrl: data.facebook_url || "",
     instagramUrl: data.instagram_url || "",
+    // A list of tab keys the super admin has switched off for this
+    // academy specifically — empty by default, so an academy created
+    // before this existed (or one nobody's ever touched this setting
+    // for) keeps every tab it already had.
+    disabledFeatures: Array.isArray(data.disabled_features) ? data.disabled_features : [],
   };
   CONFIG.primaryColor = window.__academy.primaryColor;
   // Every place in the app that reads CONFIG.academyName / logoDataUri /
@@ -9739,7 +9776,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </button>
 
         {navSection(t("navPeople"))}
-        {can("viewSwimmers") && (
+        {can("viewSwimmers") && isTabEnabled("swimmers") && (
         <button
           onClick={() => setTab("swimmers")}
           className={navBtnClass("swimmers")}
@@ -9747,7 +9784,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <Users className="w-4 h-4" /> {t("swimmers")}
         </button>
         )}
-        {role !== "technical_director" && (
+        {role !== "technical_director" && isTabEnabled("coaches") && (
         <button
           onClick={() => setTab("coaches")}
           className={navBtnClass("coaches")}
@@ -9755,7 +9792,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <Award className="w-4 h-4" /> {t("coaches")}
         </button>
         )}
-        {canAssignCoaches && (
+        {canAssignCoaches && isTabEnabled("coachassign") && (
           <button
             onClick={() => setTab("coachassign")}
             className={navBtnClass("coachassign")}
@@ -9763,7 +9800,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <Users className="w-4 h-4" /> {t("coachAssignments")}
           </button>
         )}
-        {(canViewFinancialReports || can("viewCoachReports")) && (
+        {(canViewFinancialReports || can("viewCoachReports")) && isTabEnabled("coachperformance") && (
         <button
           onClick={() => setTab("coachperformance")}
           className={navBtnClass("coachperformance")}
@@ -9771,7 +9808,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <Award className="w-4 h-4" /> {t("coachPerformance")}
         </button>
         )}
-        {canEdit && role !== "technical_director" && (
+        {canEdit && role !== "technical_director" && isTabEnabled("accounts") && (
           <button
             onClick={() => setTab("accounts")}
             className={navBtnClass("accounts")}
@@ -9781,13 +9818,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         )}
 
         {navSection(t("navClasses"))}
+        {isTabEnabled("schedule") && (
         <button
           onClick={() => setTab("schedule")}
           className={navBtnClass("schedule")}
         >
           <CalendarDays className="w-4 h-4" /> {t("schedule")}
         </button>
-        {canEditContent && (
+        )}
+        {canEditContent && isTabEnabled("management") && (
           <button
             onClick={() => setTab("management")}
             className={navBtnClass("management")}
@@ -9795,7 +9834,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <Users className="w-4 h-4" /> {t("familyBilling")}
           </button>
         )}
-        {(canRecordPayments || canEditContent) && (
+        {(canRecordPayments || canEditContent) && isTabEnabled("pos") && (
           <button
             onClick={() => setTab("pos")}
             className={navBtnClass("pos")}
@@ -9803,7 +9842,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <Wallet className="w-4 h-4" /> POS
           </button>
         )}
-        {canEditContent && role !== "technical_director" && (
+        {canEditContent && role !== "technical_director" && isTabEnabled("registrations") && (
           <button
             onClick={() => setTab("registrations")}
             className={navBtnClass("registrations")}
@@ -9816,7 +9855,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             )}
           </button>
         )}
-        {(can("manageWaitlist") || canEditContent) && role !== "technical_director" && (
+        {(can("manageWaitlist") || canEditContent) && role !== "technical_director" && isTabEnabled("waitlist") && (
           <button
             onClick={() => setTab("waitlist")}
             className={navBtnClass("waitlist")}
@@ -9831,7 +9870,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         )}
 
         {navSection(t("navOperations"))}
-        {canViewPayroll && role !== "technical_director" && (
+        {canViewPayroll && role !== "technical_director" && isTabEnabled("attendance") && (
           <button
             onClick={() => setTab("attendance")}
             className={navBtnClass("attendance")}
@@ -9839,7 +9878,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <Clock className="w-4 h-4" /> {t("attendance")}
           </button>
         )}
-        {canEditContent && role !== "technical_director" && (
+        {canEditContent && role !== "technical_director" && isTabEnabled("incidents") && (
           <button
             onClick={() => setTab("incidents")}
             className={navBtnClass("incidents")}
@@ -9849,7 +9888,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         )}
 
         {navSection(t("navMoney"))}
-        {role !== "technical_director" && canViewPayments && (
+        {role !== "technical_director" && canViewPayments && isTabEnabled("requests") && (
         <button
           onClick={() => setTab("requests")}
           className={navBtnClass("requests")}
@@ -9857,7 +9896,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <Bell className="w-4 h-4" /> {t("paymentRequests")}
         </button>
         )}
-        {role !== "technical_director" && (canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && (
+        {role !== "technical_director" && (canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && isTabEnabled("reports") && (
         <button
           onClick={() => setTab("reports")}
           className={navBtnClass("reports")}
@@ -9867,7 +9906,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         )}
 
         {navSection(t("navEngage"))}
-        {canEditContent && role !== "technical_director" && (
+        {canEditContent && role !== "technical_director" && isTabEnabled("feedback") && (
           <button
             onClick={() => setTab("feedback")}
             className={navBtnClass("feedback")}
@@ -9875,7 +9914,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <Star className="w-4 h-4" /> {t("feedback")}
           </button>
         )}
-        {(canEditContent || role === "technical_director") && (
+        {(canEditContent || role === "technical_director") && isTabEnabled("courses") && (
           <button
             onClick={() => setTab("courses")}
             className={navBtnClass("courses")}
@@ -9883,7 +9922,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <GraduationCap className="w-4 h-4" /> {t("courses")}
           </button>
         )}
-        {(accountName || role === "admin") && (
+        {(accountName || role === "admin") && isTabEnabled("chat") && (
           <button
             onClick={() => setTab("chat")}
             className={navBtnClass("chat")}
@@ -9895,12 +9934,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         {canEdit && role !== "technical_director" && (
           <>
             {navSection(t("navSystem"))}
+            {isTabEnabled("activity") && (
             <button
               onClick={() => setTab("activity")}
               className={navBtnClass("activity")}
             >
               <Clock className="w-4 h-4" /> {t("activityLog")}
             </button>
+            )}
             <button
               onClick={() => setTab("settings")}
               className={navBtnClass("settings")}
@@ -10143,7 +10184,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         );
       })()}
 
-      {tab === "coachassign" && canAssignCoaches && (() => {
+      {tab === "coachassign" && canAssignCoaches && isTabEnabled("coachassign") && (() => {
         const needsCoach = swimmers.filter((s) => s.day && s.time && !s.coachId);
         const alreadyAssigned = swimmers.filter((s) => s.day && s.time && s.coachId);
 
@@ -10256,7 +10297,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         );
       })()}
 
-      {tab === "requests" && (
+      {tab === "requests" && isTabEnabled("requests") && (
         <div>
           {scheduleNeededNotice && scheduleNeededNotice.length > 0 && (
             <div className="mb-4 text-sm bg-amber-50 border border-amber-200 text-amber-700 rounded-lg px-4 py-2.5 flex items-center justify-between gap-3">
@@ -10450,7 +10491,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "swimmers" && (
+      {tab === "swimmers" && isTabEnabled("swimmers") && (
         <div>
           <div className="flex items-center gap-2 flex-wrap mb-3">
             <div className="flex-1 min-w-[200px]">
@@ -11239,7 +11280,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "coaches" && (
+      {tab === "coaches" && isTabEnabled("coaches") && (
         <div>
           <div className="flex items-center justify-between mb-4 gap-2">
             <p className="text-sm text-slate-500">Coaches set the capacity available for Private / Semi Private / Group sessions.</p>
@@ -11342,7 +11383,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       )}
 
 
-      {tab === "management" && (
+      {tab === "management" && isTabEnabled("management") && (
         <div>
           <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
             <div>
@@ -11530,7 +11571,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "pos" && (canRecordPayments || canEditContent) && (
+      {tab === "pos" && (canRecordPayments || canEditContent) && isTabEnabled("pos") && (
         <div>
           <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
             <div>
@@ -12186,7 +12227,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "schedule" && (
+      {tab === "schedule" && isTabEnabled("schedule") && (
         <div>
           <div className="flex items-center justify-between gap-2 flex-wrap mb-4">
             <p className="text-sm text-slate-500">
@@ -12467,7 +12508,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "reports" && !(canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && (
+      {tab === "reports" && isTabEnabled("reports") && !(canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && (
         <div className="max-w-md mx-auto px-4 py-16 text-center">
           <Lock className="w-10 h-10 text-slate-300 mx-auto mb-3" />
           <h3 className="font-bold text-slate-900 mb-1">No access</h3>
@@ -12475,7 +12516,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "reports" && (canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && (
+      {tab === "reports" && isTabEnabled("reports") && (canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && (
         <div className="flex gap-2 mb-4">
           <button
             onClick={() => setReportsSubTab("ops")}
@@ -12496,7 +12537,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "reports" && reportsSubTab === "ops" && (canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && (() => {
+      {tab === "reports" && isTabEnabled("reports") && reportsSubTab === "ops" && (canViewFinancialReports || can("viewReports") || can("viewCoachReports")) && (() => {
         const { startISO, endISO, label } = periodRange(reportType, reportAnchor);
 
         // Revenue: confirmed payment requests dated (by confirmation time) within the period
@@ -13198,7 +13239,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         );
       })()}
 
-      {tab === "coachperformance" && (canViewFinancialReports || can("viewCoachReports")) && (() => {
+      {tab === "coachperformance" && (canViewFinancialReports || can("viewCoachReports")) && isTabEnabled("coachperformance") && (() => {
         const monthOptions = [];
         for (let i = 0; i < 12; i++) {
           const d = new Date();
@@ -13418,7 +13459,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         );
       })()}
 
-      {tab === "reports" && reportsSubTab === "insights" && canViewFinancialReports && (() => {
+      {tab === "reports" && isTabEnabled("reports") && reportsSubTab === "insights" && canViewFinancialReports && (() => {
         const activeSwimmersNow = swimmers.filter((s) => s.day && s.time);
         const churnRisks = activeSwimmersNow
           .map((s) => ({ swimmer: s, ...calculateChurnRisk(s) }))
@@ -14037,7 +14078,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "attendance" && canViewPayroll && (
+      {tab === "attendance" && canViewPayroll && isTabEnabled("attendance") && (
         <div>
           <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
             <h3 className="text-xl font-bold text-slate-900">Staff attendance</h3>
@@ -14365,7 +14406,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         );
       })()}
 
-      {tab === "registrations" && canEditContent && (
+      {tab === "registrations" && canEditContent && isTabEnabled("registrations") && (
         <div>
           <div className="mb-4">
             <h3 className="text-xl font-bold text-slate-900">New swimmer registrations</h3>
@@ -14414,7 +14455,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "waitlist" && (can("manageWaitlist") || canEditContent) && (
+      {tab === "waitlist" && (can("manageWaitlist") || canEditContent) && isTabEnabled("waitlist") && (
         <div>
           <div className="mb-4">
             <h3 className="text-xl font-bold text-slate-900">Waitlist</h3>
@@ -14477,7 +14518,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "courses" && (canEditContent || role === "technical_director") && (
+      {tab === "courses" && (canEditContent || role === "technical_director") && isTabEnabled("courses") && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -14938,7 +14979,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "feedback" && canEditContent && (
+      {tab === "feedback" && canEditContent && isTabEnabled("feedback") && (
         <div>
           <div className="mb-4">
             <h3 className="text-xl font-bold text-slate-900">Parent feedback</h3>
@@ -14990,7 +15031,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "incidents" && canEditContent && (
+      {tab === "incidents" && canEditContent && isTabEnabled("incidents") && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -16139,7 +16180,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "chat" && (accountName || role === "admin") && (
+      {tab === "chat" && (accountName || role === "admin") && isTabEnabled("chat") && (
         <div>
           <h3 className="font-bold text-slate-900 mb-1">Staff chat</h3>
           <p className="text-sm text-slate-500 mb-4">Private messages between you and other staff accounts.</p>
@@ -16202,7 +16243,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "activity" && canEdit && (
+      {tab === "activity" && canEdit && isTabEnabled("activity") && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -16242,7 +16283,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
-      {tab === "accounts" && canEdit && (
+      {tab === "accounts" && canEdit && isTabEnabled("accounts") && (
         <div>
           <div className="flex items-center justify-between mb-4 gap-2">
             <p className="text-sm text-slate-500">
@@ -22464,7 +22505,7 @@ function SuperAdminView() {
 
   const loadAcademies = async () => {
     setLoadingAcademies(true);
-    const { data } = await supabase.from("academies").select("id, name, slug, created_at, subscription_paid_until").order("created_at", { ascending: false });
+    const { data } = await supabase.from("academies").select("id, name, slug, created_at, subscription_paid_until, disabled_features").order("created_at", { ascending: false });
     setAcademies(data || []);
     setLoadingAcademies(false);
   };
@@ -22480,6 +22521,20 @@ function SuperAdminView() {
     base.setMonth(base.getMonth() + 1);
     const newDate = base.toISOString().slice(0, 10);
     const { error } = await supabase.from("academies").update({ subscription_paid_until: newDate }).eq("id", academyId);
+    if (!error) loadAcademies();
+  };
+
+  // Turns individual tabs on/off for one specific academy — e.g. holding
+  // a feature back for an academy still mid-migration, or one that's
+  // asked not to use it. Every other tab stays untouched; this only
+  // hides that one sidebar entry and blocks the tab's own content as a
+  // backstop, for whichever academy this is applied to.
+  const [featuresEditingId, setFeaturesEditingId] = useState(null);
+  const toggleAcademyFeature = async (academyId, currentDisabled, featureKey) => {
+    const next = currentDisabled.includes(featureKey)
+      ? currentDisabled.filter((k) => k !== featureKey)
+      : [...currentDisabled, featureKey];
+    const { error } = await supabase.from("academies").update({ disabled_features: next }).eq("id", academyId);
     if (!error) loadAcademies();
   };
 
@@ -23161,6 +23216,12 @@ function SuperAdminView() {
                   >
                     +1 month
                   </button>
+                  <button
+                    onClick={() => setFeaturesEditingId(featuresEditingId === a.id ? null : a.id)}
+                    className="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
+                  >
+                    Features ({TOGGLEABLE_FEATURES.length - (a.disabled_features || []).length}/{TOGGLEABLE_FEATURES.length})
+                  </button>
                   {isPaid && (
                     <button
                       onClick={() => cancelSubscription(a.id)}
@@ -23185,6 +23246,27 @@ function SuperAdminView() {
                 </div>
               </div>
               {editingAcademyId === a.id && <AcademyEditRow academy={a} onSaved={loadAcademies} onClose={() => setEditingAcademyId(null)} />}
+              {featuresEditingId === a.id && (
+                <div className="mt-2 bg-slate-50 rounded-xl p-3">
+                  <div className="text-xs text-slate-400 mb-2">Toggle which tabs this academy can see. Dashboard and Settings are always on.</div>
+                  <div className="grid sm:grid-cols-2 gap-1.5">
+                    {TOGGLEABLE_FEATURES.map((f) => {
+                      const disabled = (a.disabled_features || []).includes(f.key);
+                      return (
+                        <label key={f.key} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={!disabled}
+                            onChange={() => toggleAcademyFeature(a.id, a.disabled_features || [], f.key)}
+                            className="w-4 h-4 accent-sky-900"
+                          />
+                          {f.label}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               {deleteConfirmId === a.id && (
                 <DeleteAcademyConfirmRow
                   academy={a}
