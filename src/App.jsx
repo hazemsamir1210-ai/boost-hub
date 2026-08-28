@@ -5867,6 +5867,80 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
   };
 
+  // One-off cleanup for schedule data that went stale BEFORE the save-time
+  // fix that stops it happening going forward: a leftover nextSchedule
+  // that's no longer actually ahead of the current month (so it's been
+  // double-counting that swimmer in the coach/schedule grid), and a
+  // monthlySchedules[currentMonth] entry that's drifted out of sync with
+  // the swimmer's own live day/time/coachId fields. Every swimmer already
+  // edited since that fix went in is already clean; this is only for
+  // whoever hasn't been touched since.
+  const [reconcileRunning, setReconcileRunning] = useState(false);
+  const [reconcileMessage, setReconcileMessage] = useState("");
+  const reconcileScheduleData = async () => {
+    setReconcileRunning(true);
+    setReconcileMessage("");
+    try {
+      const all = await fetchAllSwimmers();
+      const thisMonth = monthKey();
+      let staleNextScheduleCleared = 0;
+      let monthlyEntryResynced = 0;
+
+      const fixed = all.map((s) => {
+        let changed = false;
+        let next = s;
+
+        if (next.nextSchedule && next.nextSchedule.scheduleMonth <= thisMonth) {
+          next = { ...next, nextSchedule: null };
+          changed = true;
+          staleNextScheduleCleared++;
+        }
+
+        const swimmerMonth = next.scheduleMonth || thisMonth;
+        if (swimmerMonth === thisMonth && next.day && next.time) {
+          const liveEntry = {
+            day: next.day, time: next.time, sessionType: next.sessionType, coachId: next.coachId || null,
+            day2: next.day2 || "", time2: next.time2 || "", sessionType2: next.sessionType2 || "", coachId2: next.coachId2 || null,
+            classId: next.classId, substituteCoachId: next.substituteCoachId || null, substituteDate: next.substituteDate || "",
+            scheduleMonth: thisMonth,
+          };
+          const existingEntry = next.monthlySchedules?.[thisMonth];
+          const outOfSync =
+            !existingEntry ||
+            existingEntry.day !== liveEntry.day ||
+            existingEntry.time !== liveEntry.time ||
+            existingEntry.coachId !== liveEntry.coachId ||
+            existingEntry.coachId2 !== liveEntry.coachId2;
+          if (outOfSync) {
+            next = { ...next, monthlySchedules: { ...(next.monthlySchedules || {}), [thisMonth]: liveEntry } };
+            changed = true;
+            monthlyEntryResynced++;
+          }
+        }
+
+        return changed ? next : s;
+      });
+
+      const anyChanged = fixed.some((s, i) => s !== all[i]);
+      if (anyChanged) {
+        const res = await saveCollection(STORE_KEYS.swimmers, fixed);
+        if (!res) throw new Error("Could not save the fixes, please try again");
+      }
+      logActivity(accountName, role, "Reconciled schedule data", `${staleNextScheduleCleared} stale next-month entries cleared, ${monthlyEntryResynced} resynced`);
+      loadSwimmers();
+      loadSwimmersPage({ offset: 0 });
+      setReconcileMessage(
+        staleNextScheduleCleared === 0 && monthlyEntryResynced === 0
+          ? "Checked everyone — nothing needed fixing."
+          : `Fixed ${staleNextScheduleCleared} stale future-booking record${staleNextScheduleCleared === 1 ? "" : "s"} and resynced ${monthlyEntryResynced} schedule entr${monthlyEntryResynced === 1 ? "y" : "ies"}.`
+      );
+    } catch (e) {
+      setReconcileMessage(e?.message || "Something went wrong — safe to run again.");
+    } finally {
+      setReconcileRunning(false);
+    }
+  };
+
   const openNewClassModal = (prefill = {}) => {
     setClassError("");
     setClassModal({
@@ -12731,6 +12805,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                 title="Which month's attendance to include in the PDF"
               />
+              {canEditContent && (
+                <button
+                  onClick={reconcileScheduleData}
+                  disabled={reconcileRunning}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-50 text-amber-800 text-sm font-medium hover:bg-amber-100 disabled:opacity-60"
+                  title="Cleans up stale future-booking data left over from before a recent fix — makes coach assignments match this schedule exactly"
+                >
+                  {reconcileRunning ? <RefreshCw className="w-4 h-4 animate-spin" /> : "🔧"}
+                  {reconcileRunning ? "Checking..." : "Reconcile schedule"}
+                </button>
+              )}
               <button
                 onClick={exportSessionRoster}
                 disabled={exportingRoster}
@@ -12785,6 +12870,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </div>
             )}
           </div>
+
+          {reconcileMessage && (
+            <div className="text-sm text-amber-800 bg-amber-50 rounded-xl px-4 py-2.5 mb-4">{reconcileMessage}</div>
+          )}
 
           {upcomingMakeups.length > 0 && (
             <div className="mb-6">
