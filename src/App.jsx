@@ -5369,6 +5369,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [enrollModal, setEnrollModal] = useState(null); // null | { form }
   const [enrollSwimmerSearch, setEnrollSwimmerSearch] = useState("");
   const [enrollSwimmerDropdownOpen, setEnrollSwimmerDropdownOpen] = useState(false);
+  const [enrollCoachFilter, setEnrollCoachFilter] = useState("all");
+  const [enrollPlanFilter, setEnrollPlanFilter] = useState("all");
   const [enrollSaving, setEnrollSaving] = useState(false);
   const [enrollError, setEnrollError] = useState("");
 
@@ -5622,6 +5624,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     setEnrollError("");
     setEnrollSwimmerSearch("");
     setEnrollSwimmerDropdownOpen(false);
+    setEnrollCoachFilter("all");
+    setEnrollPlanFilter("all");
     setEnrollModal({ form: { swimmerId: "", classId: "", planId: "", kind: "recurring", dropInAmount: "" } });
     if (coreSwimmersForEnroll.length === 0) {
       try {
@@ -11911,19 +11915,68 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 )}
               </div>
               <div>
+                <label className="text-xs text-slate-500 mb-1 block">Filter classes by</label>
+                <div className="flex gap-2 mb-2">
+                  <select
+                    value={enrollCoachFilter}
+                    onChange={(e) => setEnrollCoachFilter(e.target.value)}
+                    className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                  >
+                    <option value="all">Any coach</option>
+                    {coreCoaches.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                  <select
+                    value={enrollPlanFilter}
+                    onChange={(e) => setEnrollPlanFilter(e.target.value)}
+                    className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-blue-900 bg-white"
+                  >
+                    <option value="all">Any plan</option>
+                    {SESSION_TYPES.map((st) => (
+                      <option key={st.id} value={st.id}>{st.label}</option>
+                    ))}
+                  </select>
+                </div>
                 <label className="text-xs text-slate-500 mb-1 block">Class</label>
-                <select
-                  value={enrollModal.form.classId}
-                  onChange={(e) => setEnrollModal({ ...enrollModal, form: { ...enrollModal.form, classId: e.target.value } })}
-                  className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-blue-900 bg-white"
-                >
-                  <option value="">— Choose a class —</option>
-                  {coreClasses.filter((c) => c.active !== false).map((c) => {
-                    const count = activeEnrollmentCountForClass(coreEnrollments, c.id);
-                    const full = count >= Number(c.capacity || 0);
-                    return <option key={c.id} value={c.id} disabled={full}>{c.name} ({count}/{c.capacity}){full ? " — full" : ""}</option>;
-                  })}
-                </select>
+                <div className="space-y-1.5 max-h-48 overflow-y-auto border border-slate-200 rounded-lg p-2">
+                  {coreClasses
+                    .filter((c) => c.active !== false)
+                    .filter((c) => enrollCoachFilter === "all" || c.coachId === enrollCoachFilter)
+                    .filter((c) => enrollPlanFilter === "all" || c.sessionType === enrollPlanFilter)
+                    .map((c) => {
+                      const count = activeEnrollmentCountForClass(coreEnrollments, c.id);
+                      const full = count >= Number(c.capacity || 0);
+                      const selected = enrollModal.form.classId === c.id;
+                      const info = sessionTypeInfo(c.sessionType);
+                      const coachName = coreCoaches.find((co) => co.id === c.coachId)?.name;
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          disabled={full}
+                          onClick={() => setEnrollModal({ ...enrollModal, form: { ...enrollModal.form, classId: c.id } })}
+                          className={`w-full flex items-center gap-2 text-left px-2.5 py-2 rounded-lg border transition disabled:opacity-40 disabled:cursor-not-allowed ${
+                            selected ? "border-blue-900 bg-blue-50" : "border-slate-100 hover:bg-slate-50"
+                          }`}
+                        >
+                          <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: info.color }} />
+                          <span className="flex-1 min-w-0">
+                            <span className="block text-sm font-medium text-slate-800 truncate">{c.name}</span>
+                            <span className="block text-xs text-slate-400">
+                              {info.label}{coachName ? ` · ${coachName}` : ""} · {count}/{c.capacity}{full ? " — full" : ""}
+                            </span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  {coreClasses
+                    .filter((c) => c.active !== false)
+                    .filter((c) => enrollCoachFilter === "all" || c.coachId === enrollCoachFilter)
+                    .filter((c) => enrollPlanFilter === "all" || c.sessionType === enrollPlanFilter).length === 0 && (
+                    <div className="text-center text-sm text-slate-400 py-4">No classes match this filter</div>
+                  )}
+                </div>
               </div>
               <div>
                 <label className="text-xs text-slate-500 mb-1 block">Enrollment type</label>
