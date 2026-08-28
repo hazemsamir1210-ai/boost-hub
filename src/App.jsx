@@ -9426,7 +9426,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           // coachId is stored as either an empty string or a real null
           // depending on which code path cleared it, so both need
           // covering to actually catch every "no coach yet" swimmer.
-          query = query.or("data->>coachId.is.null,data->>coachId.eq.");
+          // PostgREST needs an explicit "" to match an empty string
+          // value — a bare trailing dot with nothing after it doesn't
+          // parse as "empty", it just breaks the filter silently.
+          query = query.or('data->>coachId.is.null,data->>coachId.eq.""');
         }
         if (paymentStatusFilter === "paid") {
           query = query.filter("data->paidMonths", "cs", JSON.stringify([paymentMonthFilter]));
