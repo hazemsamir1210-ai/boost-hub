@@ -8254,6 +8254,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [rosterHeaderAlign, setRosterHeaderAlign] = useState("left"); // academy name/logo — separate from the table content, since it's a flex row that ignores text-align
   const [trainingWindow, setTrainingWindow] = useState({ startDate: "", endDate: "", cap: 8 });
   const [trainingWindowOpen, setTrainingWindowOpen] = useState(false);
+  const [slotDetailModal, setSlotDetailModal] = useState(null); // { coachName, day, time, booking } | null
 
   useEffect(() => {
     if (tab === "schedule") loadTrainingWindowSettings().then(setTrainingWindow);
@@ -9957,16 +9958,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const { coachLoadById, coachBookingsById } = React.useMemo(() => {
     const loadById = {};
     const bookingsMapById = {};
-    const addBooking = (coachId, day, time, sessionType, level, age) => {
+    const addBooking = (coachId, day, time, sessionType, level, age, swimmerName, swimmerId) => {
       if (!coachId || !day || !time) return;
       loadById[coachId] = (loadById[coachId] || 0) + 1;
       if (!bookingsMapById[coachId]) bookingsMapById[coachId] = {};
       const key = `${day}|${time}`;
       const bucket = bookingsMapById[coachId];
-      if (!bucket[key]) bucket[key] = { day, time, sessionType, count: 0, levels: new Set(), ages: [] };
+      if (!bucket[key]) bucket[key] = { day, time, sessionType, count: 0, levels: new Set(), ages: [], names: [] };
       bucket[key].count += 1;
       if (level) bucket[key].levels.add(level);
       if (age != null && age !== "") bucket[key].ages.push(Number(age));
+      bucket[key].names.push({ name: swimmerName, id: swimmerId, level });
     };
     // Only swimmers actually scheduled for the month currently being
     // viewed — either their live schedule (if it's already tagged for
@@ -9976,15 +9978,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     // before scheduleMonth existed is treated as "this month".
     swimmers.forEach((s) => {
       if ((s.scheduleMonth || monthKey()) === scheduleMonth) {
-        addBooking(s.coachId, s.day, s.time, s.sessionType, s.level, s.age);
+        addBooking(s.coachId, s.day, s.time, s.sessionType, s.level, s.age, s.name, s.id);
         // A swimmer with a second weekly session (different coach or slot)
         // shows up under that booking too — same swimmer, two commitments.
-        if (s.day2 && s.time2) addBooking(s.coachId2, s.day2, s.time2, s.sessionType2, s.level, s.age);
+        if (s.day2 && s.time2) addBooking(s.coachId2, s.day2, s.time2, s.sessionType2, s.level, s.age, s.name, s.id);
       }
       if (s.nextSchedule && s.nextSchedule.scheduleMonth === scheduleMonth) {
-        addBooking(s.nextSchedule.coachId, s.nextSchedule.day, s.nextSchedule.time, s.nextSchedule.sessionType, s.level, s.age);
+        addBooking(s.nextSchedule.coachId, s.nextSchedule.day, s.nextSchedule.time, s.nextSchedule.sessionType, s.level, s.age, s.name, s.id);
         if (s.nextSchedule.day2 && s.nextSchedule.time2) {
-          addBooking(s.nextSchedule.coachId2, s.nextSchedule.day2, s.nextSchedule.time2, s.nextSchedule.sessionType2, s.level, s.age);
+          addBooking(s.nextSchedule.coachId2, s.nextSchedule.day2, s.nextSchedule.time2, s.nextSchedule.sessionType2, s.level, s.age, s.name, s.id);
         }
       }
     });
@@ -12979,18 +12981,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               const agesLabel = booking.ages.length > 0 ? booking.ages.slice().sort((a, b) => a - b).join(", ") : "";
                               return (
                                 <td key={t} className="px-2 py-2 text-center">
-                                  <div
-                                    className={`inline-block px-1.5 py-1 rounded font-medium leading-tight text-xs ${
+                                  <button
+                                    onClick={() => setSlotDetailModal({ coachName: c.name, day: dayGroup.label, time: t, booking })}
+                                    className={`inline-block px-1.5 py-1 rounded font-medium leading-tight text-xs hover:ring-2 hover:ring-sky-300 transition ${
                                       spotsLeft > 0 ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"
                                     }`}
-                                    title={`${sessionTypeInfo(booking.sessionType).label} — ${booking.count}/${capacity}${agesLabel ? ` — ages: ${agesLabel}` : ""}`}
+                                    title={`${sessionTypeInfo(booking.sessionType).label} — ${booking.count}/${capacity}${agesLabel ? ` — ages: ${agesLabel}` : ""} — click to see names`}
                                   >
                                     <div>{booking.count}/{capacity}</div>
                                     <div>{booking.levels.join(", ")}</div>
                                     {agesLabel && (
                                       <div className="opacity-70 whitespace-nowrap">Ages: {agesLabel}</div>
                                     )}
-                                  </div>
+                                  </button>
                                   {makeupBadge}
                                 </td>
                               );
@@ -13005,8 +13008,31 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             })
           )}
           <p className="text-xs text-slate-400">
-            — means that coach has no swimmer booked at that day/time yet (fully open). A green box means there's still room; gray means it's full. Ages shown are whoever's already booked in that slot — hover for the exact list too.
+            — means that coach has no swimmer booked at that day/time yet (fully open). A green box means there's still room; gray means it's full. Ages shown are whoever's already booked in that slot — hover for the exact list too. Click any slot to see the exact swimmer names counted in it.
           </p>
+        </div>
+      )}
+
+      {slotDetailModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setSlotDetailModal(null)}>
+          <div className="bg-white rounded-2xl p-5 max-w-sm w-full max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-lg font-bold text-slate-900">{slotDetailModal.coachName}</h3>
+              <button onClick={() => setSlotDetailModal(null)}><X className="w-5 h-5 text-slate-400" /></button>
+            </div>
+            <p className="text-sm text-slate-500 mb-4">{slotDetailModal.day} · {slotDetailModal.time} — {slotDetailModal.booking.count} swimmer{slotDetailModal.booking.count === 1 ? "" : "s"} counted here</p>
+            <div className="space-y-1.5">
+              {slotDetailModal.booking.names.map((n, i) => (
+                <div key={i} className="flex items-center justify-between text-sm border-b border-slate-50 pb-1.5">
+                  <span className="text-slate-800">{n.name}</span>
+                  <span className="text-xs text-slate-400">{n.level}</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-slate-400 mt-4">
+              If any of these names shouldn't be here, open that swimmer from the Swimmers tab and re-check their coach/schedule.
+            </p>
+          </div>
         </div>
       )}
 
