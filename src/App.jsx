@@ -9721,22 +9721,21 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         }
         const q = search.trim();
         if (q) query = query.or(`name.ilike.%${q}%,phone.ilike.%${q}%`);
-        // A specific coach uses the same reliable JSON-path equality
-        // filter as sessionType/day/time above. "No coach assigned" is
-        // filtered client-side instead — the equivalent JSON-path "is
-        // null" server filter proved unreliable in practice, so that one
-        // case fetches every swimmer matching every OTHER filter
-        // (uncapped, not paginated) and filters it in JS, which is
-        // guaranteed correct regardless of how coachId happens to be
-        // represented in older records.
-        if (coachFilterValue !== "all" && coachFilterValue !== "none") {
-          query = query.filter("data->>coachId", "eq", coachFilterValue);
-        }
-        if (coachFilterValue === "none") {
+        // Every coachId comparison — a specific coach or "no coach" — is
+        // filtered client-side, never at the database level. The
+        // server-side JSON-path filter for this one field has proved
+        // unreliable across several attempts (both equality and null
+        // checks), so this fetches every swimmer matching every OTHER
+        // filter (uncapped, not paginated) and does the coachId match in
+        // plain JS, which is guaranteed correct no matter how coachId
+        // happens to be represented in the stored data.
+        if (coachFilterValue !== "all") {
           query = query.order("name", { ascending: true });
           const { data, error } = await query;
           if (error) throw error;
-          const items = (data || []).map((r) => r.data).filter((s) => !s.coachId);
+          const items = (data || [])
+            .map((r) => r.data)
+            .filter((s) => (coachFilterValue === "none" ? !s.coachId : String(s.coachId) === String(coachFilterValue)));
           setSwimmersPage(items);
           setSwimmersPageTotal(items.length);
           return;
