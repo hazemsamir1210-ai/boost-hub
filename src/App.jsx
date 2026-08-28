@@ -8069,7 +8069,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [paymentMonthFilter, setPaymentMonthFilter] = useState(monthKey());
   const [paymentStatusFilter, setPaymentStatusFilter] = useState("paid"); // "all" | "paid" | "unpaid" — defaults to only showing enrolled, paid swimmers
   const [showUnscheduled, setShowUnscheduled] = useState(false); // include swimmers with no day/time set yet
-  const [noCoachOnly, setNoCoachOnly] = useState(false); // scheduled swimmers with no coach assigned
+  const [coachFilterValue, setCoachFilterValue] = useState("all"); // "all" | "none" | a coach id
   const [sessionTypeFilter, setSessionTypeFilter] = useState("all"); // filters by session size — Private (1) / Semi Private (2) / Group (4)
 
   // bulk import from Excel
@@ -9721,13 +9721,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         }
         const q = search.trim();
         if (q) query = query.or(`name.ilike.%${q}%,phone.ilike.%${q}%`);
-        // "No coach assigned" is filtered client-side instead of at the
-        // database level — the equivalent JSON-path server filter proved
-        // unreliable in practice, so this fetches every swimmer matching
-        // every OTHER filter (uncapped, not paginated) and filters this
-        // one condition in JS, which is guaranteed correct regardless of
-        // how coachId happens to be represented in older records.
-        if (noCoachOnly) {
+        // A specific coach uses the same reliable JSON-path equality
+        // filter as sessionType/day/time above. "No coach assigned" is
+        // filtered client-side instead — the equivalent JSON-path "is
+        // null" server filter proved unreliable in practice, so that one
+        // case fetches every swimmer matching every OTHER filter
+        // (uncapped, not paginated) and filters it in JS, which is
+        // guaranteed correct regardless of how coachId happens to be
+        // represented in older records.
+        if (coachFilterValue !== "all" && coachFilterValue !== "none") {
+          query = query.filter("data->>coachId", "eq", coachFilterValue);
+        }
+        if (coachFilterValue === "none") {
           query = query.order("name", { ascending: true });
           const { data, error } = await query;
           if (error) throw error;
@@ -9749,7 +9754,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         setSwimmersPageLoading(false);
       }
     },
-    [branchFilter, levelFilter, dayFilter, timeFilter, sessionTypeFilter, paymentStatusFilter, paymentMonthFilter, search, showUnscheduled, noCoachOnly, branchRestriction, role, programAccess, levelAccess, myAccount]
+    [branchFilter, levelFilter, dayFilter, timeFilter, sessionTypeFilter, paymentStatusFilter, paymentMonthFilter, search, showUnscheduled, coachFilterValue, branchRestriction, role, programAccess, levelAccess, myAccount]
   );
 
   useEffect(() => {
@@ -10946,7 +10951,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             >
               {showMoreFilters ? "Fewer filters ▲" : "More filters ▼"}
             </button>
-            {(branchFilter !== "all" || levelFilter !== "all" || dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || paymentStatusFilter !== "paid" || showUnscheduled || noCoachOnly || search) && (
+            {(branchFilter !== "all" || levelFilter !== "all" || dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || paymentStatusFilter !== "paid" || showUnscheduled || coachFilterValue !== "all" || search) && (
               <button
                 onClick={() => {
                   setBranchFilter("all");
@@ -10956,7 +10961,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   setSessionTypeFilter("all");
                   setPaymentStatusFilter("all");
                   setShowUnscheduled(true);
-                  setNoCoachOnly(false);
+                  setCoachFilterValue("all");
                   setSearch("");
                 }}
                 className="text-xs text-slate-400 hover:text-slate-600 underline whitespace-nowrap"
@@ -11025,15 +11030,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 />
                 Include unscheduled
               </label>
-              <label className="flex items-center gap-1.5 text-sm text-slate-500 select-none cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={noCoachOnly}
-                  onChange={(e) => setNoCoachOnly(e.target.checked)}
-                  className="w-4 h-4 accent-sky-900"
-                />
-                No coach assigned only
-              </label>
+              <select
+                value={coachFilterValue}
+                onChange={(e) => setCoachFilterValue(e.target.value)}
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+              >
+                <option value="all">All coaches</option>
+                <option value="none">No coach assigned</option>
+                {coaches.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
             </div>
           )}
 
