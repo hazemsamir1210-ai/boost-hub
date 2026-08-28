@@ -2067,16 +2067,34 @@ async function fetchAllSwimmers() {
   return await loadCollection(STORE_KEYS.swimmers);
 }
 
+// Edits queue up and run one at a time, in the order they were made —
+// each waits for the previous save to actually finish before starting
+// its own fetch, so two swimmer edits made close together (assigning a
+// coach to one, then another, in quick succession) can never race and
+// silently overwrite each other. Without this, the second save's
+// "fetch everyone, change one, save everyone" cycle could read the list
+// BEFORE the first save had finished writing, then write that stale copy
+// back over it — quietly erasing whichever edit lost the race.
+let swimmerUpdateQueue = Promise.resolve();
+
 async function updateSwimmerById(id, updateFn) {
-  const all = await fetchAllSwimmers();
-  const idx = all.findIndex((s) => s.id === id);
-  if (idx === -1) throw new Error("Swimmer not found — try refreshing the list");
-  const updated = updateFn(all[idx]);
-  const next = [...all];
-  next[idx] = updated;
-  const res = await saveCollection(STORE_KEYS.swimmers, next);
-  if (!res) throw new Error("Could not save, please try again");
-  return updated;
+  const run = async () => {
+    const all = await fetchAllSwimmers();
+    const idx = all.findIndex((s) => s.id === id);
+    if (idx === -1) throw new Error("Swimmer not found — try refreshing the list");
+    const updated = updateFn(all[idx]);
+    const next = [...all];
+    next[idx] = updated;
+    const res = await saveCollection(STORE_KEYS.swimmers, next);
+    if (!res) throw new Error("Could not save, please try again");
+    return updated;
+  };
+  // Chain onto the queue regardless of whether the previous entry
+  // succeeded or failed, so one failed save never permanently blocks
+  // every edit after it — but still WAIT for our own turn before running.
+  const result = swimmerUpdateQueue.catch(() => {}).then(run);
+  swimmerUpdateQueue = result.catch(() => {});
+  return result;
 }
 
 const HISTORY_CLEANUP_KEY = "history-cleanup-settings";
@@ -8891,6 +8909,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   };
 
   const saveSwimmer = async (record) => {
+    // Same save-queue protection as updateSwimmerById — this is the
+    // fetch-everyone/change-one/save-everyone cycle the Swimmer Form
+    // itself uses, so editing two swimmers back to back through the form
+    // needs the exact same protection against one save's write racing
+    // ahead of another's and silently erasing it.
+    const run = async () => {
     const all = await fetchAllSwimmers();
     const existing = all.find((s) => s.id === record.id);
     // Track a level history entry whenever the level actually changes
@@ -8920,6 +8944,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     if (!res) throw new Error("Could not save the swimmer, please try again");
     logActivity(accountName, role, existing ? "Edited swimmer" : "Added swimmer", finalRecord.name);
     syncSwimmerToCoreEngine(finalRecord); // best-effort, never blocks this save
+    return finalRecord;
+    };
+    const queued = swimmerUpdateQueue.catch(() => {}).then(run);
+    swimmerUpdateQueue = queued.catch(() => {});
+    await queued;
 
     loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
     setShowForm(false);
@@ -9733,9 +9762,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           query = query.order("name", { ascending: true });
           const { data, error } = await query;
           if (error) throw error;
+          // The coach that actually applies to the month being viewed
+          // ("Acting on") — a swimmer edited for a future month has that
+          // month's own coachId saved separately under monthlySchedules,
+          // without touching their top-level coachId at all, so checking
+          // only the top-level field misses exactly those swimmers.
+          const effectiveCoachId = (s) => {
+            const monthEntry = s.monthlySchedules?.[paymentMonthFilter];
+            return monthEntry ? monthEntry.coachId : s.coachId;
+          };
           const items = (data || [])
             .map((r) => r.data)
-            .filter((s) => (coachFilterValue === "none" ? !s.coachId : String(s.coachId) === String(coachFilterValue)));
+            .filter((s) => (coachFilterValue === "none" ? !effectiveCoachId(s) : String(effectiveCoachId(s)) === String(coachFilterValue)));
           setSwimmersPage(items);
           setSwimmersPageTotal(items.length);
           return;
