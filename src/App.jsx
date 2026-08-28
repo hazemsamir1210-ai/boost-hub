@@ -973,7 +973,7 @@ function getTimeOptions(branch, day, level) {
   return extended;
 }
 
-function compressImage(file, maxWidth = 900, quality = 0.72) {
+function compressImage(file, maxWidth = 900, quality = 0.72, preserveTransparency = false) {
   return new Promise((resolve, reject) => {
     // Reading via an object URL (a lightweight reference to the file) is
     // far more memory-friendly than base64-encoding the whole file first —
@@ -990,7 +990,14 @@ function compressImage(file, maxWidth = 900, quality = 0.72) {
         canvas.height = Math.max(1, Math.round(img.height * scale));
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", quality));
+        // JPEG has no transparency channel — any see-through area of the
+        // original gets silently filled in as solid black on export.
+        // Logos are usually exactly the case where that transparent
+        // background is the whole point, so those are kept as PNG
+        // instead; everything else (photos, payment screenshots) stays
+        // JPEG, since PNG would make them noticeably larger for no
+        // visible benefit.
+        resolve(preserveTransparency ? canvas.toDataURL("image/png") : canvas.toDataURL("image/jpeg", quality));
       } catch (e) {
         reject(e);
       } finally {
@@ -6707,7 +6714,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   const uploadLevelLogo = (level, file) => {
     if (!file) return;
-    compressImage(file, 300, 0.85)
+    compressImage(file, 300, 0.85, true)
       .then(async (uri) => {
         const next = { ...levelLogos, [level]: uri };
         setLevelLogos(next);
@@ -7478,14 +7485,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   const handleLogoUpload = (file) => {
     if (!file) return;
-    compressImage(file, 300, 0.85)
+    compressImage(file, 300, 0.85, true)
       .then(setSettingsLogo)
       .catch((e) => setSettingsError(e?.message || "Could not read that image — try a different photo"));
   };
 
   const handleSignatureUpload = (file) => {
     if (!file) return;
-    compressImage(file, 400, 0.85)
+    compressImage(file, 400, 0.85, true)
       .then(async (uri) => {
         setSettingsSignature(uri);
         await saveCustomSignature(uri);
@@ -7554,7 +7561,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   const uploadVenueLogo = (file) => {
     if (!file) return;
-    compressImage(file, 300, 0.9).then((uri) => {
+    compressImage(file, 300, 0.9, true).then((uri) => {
       saveVenue({ imageDataUri: uri, x: venueLogo?.x ?? 85, y: venueLogo?.y ?? 15, width: venueLogo?.width ?? 20 });
     });
   };
@@ -23554,7 +23561,7 @@ function SuperAdminView() {
               onChange={async (e) => {
                 const file = e.target.files?.[0];
                 if (!file) return;
-                const dataUri = await compressImage(file, 400, 0.8);
+                const dataUri = await compressImage(file, 400, 0.8, true);
                 setNewLogoPreview(dataUri);
               }}
               className="text-sm"
@@ -23838,7 +23845,7 @@ function SuperAdminView() {
               accept="image/*"
               onChange={(e) => {
                 const file = e.target.files?.[0];
-                if (file) compressImage(file, 200, 0.9).then((uri) => setPlatformBranding({ ...platformBranding, logoDataUri: uri }));
+                if (file) compressImage(file, 200, 0.9, true).then((uri) => setPlatformBranding({ ...platformBranding, logoDataUri: uri }));
               }}
               className="text-sm"
             />
@@ -24146,7 +24153,7 @@ function AcademyEditRow({ academy, onSaved, onClose }) {
           onChange={async (e) => {
             const file = e.target.files?.[0];
             if (!file) return;
-            setLogoPreview(await compressImage(file, 400, 0.8));
+            setLogoPreview(await compressImage(file, 400, 0.8, true));
           }}
           className="text-xs"
         />
