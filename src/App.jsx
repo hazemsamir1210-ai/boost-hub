@@ -9662,7 +9662,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           // Every place that sets a swimmer's coachId normalizes it to
           // null when there's no coach (coachId || null) — never an
           // empty string — so a plain null check is all this needs.
-          query = query.is("data->>coachId", null);
+          // Using .filter() here (not .is()) since that's the JSON-path
+          // filter method already proven to work for day/time/sessionType
+          // above — .is() doesn't reliably accept a "data->>x" expression
+          // as its column argument the way a plain column name would.
+          query = query.filter("data->>coachId", "is", null);
         }
         if (paymentStatusFilter === "paid") {
           query = query.filter("data->paidMonths", "cs", JSON.stringify([paymentMonthFilter]));
