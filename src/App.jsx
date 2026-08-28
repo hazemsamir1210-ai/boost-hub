@@ -1428,8 +1428,28 @@ async function getEffectiveAdminPassword() {
   }
 }
 
+// Same pattern as the admin password override above — every academy
+// using this codebase used to share the exact same hardcoded
+// "staff123" default, visible to anyone who opened the deployed
+// JavaScript. Each academy now gets its own, saved per-academy so one
+// academy's staff password never overlaps with another's.
+const STAFF_PASSWORD_KEY = "staff-password-override";
+
+async function getEffectiveStaffPassword() {
+  try {
+    const res = await window.storage.get(STAFF_PASSWORD_KEY);
+    return res?.value || CONFIG.staffPassword;
+  } catch (e) {
+    return CONFIG.staffPassword;
+  }
+}
+
 async function setAdminPasswordOverride(newPassword) {
   return storageSet(ADMIN_PASSWORD_KEY, newPassword);
+}
+
+async function setStaffPasswordOverride(newPassword) {
+  return storageSet(STAFF_PASSWORD_KEY, newPassword);
 }
 
 /* Every subs/swimmers/coaches record used to live under its own storage key
@@ -3289,6 +3309,191 @@ function SkillTreePath({ skills, ratings = {}, onRate, editable }) {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+/* A focused, single-swimmer view with its own tabs — Overview, Skills,
+   Attendance, Payments — replacing the "everything in one expandable
+   row" layout with something closer to a real profile page. Read-only
+   for attendance/payment history (recording a NEW payment or attendance
+   entry still happens from the Swimmers list/Attendance tab, which
+   already do that well); this is for reviewing one swimmer's whole
+   picture in one place. */
+function SwimmerProfileModal({ swimmer: s, coaches, onClose, onEditSkill, canEditSkills }) {
+  const { t } = useLang();
+  const [profileTab, setProfileTab] = useState("overview");
+  const coachName = coaches.find((c) => c.id === s.coachId)?.name;
+  const dayLabel = DAY_GROUPS.find((d) => d.id === s.day)?.label;
+  const skills = LEVEL_SKILLS[s.level] || [];
+  const mastered = skills.filter((sk) => (s.skills?.[s.level]?.[sk] || 0) >= 5).length;
+
+  const attendanceEntries = Object.entries(s.attendance || {}).sort((a, b) => b[0].localeCompare(a[0]));
+  const presentCount = attendanceEntries.filter(([, status]) => status === "present").length;
+  const absentCount = attendanceEntries.filter(([, status]) => status === "absent").length;
+  const attendanceRate = attendanceEntries.length > 0 ? Math.round((presentCount / attendanceEntries.length) * 100) : null;
+
+  const paidMonths = (s.paidMonths || []).slice().sort().reverse();
+  const manualPayments = (s.manualPayments || []).slice().sort((a, b) => new Date(b.at) - new Date(a.at));
+
+  const TABS = [
+    { id: "overview", label: "Overview" },
+    { id: "skills", label: "Skills" },
+    { id: "attendance", label: "Attendance" },
+    { id: "payments", label: "Payments" },
+  ];
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 border-b border-slate-100">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-bold text-slate-900 tracking-tight">{s.name}</h2>
+              <p className="text-sm text-slate-500 mt-0.5">{s.age} yrs · {s.level}</p>
+            </div>
+            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="flex gap-1 mt-4 overflow-x-auto">
+            {TABS.map((tb) => (
+              <button
+                key={tb.id}
+                onClick={() => setProfileTab(tb.id)}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition ${
+                  profileTab === tb.id ? "bg-sky-950 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                }`}
+              >
+                {tb.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="p-5 overflow-y-auto flex-1">
+          {profileTab === "overview" && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4 pb-4 border-b border-slate-100">
+                <div>
+                  <div className="text-xs text-slate-400 uppercase tracking-wide mb-1">Attendance</div>
+                  <div className="text-2xl font-bold text-slate-900">{attendanceRate !== null ? `${attendanceRate}%` : "—"}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-400 uppercase tracking-wide mb-1">Skills</div>
+                  <div className="text-2xl font-bold text-slate-900">{skills.length > 0 ? `${mastered}/${skills.length}` : "—"}</div>
+                </div>
+              </div>
+              <div className="grid sm:grid-cols-2 gap-x-6 gap-y-3 text-sm">
+                <div>
+                  <div className="text-xs text-slate-400">Phone</div>
+                  <div className="text-slate-800">{s.phone || "—"}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-400">Branch</div>
+                  <div className="text-slate-800">{BRANCHES.find((b) => b.id === s.branch)?.name || "—"}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-400">Schedule</div>
+                  <div className="text-slate-800">{dayLabel ? `${dayLabel}${s.time ? ` · ${s.time}` : ""}` : "Unscheduled"}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-400">Coach</div>
+                  <div className="text-slate-800">{coachName || "No coach assigned"}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-400">Session type</div>
+                  <div className="text-slate-800">{sessionTypeInfo(s.sessionType).label}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-400">Status</div>
+                  <div className="text-slate-800">{isFrozen(s) ? "❄️ Frozen" : "Active"}</div>
+                </div>
+              </div>
+              {s.notes && (
+                <div className="pt-3 border-t border-slate-100">
+                  <div className="text-xs text-slate-400 mb-1">Notes</div>
+                  <div className="text-sm text-slate-600">{s.notes}</div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {profileTab === "skills" && (
+            skills.length === 0 ? (
+              <div className="text-sm text-slate-400 text-center py-10">No skills defined for this level yet</div>
+            ) : (
+              <SkillTreePath
+                skills={skills}
+                ratings={s.skills?.[s.level] || {}}
+                editable={canEditSkills}
+                onRate={(skill, n) => onEditSkill(s, skill, n)}
+              />
+            )
+          )}
+
+          {profileTab === "attendance" && (
+            <div>
+              <div className="flex items-center gap-4 mb-4 pb-4 border-b border-slate-100">
+                <div>
+                  <div className="text-xs text-slate-400 uppercase tracking-wide mb-1">Present</div>
+                  <div className="text-xl font-bold text-green-600">{presentCount}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-400 uppercase tracking-wide mb-1">Absent</div>
+                  <div className="text-xl font-bold text-red-500">{absentCount}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-400 uppercase tracking-wide mb-1">Rate</div>
+                  <div className="text-xl font-bold text-slate-900">{attendanceRate !== null ? `${attendanceRate}%` : "—"}</div>
+                </div>
+              </div>
+              {attendanceEntries.length === 0 ? (
+                <div className="text-sm text-slate-400 text-center py-10">No attendance recorded yet</div>
+              ) : (
+                <div className="space-y-1">
+                  {attendanceEntries.slice(0, 30).map(([date, status]) => (
+                    <div key={date} className="flex items-center justify-between text-sm border-b border-slate-50 py-1.5">
+                      <span className="text-slate-600">{new Date(date).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}</span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${status === "present" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                        {status === "present" ? "Present" : "Absent"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {profileTab === "payments" && (
+            <div>
+              <div className="text-xs text-slate-400 uppercase tracking-wide mb-2">Paid months</div>
+              {paidMonths.length === 0 ? (
+                <div className="text-sm text-slate-400 text-center py-6">No payments recorded yet</div>
+              ) : (
+                <div className="flex flex-wrap gap-1.5 mb-4">
+                  {paidMonths.map((m) => (
+                    <span key={m} className="text-xs px-2.5 py-1 rounded-full bg-green-50 text-green-700 font-medium">{monthLabel(m)}</span>
+                  ))}
+                </div>
+              )}
+              {manualPayments.length > 0 && (
+                <>
+                  <div className="text-xs text-slate-400 uppercase tracking-wide mb-2 mt-4 pt-4 border-t border-slate-100">Marked paid only (no amount logged)</div>
+                  <div className="space-y-1">
+                    {manualPayments.map((p, i) => (
+                      <div key={i} className="flex items-center justify-between text-sm border-b border-slate-50 py-1.5">
+                        <span className="text-slate-600">{monthLabel(p.month)}</span>
+                        <span className="text-xs text-slate-400">{new Date(p.at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -6113,6 +6318,36 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
   };
 
+  const [currentStaffPass, setCurrentStaffPass] = useState("");
+  const [newStaffPass, setNewStaffPass] = useState("");
+  const [confirmStaffPass, setConfirmStaffPass] = useState("");
+  const [staffPassError, setStaffPassError] = useState("");
+  const [staffPassSuccess, setStaffPassSuccess] = useState(false);
+  const [staffPassSaving, setStaffPassSaving] = useState(false);
+
+  const changeStaffPassword = async () => {
+    setStaffPassError("");
+    setStaffPassSuccess(false);
+    const real = await getEffectiveStaffPassword();
+    if (currentStaffPass !== real) return setStaffPassError("Current password is wrong");
+    if (!newStaffPass || newStaffPass.length < 4) return setStaffPassError("New password should be at least 4 characters");
+    if (newStaffPass !== confirmStaffPass) return setStaffPassError("New passwords don't match");
+    setStaffPassSaving(true);
+    try {
+      await setStaffPasswordOverride(newStaffPass);
+      logActivity(accountName, role, "Changed pool staff password", "");
+      setCurrentStaffPass("");
+      setNewStaffPass("");
+      setConfirmStaffPass("");
+      setStaffPassSuccess(true);
+      setTimeout(() => setStaffPassSuccess(false), 4000);
+    } catch (e) {
+      setStaffPassError("Could not save, please try again");
+    } finally {
+      setStaffPassSaving(false);
+    }
+  };
+
   const [activityLog, setActivityLog] = useState([]);
   const [activityLogLoading, setActivityLogLoading] = useState(false);
 
@@ -8081,6 +8316,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   // recording a cash payment (marks paid + logs it as revenue)
   const [cashModal, setCashModal] = useState(null); // swimmer, or null
+  const [profileModalSwimmer, setProfileModalSwimmer] = useState(null);
   const [refundModal, setRefundModal] = useState(null); // invoice/request record, or null
   const [refundAmount, setRefundAmount] = useState("");
   const [refundReason, setRefundReason] = useState("");
@@ -9423,13 +9659,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         if (timeFilter !== "all") query = query.filter("data->>time", "eq", timeFilter);
         if (sessionTypeFilter !== "all") query = query.filter("data->>sessionType", "eq", sessionTypeFilter);
         if (noCoachOnly) {
-          // coachId is stored as either an empty string or a real null
-          // depending on which code path cleared it, so both need
-          // covering to actually catch every "no coach yet" swimmer.
-          // PostgREST needs an explicit "" to match an empty string
-          // value — a bare trailing dot with nothing after it doesn't
-          // parse as "empty", it just breaks the filter silently.
-          query = query.or('data->>coachId.is.null,data->>coachId.eq.""');
+          // Every place that sets a swimmer's coachId normalizes it to
+          // null when there's no coach (coachId || null) — never an
+          // empty string — so a plain null check is all this needs.
+          query = query.is("data->>coachId", null);
         }
         if (paymentStatusFilter === "paid") {
           query = query.filter("data->paidMonths", "cs", JSON.stringify([paymentMonthFilter]));
@@ -9995,6 +10228,39 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         }
         const miniTrendMax = Math.max(...miniTrend.map((m) => m.total), 1);
 
+        // Smart Digest — pulls together the same churn-risk and revenue-
+        // trend signals used elsewhere in Reports Center, but distilled
+        // into the handful of things most worth a look TODAY, ranked by
+        // how much attention each deserves. Every line traces back to a
+        // concrete number, same as the rest of these insights — never a
+        // vague "things look off" claim.
+        const digestItems = [];
+        const activeForDigest = activeNow;
+        const topChurnRisks = activeForDigest
+          .map((s) => ({ swimmer: s, ...calculateChurnRisk(s) }))
+          .filter((r) => r.score >= 55)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 3);
+        topChurnRisks.forEach((r) => {
+          digestItems.push({
+            priority: r.score >= 70 ? "high" : "medium",
+            text: `${r.swimmer.name} is ${r.score}% at risk of leaving — ${r.reasons[0]?.toLowerCase() || "worth a check-in"}.`,
+          });
+        });
+        if (revenueDelta !== null && revenueDelta <= -15) {
+          digestItems.push({ priority: "high", text: `Revenue is down ${Math.abs(revenueDelta)}% versus last month — worth a look at what changed.` });
+        } else if (revenueDelta !== null && revenueDelta >= 15) {
+          digestItems.push({ priority: "low", text: `Revenue is up ${revenueDelta}% versus last month — keep doing what's working.` });
+        }
+        if (unpaidCount > 0 && activeForDigest.length > 0) {
+          const unpaidPct = Math.round((unpaidCount / activeForDigest.length) * 100);
+          if (unpaidPct >= 30) {
+            digestItems.push({ priority: "high", text: `${unpaidPct}% of active swimmers (${unpaidCount}) haven't paid this month yet.` });
+          }
+        }
+        const digestOrder = { high: 0, medium: 1, low: 2 };
+        digestItems.sort((a, b) => digestOrder[a.priority] - digestOrder[b.priority]);
+
         const recentlyLeveledUp = swimmers
           .filter((s) => (s.certificates || []).length > 0)
           .map((s) => ({ swimmer: s, cert: s.certificates[s.certificates.length - 1] }))
@@ -10008,6 +10274,26 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
         return (
           <div>
+            {digestItems.length > 0 && (canViewFinancialReports || can("viewReports")) && (
+              <div className="bg-indigo-50 rounded-2xl p-5 mb-6">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-lg">✨</span>
+                  <h3 className="font-semibold text-indigo-950">Smart Digest</h3>
+                </div>
+                <div className="space-y-2">
+                  {digestItems.slice(0, 5).map((item, i) => (
+                    <div key={i} className="flex items-start gap-2 text-sm">
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${
+                          item.priority === "high" ? "bg-red-500" : item.priority === "medium" ? "bg-amber-500" : "bg-green-500"
+                        }`}
+                      />
+                      <span className="text-indigo-900">{item.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             {role === "admin" && subscriptionExpiredNow && (
               <div className="flex items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-2xl px-5 py-4 mb-6 flex-wrap">
                 <div>
@@ -10753,7 +11039,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <div className="min-w-[160px]">
                     <div className="font-semibold text-slate-900 text-sm flex items-center gap-1.5">
                       {rowView.level === "Baby" && <Baby className="w-3.5 h-3.5 text-amber-600 shrink-0" />}
-                      {s.name}
+                      <button
+                        onClick={() => setProfileModalSwimmer(s)}
+                        className="hover:text-sky-800 hover:underline text-left"
+                        title="View full profile"
+                      >
+                        {s.name}
+                      </button>
                       {waLink(s.phone) && (
                         <a
                           href={waLink(s.phone)}
@@ -11729,6 +12021,23 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             </div>
           )}
         </div>
+      )}
+
+      {profileModalSwimmer && (
+        <SwimmerProfileModal
+          swimmer={profileModalSwimmer}
+          coaches={coaches}
+          onClose={() => setProfileModalSwimmer(null)}
+          onEditSkill={(swimmer, skill, n) => {
+            setSkillRating(swimmer, skill, n);
+            setProfileModalSwimmer((prev) =>
+              prev && prev.id === swimmer.id
+                ? { ...prev, skills: { ...(prev.skills || {}), [swimmer.level]: { ...(prev.skills?.[swimmer.level] || {}), [skill]: n } } }
+                : prev
+            );
+          }}
+          canEditSkills={can("editAssessments") || canEditContent}
+        />
       )}
 
       {productModal && (
@@ -13002,42 +13311,42 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </div>
 
               <div>
-                <h3 className="font-bold text-slate-900 mb-3">Revenue</h3>
+                <h3 className="font-bold text-slate-900 mb-3">{t("opsRevenue")}</h3>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
                   <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
                     <div className="text-2xl font-bold text-green-600">{incomeTotal.toLocaleString()}</div>
-                    <div className="text-xs text-slate-400">Income (EGP)</div>
+                    <div className="text-xs text-slate-400">{t("opsIncomeEGP")}</div>
                   </div>
                   <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
                     <div className="text-2xl font-bold text-red-500">{expenseTotal.toLocaleString()}</div>
-                    <div className="text-xs text-slate-400">Expenses (EGP)</div>
+                    <div className="text-xs text-slate-400">{t("opsExpensesEGP")}</div>
                   </div>
                   <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
                     <div className={`text-2xl font-bold ${netTotal >= 0 ? "text-sky-950" : "text-red-500"}`}>
                       {netTotal.toLocaleString()}
                     </div>
-                    <div className="text-xs text-slate-400">Net (EGP)</div>
+                    <div className="text-xs text-slate-400">{t("opsNetEGP")}</div>
                   </div>
                   <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
                     <div className="text-2xl font-bold text-slate-900">{newSwimmers.length}</div>
-                    <div className="text-xs text-slate-400">New registrations</div>
+                    <div className="text-xs text-slate-400">{t("opsNewRegistrations")}</div>
                   </div>
                 </div>
 
                 <div className="text-xs font-semibold text-slate-500 mb-1.5">Income — confirmed payments</div>
                 {incomeRows.length === 0 ? (
-                  <div className="text-sm text-slate-400 mb-4">No confirmed payments in this period</div>
+                  <div className="text-sm text-slate-400 mb-4">{t("opsNoConfirmedPayments")}</div>
                 ) : (
                   <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden mb-4">
                     <table className="w-full text-sm">
                       <thead className="bg-slate-50 text-slate-500 text-xs">
                         <tr>
                           <th className="text-left px-4 py-2 font-medium">Receipt #</th>
-                          <th className="text-left px-4 py-2 font-medium">Date</th>
+                          <th className="text-left px-4 py-2 font-medium">{t("opsDate")}</th>
                           <th className="text-left px-4 py-2 font-medium">Name</th>
-                          <th className="text-left px-4 py-2 font-medium">Plan</th>
-                          <th className="text-left px-4 py-2 font-medium">Method</th>
-                          <th className="text-left px-4 py-2 font-medium">Amount</th>
+                          <th className="text-left px-4 py-2 font-medium">{t("opsPlan")}</th>
+                          <th className="text-left px-4 py-2 font-medium">{t("opsMethod")}</th>
+                          <th className="text-left px-4 py-2 font-medium">{t("opsAmount")}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -13063,15 +13372,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
                 <div className="text-xs font-semibold text-slate-500 mb-1.5">Expenses</div>
                 {expenseRows.length === 0 ? (
-                  <div className="text-sm text-slate-400">No expenses logged in this period</div>
+                  <div className="text-sm text-slate-400">{t("opsNoExpensesLogged")}</div>
                 ) : (
                   <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
                     <table className="w-full text-sm">
                       <thead className="bg-slate-50 text-slate-500 text-xs">
                         <tr>
-                          <th className="text-left px-4 py-2 font-medium">Date</th>
-                          <th className="text-left px-4 py-2 font-medium">Note</th>
-                          <th className="text-left px-4 py-2 font-medium">Amount</th>
+                          <th className="text-left px-4 py-2 font-medium">{t("opsDate")}</th>
+                          <th className="text-left px-4 py-2 font-medium">{t("opsNote")}</th>
+                          <th className="text-left px-4 py-2 font-medium">{t("opsAmount")}</th>
                           <th className="text-left px-4 py-2 font-medium print:hidden"></th>
                         </tr>
                       </thead>
@@ -13109,15 +13418,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   </div>
                 </div>
                 {attendanceRows.length === 0 ? (
-                  <div className="text-sm text-slate-400">No attendance logged in this period</div>
+                  <div className="text-sm text-slate-400">{t("opsNoAttendanceLogged")}</div>
                 ) : (
                   <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
                     <table className="w-full text-sm">
                       <thead className="bg-slate-50 text-slate-500 text-xs">
                         <tr>
-                          <th className="text-left px-4 py-2 font-medium">Swimmer</th>
-                          <th className="text-left px-4 py-2 font-medium">Present</th>
-                          <th className="text-left px-4 py-2 font-medium">Absent</th>
+                          <th className="text-left px-4 py-2 font-medium">{t("opsSwimmer")}</th>
+                          <th className="text-left px-4 py-2 font-medium">{t("opsPresent")}</th>
+                          <th className="text-left px-4 py-2 font-medium">{t("opsAbsent")}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -13135,23 +13444,23 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </div>
 
               <div className="print:hidden">
-                <h3 className="font-bold text-slate-900 mb-3">Current snapshot</h3>
+                <h3 className="font-bold text-slate-900 mb-3">{t("opsCurrentSnapshot")}</h3>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
                   <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
                     <div className="text-2xl font-bold text-slate-900">{activeSwimmers.length}</div>
-                    <div className="text-xs text-slate-400">Total swimmers</div>
+                    <div className="text-xs text-slate-400">{t("opsTotalSwimmers")}</div>
                   </div>
                   <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
                     <div className="text-2xl font-bold text-green-600">{paidCount}</div>
-                    <div className="text-xs text-slate-400">Paid this month</div>
+                    <div className="text-xs text-slate-400">{t("opsPaidThisMonth")}</div>
                   </div>
                   <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
                     <div className="text-2xl font-bold text-red-500">{notPaidCount}</div>
-                    <div className="text-xs text-slate-400">Not paid yet</div>
+                    <div className="text-xs text-slate-400">{t("opsNotPaidYet")}</div>
                   </div>
                   <div className="bg-white rounded-xl border border-slate-200 p-3 text-center">
                     <div className="text-2xl font-bold text-slate-900">{coaches.length}</div>
-                    <div className="text-xs text-slate-400">Coaches</div>
+                    <div className="text-xs text-slate-400">{t("opsCoaches")}</div>
                   </div>
                 </div>
                 {retentionRate !== null && (
@@ -13193,11 +13502,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             {/* Add an expense — not printed */}
             {(can("manageExpenses") || canEdit) && (
               <div className="print:hidden">
-                <h3 className="font-bold text-slate-900 mb-3">Log an expense</h3>
+                <h3 className="font-bold text-slate-900 mb-3">{t("opsLogExpense")}</h3>
                 <div className="bg-slate-50 rounded-2xl p-4">
                   <div className="grid sm:grid-cols-3 gap-3 mb-3">
                     <div>
-                      <label className="text-xs text-slate-500 mb-1 block">Amount (EGP)</label>
+                      <label className="text-xs text-slate-500 mb-1 block">{t("opsAmountEGP")}</label>
                       <input
                         type="number"
                         min="0"
@@ -13208,7 +13517,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       />
                     </div>
                     <div>
-                      <label className="text-xs text-slate-500 mb-1 block">Date</label>
+                      <label className="text-xs text-slate-500 mb-1 block">{t("opsDate")}</label>
                       <input
                         type="date"
                         value={expDate}
@@ -13217,7 +13526,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       />
                     </div>
                     <div>
-                      <label className="text-xs text-slate-500 mb-1 block">Note (optional)</label>
+                      <label className="text-xs text-slate-500 mb-1 block">{t("opsNoteOptional")}</label>
                       <input
                         value={expNote}
                         onChange={(e) => setExpNote(e.target.value)}
@@ -13583,36 +13892,36 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <div>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6 pb-6 border-b border-slate-200">
               <div>
-                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-1.5">Active swimmers</div>
+                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-1.5">{t("activeSwimmers")}</div>
                 <div className="text-3xl font-bold text-slate-900 tracking-tight">{activeSwimmersNow.length}</div>
               </div>
               <div>
-                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-1.5">Frozen</div>
+                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-1.5">{t("frozen")}</div>
                 <div className="text-3xl font-bold text-cyan-600 tracking-tight">{frozenCount}</div>
               </div>
               <div>
-                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-1.5">Outstanding balance</div>
+                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-1.5">{t("outstandingBalance")}</div>
                 <div className="text-3xl font-bold text-red-500 tracking-tight">{totalOutstanding.toLocaleString()}</div>
               </div>
               <div>
-                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-1.5">Of which overdue</div>
+                <div className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-1.5">{t("ofWhichOverdue")}</div>
                 <div className="text-3xl font-bold text-amber-600 tracking-tight">{totalOverdue.toLocaleString()}</div>
               </div>
             </div>
 
             <div className="grid lg:grid-cols-2 gap-4 mb-4">
               <div className="bg-slate-50 rounded-2xl p-5">
-                <div className="text-sm font-semibold text-slate-800 mb-3">Revenue by plan — {monthLabel(monthKeyNow)}</div>
+                <div className="text-sm font-semibold text-slate-800 mb-3">{t("revenueByPlan")} — {monthLabel(monthKeyNow)}</div>
                 {Object.keys(revenueByPlan).length === 0 ? (
-                  <div className="text-xs text-slate-400 text-center py-6">No paid swimmers yet this month</div>
+                  <div className="text-xs text-slate-400 text-center py-6">{t("noPaidSwimmersYet")}</div>
                 ) : (
                   Object.entries(revenueByPlan).sort((a, b) => b[1] - a[1]).map(([label, value]) => barRow(label, value, maxPlanRevenue))
                 )}
               </div>
               <div className="bg-slate-50 rounded-2xl p-5">
-                <div className="text-sm font-semibold text-slate-800 mb-3">Revenue by branch — {monthLabel(monthKeyNow)}</div>
+                <div className="text-sm font-semibold text-slate-800 mb-3">{t("revenueByBranch")} — {monthLabel(monthKeyNow)}</div>
                 {Object.keys(revenueByBranch).length === 0 ? (
-                  <div className="text-xs text-slate-400 text-center py-6">No paid swimmers yet this month</div>
+                  <div className="text-xs text-slate-400 text-center py-6">{t("noPaidSwimmersYet")}</div>
                 ) : (
                   Object.entries(revenueByBranch).sort((a, b) => b[1] - a[1]).map(([label, value]) => barRow(label, value, maxBranchRevenue, "bg-teal-700"))
                 )}
@@ -13621,17 +13930,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
             <div className="grid lg:grid-cols-2 gap-4 mb-4">
               <div className="bg-slate-50 rounded-2xl p-5">
-                <div className="text-sm font-semibold text-slate-800 mb-3">Revenue by coach — {monthLabel(monthKeyNow)}</div>
+                <div className="text-sm font-semibold text-slate-800 mb-3">{t("revenueByCoach")} — {monthLabel(monthKeyNow)}</div>
                 {Object.keys(revenueByCoach).length === 0 ? (
-                  <div className="text-xs text-slate-400 text-center py-6">No paid, coach-assigned swimmers yet this month</div>
+                  <div className="text-xs text-slate-400 text-center py-6">{t("noPaidCoachAssignedYet")}</div>
                 ) : (
                   Object.entries(revenueByCoach).sort((a, b) => b[1] - a[1]).map(([label, value]) => barRow(label, value, maxCoachRevenue, "bg-indigo-700"))
                 )}
               </div>
               <div className="bg-slate-50 rounded-2xl p-5">
-                <div className="text-sm font-semibold text-slate-800 mb-3">Swimmers by level</div>
+                <div className="text-sm font-semibold text-slate-800 mb-3">{t("swimmersByLevel")}</div>
                 {Object.keys(swimmersByLevel).length === 0 ? (
-                  <div className="text-xs text-slate-400 text-center py-6">No active swimmers</div>
+                  <div className="text-xs text-slate-400 text-center py-6">{t("noActiveSwimmers")}</div>
                 ) : (
                   Object.entries(swimmersByLevel).sort((a, b) => b[1] - a[1]).map(([label, value]) => barRow(label, value, maxLevelCount, "bg-amber-600"))
                 )}
@@ -13640,8 +13949,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
             {occupancy.length > 0 && (
               <div className="bg-slate-50 rounded-2xl p-5 mb-4">
-                <div className="text-sm font-semibold text-slate-800 mb-1">Class occupancy</div>
-                <p className="text-xs text-slate-400 mb-3">Classes managed through Family & Billing — how full each one is against its own capacity.</p>
+                <div className="text-sm font-semibold text-slate-800 mb-1">{t("classOccupancy")}</div>
+                <p className="text-xs text-slate-400 mb-3">{t("classOccupancySub")}</p>
                 <div className="space-y-2">
                   {occupancy.map(({ cls, filled, capacity }) => {
                     const pct = capacity > 0 ? Math.round((filled / capacity) * 100) : 0;
@@ -13664,7 +13973,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
             {familyBalances.length > 0 && (
               <div className="bg-slate-50 rounded-2xl p-5">
-                <div className="text-sm font-semibold text-slate-800 mb-3">Families with an outstanding balance ({familyBalances.length})</div>
+                <div className="text-sm font-semibold text-slate-800 mb-3">{t("familiesOutstandingBalance")} ({familyBalances.length})</div>
                 <div className="space-y-1.5 max-h-72 overflow-y-auto">
                   {familyBalances.map(({ family, summary }) => (
                     <div key={family.id} className="flex items-center justify-between text-sm border-b border-slate-50 pb-1.5">
@@ -13681,14 +13990,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <div className="bg-slate-50 rounded-2xl p-5 mt-4">
               <div className="flex items-center gap-2 mb-1">
                 <AlertCircle className="w-4 h-4 text-amber-500" />
-                <div className="text-sm font-semibold text-slate-800">At risk of leaving ({churnRisks.length})</div>
+                <div className="text-sm font-semibold text-slate-800">{t("atRiskOfLeaving")} ({churnRisks.length})</div>
               </div>
               <p className="text-xs text-slate-400 mb-3">
-                Flagged from attendance, payment, and progress patterns — not a guarantee, just worth a proactive check-in.
+                {t("atRiskSub")}
               </p>
               {churnRisks.length === 0 ? (
                 <div className="text-sm text-slate-400 text-center py-6">
-                  Nobody's flagged right now — everyone's attendance, payment, and progress look healthy. ✓
+                  {t("nobodyFlagged")}
                 </div>
               ) : (
                 <div className="space-y-2 max-h-96 overflow-y-auto">
@@ -13697,7 +14006,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       <div className="flex items-center justify-between gap-2 mb-1.5">
                         <span className="font-semibold text-sm">{s.name}</span>
                         <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${score >= 70 ? "bg-red-50 text-red-600" : "bg-amber-50 text-amber-700"}`}>
-                          {score}% risk
+                          {score}% {t("riskSuffix")}
                         </span>
                       </div>
                       <ul className="text-xs text-slate-500 space-y-0.5 mb-2">
@@ -13712,7 +14021,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                           rel="noopener noreferrer"
                           className="text-xs px-2.5 py-1 rounded-full font-medium text-green-700 hover:bg-green-50 inline-flex items-center gap-1"
                         >
-                          <Send className="w-3 h-3" /> Check in
+                          <Send className="w-3 h-3" /> {t("checkIn")}
                         </a>
                       )}
                     </div>
@@ -13723,22 +14032,22 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
             <div className="bg-slate-50 rounded-2xl p-5 mt-4">
               <div className="flex items-center justify-between mb-1">
-                <div className="text-sm font-semibold text-slate-800">Revenue forecast — next 3 months</div>
+                <div className="text-sm font-semibold text-slate-800">{t("revenueForecastTitle")}</div>
                 {revenueForecast.forecasts.length > 0 && (
                   <span
                     className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                       revenueForecast.trending === "up" ? "bg-green-50 text-green-700" : revenueForecast.trending === "down" ? "bg-red-50 text-red-600" : "bg-slate-100 text-slate-500"
                     }`}
                   >
-                    {revenueForecast.trending === "up" ? "↑ Trending up" : revenueForecast.trending === "down" ? "↓ Trending down" : "→ Flat"}
+                    {revenueForecast.trending === "up" ? t("trendingUp") : revenueForecast.trending === "down" ? t("trendingDown") : t("trendingFlat")}
                   </span>
                 )}
               </div>
               <p className="text-xs text-slate-400 mb-3">
-                A straight-line projection from the last 6 months of actual revenue — a rough trend to plan around, not a guarantee.
+                {t("revenueForecastSub")}
               </p>
               {revenueForecast.forecasts.length === 0 ? (
-                <div className="text-sm text-slate-400 text-center py-6">Not enough revenue history yet to forecast — check back after a couple more months.</div>
+                <div className="text-sm text-slate-400 text-center py-6">{t("notEnoughRevenueHistory")}</div>
               ) : (
                 <div className="flex items-end gap-3 h-28">
                   {revenueHistory6mo.map((m) => (
@@ -13767,9 +14076,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
             {familyRetentionScores.length > 0 && (
               <div className="bg-slate-50 rounded-2xl p-5 mt-4">
-                <div className="text-sm font-semibold text-slate-800 mb-1">Parent retention scores</div>
+                <div className="text-sm font-semibold text-slate-800 mb-1">{t("parentRetentionScores")}</div>
                 <p className="text-xs text-slate-400 mb-3">
-                  For families with more than one swimmer — a loyalty/health score from attendance, payment, and tenure, not a "chance of leaving" number.
+                  {t("parentRetentionSub")}
                 </p>
                 <div className="space-y-2 max-h-80 overflow-y-auto">
                   {familyRetentionScores.map(({ family, score, monthsWithAcademy, swimmerCount, topReasons }) => (
@@ -13777,7 +14086,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       <div>
                         <div className="text-sm font-medium text-slate-700">{family.name}</div>
                         <div className="text-xs text-slate-400">
-                          {swimmerCount} swimmers · {monthsWithAcademy} month{monthsWithAcademy === 1 ? "" : "s"} with you
+                          {swimmerCount} swimmers · {monthsWithAcademy} month{monthsWithAcademy === 1 ? "" : "s"} {t("monthsWithYou")}
                           {topReasons.length > 0 ? ` · ${topReasons[0]}` : ""}
                         </div>
                       </div>
@@ -13792,9 +14101,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
             {progressInsights.length > 0 && (
               <div className="bg-slate-50 rounded-2xl p-5 mt-4">
-                <div className="text-sm font-semibold text-slate-800 mb-1">Swimmer progress insights</div>
+                <div className="text-sm font-semibold text-slate-800 mb-1">{t("swimmerProgressInsights")}</div>
                 <p className="text-xs text-slate-400 mb-3">
-                  Each swimmer compared to their own peers in the same level — not a fixed benchmark, since normal pace differs level to level.
+                  {t("swimmerProgressSub")}
                 </p>
                 <div className="space-y-2 max-h-80 overflow-y-auto">
                   {progressInsights.map((insight, i) => (
@@ -16246,6 +16555,54 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
+      {tab === "settings" && role === "admin" && settingsSubTab === "password" && (
+        <div className="max-w-sm mt-8 pt-8 border-t border-slate-200">
+          <h3 className="font-bold text-slate-900 mb-1">Change pool staff password</h3>
+          <p className="text-sm text-slate-500 mb-4">
+            Used for the shared "Pool staff" attendance dashboard — this is a per-academy password, separate from the admin one and from individual staff accounts.
+          </p>
+          <div className="mb-3">
+            <label className="text-xs text-slate-500 mb-1 block">Current password</label>
+            <input
+              type="password"
+              value={currentStaffPass}
+              onChange={(e) => setCurrentStaffPass(e.target.value)}
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
+            />
+          </div>
+          <div className="mb-3">
+            <label className="text-xs text-slate-500 mb-1 block">New password</label>
+            <input
+              type="password"
+              value={newStaffPass}
+              onChange={(e) => setNewStaffPass(e.target.value)}
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
+            />
+          </div>
+          <div className="mb-4">
+            <label className="text-xs text-slate-500 mb-1 block">Confirm new password</label>
+            <input
+              type="password"
+              value={confirmStaffPass}
+              onChange={(e) => setConfirmStaffPass(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") changeStaffPassword();
+              }}
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
+            />
+          </div>
+          {staffPassError && <div className="text-red-500 text-sm mb-3">{staffPassError}</div>}
+          {staffPassSuccess && <div className="text-green-700 text-sm mb-3 bg-green-50 rounded-lg px-3 py-2">Password changed successfully.</div>}
+          <button
+            onClick={changeStaffPassword}
+            disabled={staffPassSaving}
+            className="w-full py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
+          >
+            {staffPassSaving ? "Saving..." : "Change password"}
+          </button>
+        </div>
+      )}
+
       {tab === "activity" && canEdit && isTabEnabled("activity") && (
         <div>
           <div className="flex items-center justify-between mb-4">
@@ -18033,6 +18390,10 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   const [authed, setAuthed] = useState(preAuthed);
   const [pass, setPass] = useState("");
   const [passError, setPassError] = useState("");
+  const [effectiveStaffPassword, setEffectiveStaffPassword] = useState(CONFIG.staffPassword);
+  useEffect(() => {
+    getEffectiveStaffPassword().then(setEffectiveStaffPassword);
+  }, []);
 
   const [swimmers, setSwimmers] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -18306,7 +18667,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
             onChange={(e) => setPass(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
-                if (pass === CONFIG.staffPassword) setAuthed(true);
+                if (pass === effectiveStaffPassword) setAuthed(true);
                 else setPassError("Wrong password");
               }
             }}
@@ -18316,7 +18677,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
           {passError && <div className="text-red-500 text-sm mb-3">{passError}</div>}
           <button
             onClick={() => {
-              if (pass === CONFIG.staffPassword) setAuthed(true);
+              if (pass === effectiveStaffPassword) setAuthed(true);
               else setPassError("Wrong password");
             }}
             className="w-full py-3 rounded-xl bg-sky-950 text-white font-semibold hover:bg-sky-900 transition mb-2"
@@ -20607,6 +20968,66 @@ const TRANSLATIONS = {
     downloadsReportHint: "Downloads a report file — open it and use your browser's Print → Save as PDF.",
     sessionRosterTitle: "Session roster & attendance",
     sessionRosterSub: "One coach at a time, with every swimmer's plan and a present/absent mark for each session date that month.",
+    opsKpis: "KPIs",
+    opsTotalSwimmers: "Total swimmers",
+    opsPaidThisMonth: "Paid this month",
+    opsNotPaidYet: "Not paid yet",
+    opsRevenue: "Revenue",
+    opsExpenses: "Expenses",
+    opsNet: "Net",
+    opsIncomeEGP: "Income (EGP)",
+    opsExpensesEGP: "Expenses (EGP)",
+    opsNetEGP: "Net (EGP)",
+    opsCurrentSnapshot: "Current snapshot",
+    opsNewRegistrations: "New registrations",
+    opsMarkedPaidOnly: "Marked paid only (not counted in revenue above)",
+    opsNoConfirmedPayments: "No confirmed payments in this period",
+    opsSwimmer: "Swimmer",
+    opsPlan: "Plan",
+    opsAmount: "Amount",
+    opsAmountEGP: "Amount (EGP)",
+    opsDate: "Date",
+    opsMethod: "Method",
+    opsNewLevel: "New level",
+    opsLogExpense: "Log an expense",
+    opsNote: "Note",
+    opsNoteOptional: "Note (optional)",
+    opsNoExpensesLogged: "No expenses logged in this period",
+    opsAttendance: "Attendance",
+    opsCoaches: "Coaches",
+    opsAllTimes: "All times",
+    opsPresent: "Present",
+    opsAbsent: "Absent",
+    opsNoAttendanceLogged: "No attendance logged in this period",
+    frozen: "Frozen",
+    outstandingBalance: "Outstanding balance",
+    ofWhichOverdue: "Of which overdue",
+    revenueByPlan: "Revenue by plan",
+    revenueByBranch: "Revenue by branch",
+    revenueByCoach: "Revenue by coach",
+    swimmersByLevel: "Swimmers by level",
+    noActiveSwimmers: "No active swimmers",
+    noPaidSwimmersYet: "No paid swimmers yet this month",
+    noPaidCoachAssignedYet: "No paid, coach-assigned swimmers yet this month",
+    classOccupancy: "Class occupancy",
+    classOccupancySub: "Classes managed through Family & Billing — how full each one is against its own capacity.",
+    familiesOutstandingBalance: "Families with an outstanding balance",
+    atRiskOfLeaving: "At risk of leaving",
+    atRiskSub: "Flagged from attendance, payment, and progress patterns — not a guarantee, just worth a proactive check-in.",
+    nobodyFlagged: "Nobody's flagged right now — everyone's attendance, payment, and progress look healthy. ✓",
+    riskSuffix: "risk",
+    checkIn: "Check in",
+    revenueForecastTitle: "Revenue forecast — next 3 months",
+    revenueForecastSub: "A straight-line projection from the last 6 months of actual revenue — a rough trend to plan around, not a guarantee.",
+    trendingUp: "↑ Trending up",
+    trendingDown: "↓ Trending down",
+    trendingFlat: "→ Flat",
+    notEnoughRevenueHistory: "Not enough revenue history yet to forecast — check back after a couple more months.",
+    parentRetentionScores: "Parent retention scores",
+    parentRetentionSub: "For families with more than one swimmer — a loyalty/health score from attendance, payment, and tenure, not a \"chance of leaving\" number.",
+    monthsWithYou: "with you",
+    swimmerProgressInsights: "Swimmer progress insights",
+    swimmerProgressSub: "Each swimmer compared to their own peers in the same level — not a fixed benchmark, since normal pace differs level to level.",
   },
   ar: {
     newRegistration: "تسجيل سباح جديد",
@@ -20810,6 +21231,66 @@ const TRANSLATIONS = {
     downloadsReportHint: "بيحمّل ملف تقرير — افتحيه واستخدمي خاصية الطباعة → حفظ كـ PDF من المتصفح.",
     sessionRosterTitle: "جدول الحضور والانصراف",
     sessionRosterSub: "كابتن واحد في المرة، مع خطة كل سباح وعلامة حضور/غياب لكل تاريخ حصة في الشهر.",
+    opsKpis: "المؤشرات",
+    opsTotalSwimmers: "إجمالي السباحين",
+    opsPaidThisMonth: "دفعوا الشهر ده",
+    opsNotPaidYet: "لسه ما دفعوش",
+    opsRevenue: "الإيراد",
+    opsExpenses: "المصروفات",
+    opsNet: "الصافي",
+    opsIncomeEGP: "الدخل (جنيه)",
+    opsExpensesEGP: "المصروفات (جنيه)",
+    opsNetEGP: "الصافي (جنيه)",
+    opsCurrentSnapshot: "الوضع الحالي",
+    opsNewRegistrations: "تسجيلات جديدة",
+    opsMarkedPaidOnly: "متعلّم بس كمدفوع (مش محسوب في الإيراد فوق)",
+    opsNoConfirmedPayments: "مفيش مدفوعات مؤكّدة في الفترة دي",
+    opsSwimmer: "السباح",
+    opsPlan: "الخطة",
+    opsAmount: "المبلغ",
+    opsAmountEGP: "المبلغ (جنيه)",
+    opsDate: "التاريخ",
+    opsMethod: "طريقة الدفع",
+    opsNewLevel: "المستوى الجديد",
+    opsLogExpense: "تسجيل مصروف",
+    opsNote: "ملاحظة",
+    opsNoteOptional: "ملاحظة (اختياري)",
+    opsNoExpensesLogged: "مفيش مصروفات مسجّلة في الفترة دي",
+    opsAttendance: "الحضور",
+    opsCoaches: "الكباتن",
+    opsAllTimes: "كل المواعيد",
+    opsPresent: "حاضر",
+    opsAbsent: "غايب",
+    opsNoAttendanceLogged: "مفيش حضور مسجّل في الفترة دي",
+    frozen: "متجمد",
+    outstandingBalance: "الرصيد المتبقي",
+    ofWhichOverdue: "منه متأخر",
+    revenueByPlan: "الإيراد حسب الخطة",
+    revenueByBranch: "الإيراد حسب الفرع",
+    revenueByCoach: "الإيراد حسب الكابتن",
+    swimmersByLevel: "السباحين حسب المستوى",
+    noActiveSwimmers: "مفيش سباحين نشطين",
+    noPaidSwimmersYet: "مفيش سباحين دفعوا الشهر ده لسه",
+    noPaidCoachAssignedYet: "مفيش سباحين دفعوا ومعاهم كابتن الشهر ده لسه",
+    classOccupancy: "إشغال الفصول",
+    classOccupancySub: "الفصول المُدارة عن طريق Family & Billing — كل فصل مليان قد إيه من سعته.",
+    familiesOutstandingBalance: "الأسر اللي عندها رصيد متبقي",
+    atRiskOfLeaving: "معرّضين للانسحاب",
+    atRiskSub: "متعلَّم من أنماط الحضور والدفع والتقدّم — مش ضمان، بس يستاهل تطميني عليهم.",
+    nobodyFlagged: "محدش متعلَّم دلوقتي — الحضور والدفع والتقدّم لكل حد كويس. ✓",
+    riskSuffix: "خطر",
+    checkIn: "اطمني عليه",
+    revenueForecastTitle: "توقّع الإيراد — 3 شهور جاية",
+    revenueForecastSub: "توقّع خطي بسيط من آخر 6 شهور فعلية — اتجاه تقريبي تخططي عليه، مش ضمان.",
+    trendingUp: "↑ في ازدياد",
+    trendingDown: "↓ في انخفاض",
+    trendingFlat: "→ مستقر",
+    notEnoughRevenueHistory: "لسه مفيش تاريخ إيرادات كفاية للتوقّع — راجعي بعد كام شهر كمان.",
+    parentRetentionScores: "درجات ولاء الأسر",
+    parentRetentionSub: "للأسر اللي معاها أكتر من سباح — درجة ولاء/صحة من الحضور والدفع والمدة، مش رقم \"احتمالية انسحاب\".",
+    monthsWithYou: "معاكِ",
+    swimmerProgressInsights: "ملاحظات تقدّم السباحين",
+    swimmerProgressSub: "كل سباح متقارن بزمايله الحقيقيين في نفس المستوى — مش معيار ثابت، لأن السرعة الطبيعية بتختلف من مستوى لمستوى.",
   },
 };
 
