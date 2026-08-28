@@ -7771,6 +7771,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [paymentMonthFilter, setPaymentMonthFilter] = useState(monthKey());
   const [paymentStatusFilter, setPaymentStatusFilter] = useState("paid"); // "all" | "paid" | "unpaid" — defaults to only showing enrolled, paid swimmers
   const [showUnscheduled, setShowUnscheduled] = useState(false); // include swimmers with no day/time set yet
+  const [noCoachOnly, setNoCoachOnly] = useState(false); // scheduled swimmers with no coach assigned
   const [sessionTypeFilter, setSessionTypeFilter] = useState("all"); // filters by session size — Private (1) / Semi Private (2) / Group (4)
 
   // bulk import from Excel
@@ -9384,6 +9385,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         if (dayFilter !== "all") query = query.filter("data->>day", "eq", dayFilter);
         if (timeFilter !== "all") query = query.filter("data->>time", "eq", timeFilter);
         if (sessionTypeFilter !== "all") query = query.filter("data->>sessionType", "eq", sessionTypeFilter);
+        if (noCoachOnly) {
+          // coachId is stored as either an empty string or a real null
+          // depending on which code path cleared it, so both need
+          // covering to actually catch every "no coach yet" swimmer.
+          query = query.or("data->>coachId.is.null,data->>coachId.eq.");
+        }
         if (paymentStatusFilter === "paid") {
           query = query.filter("data->paidMonths", "cs", JSON.stringify([paymentMonthFilter]));
         } else if (paymentStatusFilter === "unpaid") {
@@ -9404,7 +9411,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         setSwimmersPageLoading(false);
       }
     },
-    [branchFilter, levelFilter, dayFilter, timeFilter, sessionTypeFilter, paymentStatusFilter, paymentMonthFilter, search, showUnscheduled, branchRestriction, role, programAccess, levelAccess, myAccount]
+    [branchFilter, levelFilter, dayFilter, timeFilter, sessionTypeFilter, paymentStatusFilter, paymentMonthFilter, search, showUnscheduled, noCoachOnly, branchRestriction, role, programAccess, levelAccess, myAccount]
   );
 
   useEffect(() => {
@@ -10544,7 +10551,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             >
               {showMoreFilters ? "Fewer filters ▲" : "More filters ▼"}
             </button>
-            {(branchFilter !== "all" || levelFilter !== "all" || dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || paymentStatusFilter !== "paid" || showUnscheduled || search) && (
+            {(branchFilter !== "all" || levelFilter !== "all" || dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || paymentStatusFilter !== "paid" || showUnscheduled || noCoachOnly || search) && (
               <button
                 onClick={() => {
                   setBranchFilter("all");
@@ -10554,6 +10561,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   setSessionTypeFilter("all");
                   setPaymentStatusFilter("all");
                   setShowUnscheduled(true);
+                  setNoCoachOnly(false);
                   setSearch("");
                 }}
                 className="text-xs text-slate-400 hover:text-slate-600 underline whitespace-nowrap"
@@ -10621,6 +10629,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   className="w-4 h-4 accent-sky-900"
                 />
                 Include unscheduled
+              </label>
+              <label className="flex items-center gap-1.5 text-sm text-slate-500 select-none cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={noCoachOnly}
+                  onChange={(e) => setNoCoachOnly(e.target.checked)}
+                  className="w-4 h-4 accent-sky-900"
+                />
+                No coach assigned only
               </label>
             </div>
           )}
@@ -14023,7 +14040,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       {tab === "attendance" && canViewPayroll && (
         <div>
           <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-            <h3 className="font-bold text-slate-900">Staff attendance</h3>
+            <h3 className="text-xl font-bold text-slate-900">Staff attendance</h3>
             <div className="flex items-center gap-2">
               {canEditStaffAttendance && (
                 <button
@@ -14351,7 +14368,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       {tab === "registrations" && canEditContent && (
         <div>
           <div className="mb-4">
-            <h3 className="font-bold text-slate-900">New swimmer registrations</h3>
+            <h3 className="text-xl font-bold text-slate-900">New swimmer registrations</h3>
             <p className="text-xs text-slate-400">Approving one creates the swimmer record automatically — you'll still need to set their schedule and level afterward.</p>
           </div>
           {registrationsLoading ? (
@@ -14400,7 +14417,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       {tab === "waitlist" && (can("manageWaitlist") || canEditContent) && (
         <div>
           <div className="mb-4">
-            <h3 className="font-bold text-slate-900">Waitlist</h3>
+            <h3 className="text-xl font-bold text-slate-900">Waitlist</h3>
             <p className="text-xs text-slate-400">Families waiting for a slot that was full when they tried to book. Reach out when a spot opens up.</p>
           </div>
           {waitlistLoading ? (
@@ -14924,7 +14941,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       {tab === "feedback" && canEditContent && (
         <div>
           <div className="mb-4">
-            <h3 className="font-bold text-slate-900">Parent feedback</h3>
+            <h3 className="text-xl font-bold text-slate-900">Parent feedback</h3>
             <p className="text-xs text-slate-400">Star ratings and comments parents leave from their portal, once per swimmer per month.</p>
           </div>
           {feedbackLoading ? (
@@ -14977,7 +14994,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         <div>
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="font-bold text-slate-900">Incident log</h3>
+              <h3 className="text-xl font-bold text-slate-900">Incident log</h3>
               <p className="text-xs text-slate-400">Injuries, falls, or anything else worth keeping a record of.</p>
             </div>
             <button
@@ -16189,7 +16206,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         <div>
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="font-bold text-slate-900">Activity Log</h3>
+              <h3 className="text-xl font-bold text-slate-900">Activity Log</h3>
               <p className="text-xs text-slate-400">Who changed what, and when — the most recent 500 actions.</p>
             </div>
             <button onClick={loadActivityLog} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
