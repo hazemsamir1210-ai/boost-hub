@@ -8951,6 +8951,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     await queued;
 
     loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
+    // The Schedule/Coaches/Dashboard grid keeps its own separate,
+    // full-roster copy (loadSwimmers) rather than the Swimmers tab's
+    // paginated one — normally kept fresh by a 15-second poll, but
+    // that's a long wait right after making a change yourself, so this
+    // refreshes it immediately regardless of which tab is showing.
+    loadSwimmers();
     setShowForm(false);
     setEditingSwimmer(null);
     setPendingActivationId(null);
