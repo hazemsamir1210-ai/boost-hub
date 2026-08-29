@@ -4424,7 +4424,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
       if (usage.length > 0 && usage[0].sessionType !== sessionType) {
         return setError(`This coach already has a ${sessionTypeInfo(usage[0].sessionType).label} session at this time`);
       }
-      const cap = sessionCapacity(sessionType, level);
+      const cap = effectiveSlotCapacity(sessionType, level, coachId, day, time);
       if (usage.length >= cap) {
         return setError(`This coach is full for this time slot (${cap} max for ${sessionTypeInfo(sessionType).label}${cap === 2 && sessionType === "group" ? " at this level" : ""})`);
       }
@@ -4686,9 +4686,9 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           {coachId && (
             <div className={`text-xs mt-1 ${slotMismatch || slotFull ? "text-red-500" : "text-slate-400"}`}>
               {slotMismatch
-                ? `Busy with a ${sessionTypeInfo(slotType).label} session at this time`
+                ? `Busy with a ${sessionTypeInfo(slotType).label} session at this time — ${slotUsage.map((s) => s.name).join(", ")}`
                 : slotUsage.length > 0
-                ? `${slotUsage.length}/${capacity} taken in this slot`
+                ? `${slotUsage.length}/${capacity} taken in this slot — ${slotUsage.map((s) => s.name).join(", ")}`
                 : "Free at this time"}
             </div>
           )}
@@ -8558,14 +8558,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               const group = bySlot[key].sort((a, b) => a.swimmer.name.localeCompare(b.swimmer.name));
               const { time, sessionType } = group[0];
               const planLabel = sessionTypeInfo(sessionType).label;
-              const capacity = Math.max(...group.map((g) => sessionCapacity(sessionType, g.swimmer.level)));
+              const capacity = Math.max(...group.map((g) => effectiveSlotCapacity(sessionType, g.swimmer.level, coachId, scheduleDayFilter, time)));
               const filledRows = group
                 .map(
                   ({ swimmer: s }) =>
                     `<tr><td>${escapeHtml(s.name)}</td><td style="text-align:center">${displayAge(s.age)}</td><td>${escapeHtml(s.level)}</td>${attCellsFor(s)}<td class="notes-cell">&nbsp;</td></tr>`
                 )
                 .join("");
-              const blanksNeeded = Math.max(0, capacity - group.length);
+              // A few blank rows leave room to handwrite a late addition
+              // onto the printed sheet — but padding all the way up to
+              // capacity made sense for an ordinary 4-swimmer group, not
+              // a Star/Team squad whose cap can run to 20+; capped at 3
+              // extra rows regardless of the slot's actual capacity.
+              const blanksNeeded = Math.max(0, Math.min(3, capacity - group.length));
               const blankRows = Array.from({ length: blanksNeeded })
                 .map(() => `<tr class="blank-row"><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td>${emptyAttCells}<td>&nbsp;</td></tr>`)
                 .join("");
@@ -19142,7 +19147,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
       const inSlot = swimmers.filter((s) => s.coachId === c.id);
       if (inSlot.length === 0) return { coach: c, free: true, label: "Free — no bookings" };
       const type = inSlot[0].sessionType;
-      const capacity = sessionCapacity(type, inSlot[0].level);
+      const capacity = effectiveSlotCapacity(type, inSlot[0].level, c.id, dayGroup, time);
       const spotsLeft = capacity - inSlot.length;
       return {
         coach: c,
@@ -24523,7 +24528,7 @@ function getAvailableMakeupSlots(swimmers = [], month, swimmer, day, time) {
     groups[key].swimmers.push(r.swimmer);
   });
   return Object.values(groups).filter((g) => {
-    const capacity = Math.max(...g.swimmers.map((s) => integratedSessionCapacity(g.sessionType, s.level)), 1);
+    const capacity = Math.max(...g.swimmers.map((s) => effectiveSlotCapacity(g.sessionType, s.level, g.coachId, g.day, g.time)), 1);
     return g.swimmers.length < capacity && !g.swimmers.some((s) => String(s.id) === String(swimmer?.id));
   });
 }
