@@ -731,8 +731,17 @@ const WAITLIST_PRIORITY_TIERS = [
 // Exp / Exp 2 / Exp 3 are small groups — capped at 2 swimmers, not the
 // usual Group capacity — everywhere a "how full is this slot" check
 // happens should use this instead of sessionTypeInfo(...).capacity alone.
+// Exp / Exp 2 / Exp 3 are small groups — capped at 2 swimmers, not the
+// usual Group capacity. Star 1-4 and Team are the opposite case: real
+// competitive squad practices, which regularly run much bigger than an
+// ordinary lesson group — capped at 20 instead of the usual 4, rather
+// than treating them as a normal-sized group.
+const TEAM_SQUAD_LEVELS = ["Star 1", "Star 2", "Star 3", "Star 4", "Team"];
+const TEAM_SQUAD_CAPACITY = 20;
+
 function sessionCapacity(sessionType, level) {
   if (sessionType === "group" && ["Exp", "Exp 2", "Exp 3"].includes(level)) return 2;
+  if (sessionType === "group" && TEAM_SQUAD_LEVELS.includes(level)) return TEAM_SQUAD_CAPACITY;
   return sessionTypeInfo(sessionType).capacity;
 }
 
@@ -2100,6 +2109,12 @@ async function fetchAllSwimmers() {
 // BEFORE the first save had finished writing, then write that stale copy
 // back over it — quietly erasing whichever edit lost the race.
 let swimmerUpdateQueue = Promise.resolve();
+
+// Same protection, for the coach list — a coach save/delete fetches the
+// list fresh (never the local React state, which could be stale if
+// another edit landed since it was last loaded) and queues behind
+// whichever coach edit is already in flight.
+let coachUpdateQueue = Promise.resolve();
 
 async function updateSwimmerById(id, updateFn) {
   const run = async () => {
@@ -4191,7 +4206,10 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
   const [phone, setPhone] = useState(initial?.phone || "");
   const [altPhone, setAltPhone] = useState(initial?.altPhone || "");
   const [branch, setBranch] = useState(initial?.branch || BRANCHES[0].id);
-  const [level, setLevel] = useState(initial?.level || LEVELS[1]);
+  const [level, setLevel] = useState(
+    initial?.level || LEVELS.find((lv) => lv === "Level 1") || LEVELS[0]
+  ); // LEVELS[1] used to be the default — that's "Exp", a niche 2-swimmer-cap
+    // level that's a confusing starting point for an ordinary new registration
   const [planId, setPlanId] = useState(initial?.planId || inferPlanId(initial || {}));
   const [substituteCoachId, setSubstituteCoachId] = useState(initial?.substituteCoachId || "");
   const [substituteDate, setSubstituteDate] = useState(initial?.substituteDate || "");
@@ -9599,12 +9617,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   };
 
   const saveCoach = async (record) => {
-    const exists = coaches.some((c) => c.id === record.id);
-    const nextCoaches = exists ? coaches.map((c) => (c.id === record.id ? record : c)) : [...coaches, record];
-
-    const res = await saveCollection(STORE_KEYS.coaches, nextCoaches);
-    if (!res) throw new Error("Could not save the coach, please try again");
-    logActivity(accountName, role, exists ? "Edited coach" : "Added coach", record.name);
+    const run = async () => {
+      const current = await loadCollection(STORE_KEYS.coaches);
+      const exists = current.some((c) => c.id === record.id);
+      const nextCoaches = exists ? current.map((c) => (c.id === record.id ? record : c)) : [...current, record];
+      const res = await saveCollection(STORE_KEYS.coaches, nextCoaches);
+      if (!res) throw new Error("Could not save the coach, please try again");
+      logActivity(accountName, role, exists ? "Edited coach" : "Added coach", record.name);
+      return nextCoaches;
+    };
+    const queued = coachUpdateQueue.catch(() => {}).then(run);
+    coachUpdateQueue = queued.catch(() => {});
+    const nextCoaches = await queued;
 
     setCoaches(nextCoaches);
     setShowCoachForm(false);
@@ -9618,9 +9642,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         ? `${coach.name} is assigned to swimmers already. Remove anyway? Their coach will be cleared.`
         : `Remove coach ${coach.name}?`,
       onConfirm: async () => {
-        const nextCoaches = coaches.filter((c) => c.id !== coach.id);
         try {
-          await saveCollection(STORE_KEYS.coaches, nextCoaches);
+          const run = async () => {
+            const current = await loadCollection(STORE_KEYS.coaches);
+            const nextCoaches = current.filter((c) => c.id !== coach.id);
+            await saveCollection(STORE_KEYS.coaches, nextCoaches);
+            return nextCoaches;
+          };
+          const queued = coachUpdateQueue.catch(() => {}).then(run);
+          coachUpdateQueue = queued.catch(() => {});
+          const nextCoaches = await queued;
+
           logActivity(accountName, role, "Deleted coach", coach.name);
           setCoaches(nextCoaches);
           if (inUse) {
@@ -12978,8 +13010,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                   </td>
                                 );
                               }
-                              const smallGroupLevel = booking.levels.find((lv) => ["Exp", "Exp 2", "Exp 3"].includes(lv));
-                              const capacity = sessionCapacity(booking.sessionType, smallGroupLevel);
+                              const specialLevel = booking.levels.find((lv) => ["Exp", "Exp 2", "Exp 3", ...TEAM_SQUAD_LEVELS].includes(lv));
+                              const capacity = sessionCapacity(booking.sessionType, specialLevel);
                               const spotsLeft = capacity - booking.count;
                               const agesLabel = booking.ages.length > 0 ? booking.ages.slice().sort((a, b) => a - b).join(", ") : "";
                               return (
@@ -24235,6 +24267,7 @@ function integratedSessionCapacity(sessionType, level) {
   if (sessionType === "private") return 1;
   if (sessionType === "semi-private") return 2;
   if (sessionType === "group" && ["Exp", "Exp 2", "Exp 3"].includes(level)) return 2;
+  if (sessionType === "group" && TEAM_SQUAD_LEVELS.includes(level)) return TEAM_SQUAD_CAPACITY;
   return 4;
 }
 
