@@ -8277,6 +8277,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [rosterPreview, setRosterPreview] = useState(null); // { bodyHtml, filename } once built, or null
   const [rosterFontSize, setRosterFontSize] = useState(13);
   const [rosterAlign, setRosterAlign] = useState("left");
+  const [rosterDirection, setRosterDirection] = useState("ltr"); // "ltr" | "rtl" — actual text flow, separate from alignment above
   const [rosterHeaderAlign, setRosterHeaderAlign] = useState("left"); // academy name/logo — separate from the table content, since it's a flex row that ignores text-align
   const [trainingWindow, setTrainingWindow] = useState({ startDate: "", endDate: "", cap: 8 });
   const [trainingWindowOpen, setTrainingWindowOpen] = useState(false);
@@ -8326,6 +8327,76 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   // optionally one specific time) in a chosen month — one page per coach,
   // listing each swimmer's name, time, level, plan type, and a
   // present/absent mark for every actual session date that month.
+  // A printable version of the on-screen coach/schedule grid itself —
+  // who's working when, who's free, who still has room — as opposed to
+  // exportSessionRoster below, which is a per-swimmer attendance sheet
+  // for one specific day/time. Reuses the exact same coachBookingsById
+  // data the on-screen grid renders from, so the PDF and the screen can
+  // never show different numbers.
+  const [exportingCoachGrid, setExportingCoachGrid] = useState(false);
+  const exportCoachGrid = () => {
+    setExportingCoachGrid(true);
+    try {
+      const daySections = DAY_GROUPS.map((dayGroup) => {
+        const times = (TIME_SLOTS[BRANCHES[0].id]?.[dayGroup.id] || []).slice().sort(
+          (a, b) => timeToMinutes(a) - timeToMinutes(b)
+        );
+        if (times.length === 0) return "";
+        const activeCoaches = coaches.filter((c) => !(c.offDays || []).includes(dayGroup.id));
+        if (activeCoaches.length === 0) return "";
+
+        const headerRow = `<tr><th>Coach</th>${times.map((t) => `<th>${escapeHtml(t)}</th>`).join("")}</tr>`;
+        const bodyRows = activeCoaches
+          .map((c) => {
+            const cells = times
+              .map((t) => {
+                if (isCoachClosedAt(c, dayGroup.id, t)) {
+                  return `<td class="closed">Closed</td>`;
+                }
+                const booking = (coachBookingsById[c.id] || []).find((b) => b.day === dayGroup.id && b.time === t);
+                if (!booking) return `<td class="open">—</td>`;
+                const specialLevel = booking.levels.find((lv) => ["Exp", "Exp 2", "Exp 3", ...TEAM_SQUAD_LEVELS].includes(lv));
+                const capacity = sessionCapacity(booking.sessionType, specialLevel);
+                const full = booking.count >= capacity;
+                return `<td class="${full ? "full" : "hasroom"}">${booking.count}/${capacity}<br><span class="lvl">${escapeHtml([...booking.levels].join(", "))}</span></td>`;
+              })
+              .join("");
+            return `<tr><td class="coachname">${escapeHtml(c.name)}</td>${cells}</tr>`;
+          })
+          .join("");
+
+        return `
+          <div class="day-block">
+            <h3>${escapeHtml(dayGroup.label)}</h3>
+            <table class="grid-table"><thead>${headerRow}</thead><tbody>${bodyRows}</tbody></table>
+          </div>`;
+      }).join("");
+
+      const html = `
+        <style>
+          .grid-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 24px; }
+          .grid-table th, .grid-table td { border: 1px solid #e2e8f0; padding: 6px; text-align: center; }
+          .grid-table th { background: #f8fafc; font-weight: 600; }
+          .coachname { text-align: left; font-weight: 600; white-space: nowrap; }
+          .closed { background: #fef2f2; color: #f87171; }
+          .open { color: #cbd5e1; }
+          .hasroom { background: #f0fdf4; color: #15803d; font-weight: 600; }
+          .full { background: #f1f5f9; color: #64748b; font-weight: 600; }
+          .lvl { font-weight: 400; color: #94a3b8; font-size: 9px; }
+          .day-block { page-break-inside: avoid; break-inside: avoid; }
+          h1 { font-size: 18px; margin-bottom: 4px; }
+          .sub { font-size: 12px; color: #64748b; margin-bottom: 20px; }
+        </style>
+        <h1>${escapeHtml(CONFIG.academyName)} — Coach Schedule Overview</h1>
+        <div class="sub">${escapeHtml(monthLabel(scheduleMonth))} · green = has room, gray = full, red = coach off</div>
+        ${daySections}
+      `;
+      downloadReportHTML(`coach-schedule-${scheduleMonth}`, html);
+    } finally {
+      setExportingCoachGrid(false);
+    }
+  };
+
   const exportSessionRoster = async () => {
     setExportingRoster(true);
     try {
@@ -8440,7 +8511,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       `;
       const gridHtml = `
-        <div dir="rtl" class="roster-grid">
+        <div class="roster-grid">
           ${coachSections || "<p>No swimmers scheduled for this selection.</p>"}
         </div>
       `;
@@ -8476,7 +8547,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const downloadRosterPdf = () => {
     if (!rosterPreview) return;
     const headerAlignCss = `<style>.header { ${headerAlignStyles(rosterHeaderAlign)} }</style>`;
-    const styledHtml = `${headerAlignCss}${rosterPreview.headerHtml}<div style="font-size:${rosterFontSize}px; text-align:${rosterAlign};">${rosterPreview.gridHtml}</div>`;
+    const styledHtml = `${headerAlignCss}${rosterPreview.headerHtml}<div style="font-size:${rosterFontSize}px; text-align:${rosterAlign}; direction:${rosterDirection};">${rosterPreview.gridHtml}</div>`;
     downloadReportHTML(rosterPreview.filename, styledHtml);
     setRosterPreview(null);
   };
@@ -12853,6 +12924,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   {reconcileRunning ? "Checking..." : "Reconcile schedule"}
                 </button>
               )}
+              <button
+                onClick={exportCoachGrid}
+                disabled={exportingCoachGrid}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-slate-100 text-slate-700 text-sm font-semibold hover:bg-slate-200 disabled:opacity-60"
+                title="A printable version of the coach grid above — who's working, who's free, who has room, for every day"
+              >
+                {exportingCoachGrid ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
+                {exportingCoachGrid ? "Loading..." : "Export coach overview"}
+              </button>
               <button
                 onClick={exportSessionRoster}
                 disabled={exportingRoster}
@@ -17545,6 +17625,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     <opt.icon className="w-4 h-4" />
                   </button>
                 ))}
+                <span className="w-px h-5 bg-slate-200 mx-1" />
+                <button
+                  onClick={() => setRosterDirection((d) => (d === "rtl" ? "ltr" : "rtl"))}
+                  title="Text direction — for Arabic names, this reverses word/column order, not just where the text sits"
+                  className={`px-2.5 h-8 rounded-md text-xs font-semibold flex items-center gap-1 ${
+                    rosterDirection === "rtl" ? "bg-white text-sky-950 shadow-sm" : "text-slate-500 hover:bg-white"
+                  }`}
+                >
+                  {rosterDirection === "rtl" ? "AR" : "EN"} ⇄
+                </button>
               </div>
             </div>
             <div className="flex-1 overflow-auto bg-slate-50 p-6">
@@ -17560,7 +17650,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   }}
                 />
                 <div
-                  style={{ fontSize: `${rosterFontSize}px`, textAlign: rosterAlign }}
+                  style={{ fontSize: `${rosterFontSize}px`, textAlign: rosterAlign, direction: rosterDirection }}
                   dangerouslySetInnerHTML={{
                     __html: `<style>
                       h3 { font-size: 1em; margin: 24px 0 8px; }
