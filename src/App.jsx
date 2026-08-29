@@ -5995,7 +5995,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             existingEntry.day !== liveEntry.day ||
             existingEntry.time !== liveEntry.time ||
             existingEntry.coachId !== liveEntry.coachId ||
-            existingEntry.coachId2 !== liveEntry.coachId2;
+            existingEntry.coachId2 !== liveEntry.coachId2 ||
+            existingEntry.sessionType !== liveEntry.sessionType ||
+            existingEntry.sessionType2 !== liveEntry.sessionType2;
           if (outOfSync) {
             next = { ...next, monthlySchedules: { ...(next.monthlySchedules || {}), [thisMonth]: liveEntry } };
             changed = true;
