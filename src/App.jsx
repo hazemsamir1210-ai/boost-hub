@@ -737,12 +737,71 @@ const WAITLIST_PRIORITY_TIERS = [
 // ordinary lesson group — capped at 20 instead of the usual 4, rather
 // than treating them as a normal-sized group.
 const TEAM_SQUAD_LEVELS = ["Star 1", "Star 2", "Star 3", "Star 4", "Team"];
-const TEAM_SQUAD_CAPACITY = 20;
+// Each level's own cap — not every hour has room for a full squad of 20,
+// so this is per-level and admin-editable (Settings → Skills & Levels),
+// rather than one fixed number applied to all of them. Starts at 20 for
+// each until the admin narrows any of them down.
+let TEAM_SQUAD_CAPACITIES = { "Star 1": 20, "Star 2": 20, "Star 3": 20, "Star 4": 20, "Team": 20 };
+const DEFAULT_TEAM_SQUAD_CAPACITIES = { ...TEAM_SQUAD_CAPACITIES };
+const TEAM_SQUAD_CAPACITIES_KEY = "team-squad-capacities-custom";
+
+async function loadCustomTeamSquadCapacities() {
+  try {
+    const res = await window.storage.get(TEAM_SQUAD_CAPACITIES_KEY);
+    if (res?.value) {
+      const parsed = JSON.parse(res.value);
+      TEAM_SQUAD_CAPACITIES = { ...DEFAULT_TEAM_SQUAD_CAPACITIES, ...parsed };
+    }
+  } catch {}
+  return TEAM_SQUAD_CAPACITIES;
+}
+
+async function saveCustomTeamSquadCapacities(next) {
+  TEAM_SQUAD_CAPACITIES = next;
+  return storageSet(TEAM_SQUAD_CAPACITIES_KEY, JSON.stringify(next));
+}
+
 
 function sessionCapacity(sessionType, level) {
   if (sessionType === "group" && ["Exp", "Exp 2", "Exp 3"].includes(level)) return 2;
-  if (sessionType === "group" && TEAM_SQUAD_LEVELS.includes(level)) return TEAM_SQUAD_CAPACITY;
+  if (sessionType === "group" && TEAM_SQUAD_LEVELS.includes(level)) return TEAM_SQUAD_CAPACITIES[level] || 20;
   return sessionTypeInfo(sessionType).capacity;
+}
+
+// Per-level cap above is a starting point — a specific coach/day/time can
+// still need its own number (one hour might genuinely have 3 lanes free,
+// another only 1), so this is a per-SLOT override on top of it. Only
+// Star/Team slots are ever overridden here; every other level keeps
+// using sessionCapacity as-is.
+let SLOT_CAPACITY_OVERRIDES = {}; // key: `${coachId}|${day}|${time}` -> number
+const SLOT_CAPACITY_OVERRIDES_KEY = "slot-capacity-overrides-custom";
+
+async function loadSlotCapacityOverrides() {
+  try {
+    const res = await window.storage.get(SLOT_CAPACITY_OVERRIDES_KEY);
+    if (res?.value) SLOT_CAPACITY_OVERRIDES = JSON.parse(res.value);
+  } catch {}
+  return SLOT_CAPACITY_OVERRIDES;
+}
+
+async function saveSlotCapacityOverrides(next) {
+  SLOT_CAPACITY_OVERRIDES = next;
+  return storageSet(SLOT_CAPACITY_OVERRIDES_KEY, JSON.stringify(next));
+}
+
+function slotCapacityKey(coachId, day, time) {
+  return `${coachId}|${day}|${time}`;
+}
+
+// The one function every "is this slot full" check should call for
+// Star/Team levels — a specific slot override wins if one's been set,
+// otherwise falls back to that level's own general cap.
+function effectiveSlotCapacity(sessionType, level, coachId, day, time) {
+  if (sessionType === "group" && TEAM_SQUAD_LEVELS.includes(level)) {
+    const override = SLOT_CAPACITY_OVERRIDES[slotCapacityKey(coachId, day, time)];
+    if (override != null) return override;
+  }
+  return sessionCapacity(sessionType, level);
 }
 
 // True if this coach isn't working at all this day, OR specifically
@@ -1059,7 +1118,7 @@ function downloadReportHTML(filename, bodyHtml) {
   .plan-header { font-size: 12px; font-weight: 700; color: #0b1e3a; background: #eef2ff; padding: 5px 10px; margin-top: 10px; border: 1px solid #c7d2fe; border-bottom: none; }
   .plan-count { font-weight: 400; color: #64748b; }
   .roster-grid table { border: 1px solid #cbd5e1; }
-  .roster-grid th, .roster-grid td { border: 1px solid #cbd5e1; padding: 5px 8px; }
+  .roster-grid th, .roster-grid td { border: 1px solid #cbd5e1; padding: 5px 8px; text-align: inherit; }
   .roster-grid th { background: #f1f5f9; }
   .roster-grid tr:nth-child(even) td { background: #fafbfc; }
   .roster-grid .blank-row td { background: #ffffff; height: 22px; }
@@ -4347,7 +4406,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
     };
   }, [coachId, day, time, initial?.id, scheduleMonth]);
   const slotType = slotUsage[0]?.sessionType;
-  const capacity = sessionCapacity(sessionType, level);
+  const capacity = effectiveSlotCapacity(sessionType, level, coachId, day, time);
   const slotMismatch = coachId && slotUsage.length > 0 && slotType !== sessionType;
   const slotFull = coachId && !slotMismatch && slotUsage.length >= capacity;
 
@@ -6527,6 +6586,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   // ---- Manage the academy's own level list (add/remove/reorder) ----
   const [newLevelName, setNewLevelName] = useState("");
+  const [teamSquadCaps, setTeamSquadCaps] = useState(() => ({ ...TEAM_SQUAD_CAPACITIES }));
+  const [teamSquadCapsSaved, setTeamSquadCapsSaved] = useState(false);
+  const saveTeamSquadCaps = async (next) => {
+    await saveCustomTeamSquadCapacities(next);
+    setTeamSquadCapsSaved(true);
+    setTimeout(() => setTeamSquadCapsSaved(false), 2000);
+  };
   const [levelsSaving, setLevelsSaving] = useState(false);
   const [levelsError, setLevelsError] = useState("");
 
@@ -8281,7 +8347,27 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [rosterHeaderAlign, setRosterHeaderAlign] = useState("left"); // academy name/logo — separate from the table content, since it's a flex row that ignores text-align
   const [trainingWindow, setTrainingWindow] = useState({ startDate: "", endDate: "", cap: 8 });
   const [trainingWindowOpen, setTrainingWindowOpen] = useState(false);
-  const [slotDetailModal, setSlotDetailModal] = useState(null); // { coachName, day, time, booking } | null
+  const [slotDetailModal, setSlotDetailModal] = useState(null); // { coachName, coachId, day, dayId, time, booking, capacity } | null
+  const [slotCapacityInput, setSlotCapacityInput] = useState("");
+  const [slotCapacitySaved, setSlotCapacitySaved] = useState(false);
+  useEffect(() => {
+    if (!slotDetailModal) return;
+    const existing = SLOT_CAPACITY_OVERRIDES[slotCapacityKey(slotDetailModal.coachId, slotDetailModal.dayId, slotDetailModal.time)];
+    setSlotCapacityInput(existing != null ? String(existing) : "");
+    setSlotCapacitySaved(false);
+  }, [slotDetailModal]);
+  const saveSlotCapacityOverride = async () => {
+    const key = slotCapacityKey(slotDetailModal.coachId, slotDetailModal.dayId, slotDetailModal.time);
+    const next = { ...SLOT_CAPACITY_OVERRIDES };
+    if (slotCapacityInput.trim() === "") {
+      delete next[key];
+    } else {
+      next[key] = Math.max(2, Number(slotCapacityInput) || 2);
+    }
+    await saveSlotCapacityOverrides(next);
+    setSlotCapacitySaved(true);
+    setTimeout(() => setSlotCapacitySaved(false), 2000);
+  };
 
   useEffect(() => {
     if (tab === "schedule") loadTrainingWindowSettings().then(setTrainingWindow);
@@ -8356,7 +8442,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 const booking = (coachBookingsById[c.id] || []).find((b) => b.day === dayGroup.id && b.time === t);
                 if (!booking) return `<td class="open">—</td>`;
                 const specialLevel = booking.levels.find((lv) => ["Exp", "Exp 2", "Exp 3", ...TEAM_SQUAD_LEVELS].includes(lv));
-                const capacity = sessionCapacity(booking.sessionType, specialLevel);
+                const capacity = effectiveSlotCapacity(booking.sessionType, specialLevel, c.id, dayGroup.id, t);
                 const full = booking.count >= capacity;
                 return `<td class="${full ? "full" : "hasroom"}">${booking.count}/${capacity}<br><span class="lvl">${escapeHtml([...booking.levels].join(", "))}</span></td>`;
               })
@@ -13091,13 +13177,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                 );
                               }
                               const specialLevel = booking.levels.find((lv) => ["Exp", "Exp 2", "Exp 3", ...TEAM_SQUAD_LEVELS].includes(lv));
-                              const capacity = sessionCapacity(booking.sessionType, specialLevel);
+                              const capacity = effectiveSlotCapacity(booking.sessionType, specialLevel, c.id, dayGroup.id, t);
                               const spotsLeft = capacity - booking.count;
                               const agesLabel = booking.ages.length > 0 ? booking.ages.slice().sort((a, b) => a - b).join(", ") : "";
                               return (
                                 <td key={t} className="px-2 py-2 text-center">
                                   <button
-                                    onClick={() => setSlotDetailModal({ coachName: c.name, day: dayGroup.label, time: t, booking })}
+                                    onClick={() => setSlotDetailModal({ coachName: c.name, coachId: c.id, day: dayGroup.label, dayId: dayGroup.id, time: t, booking, capacity })}
                                     className={`inline-block px-1.5 py-1 rounded font-medium leading-tight text-xs hover:ring-2 hover:ring-sky-300 transition ${
                                       spotsLeft > 0 ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"
                                     }`}
@@ -13147,6 +13233,31 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <p className="text-xs text-slate-400 mt-4">
               If any of these names shouldn't be here, open that swimmer from the Swimmers tab and re-check their coach/schedule.
             </p>
+            {slotDetailModal.booking.levels.some((lv) => TEAM_SQUAD_LEVELS.includes(lv)) && canEditContent && (
+              <div className="mt-4 pt-4 border-t border-slate-100">
+                <label className="text-xs text-slate-500 mb-1 block">
+                  This slot's own capacity (overrides the {slotDetailModal.booking.levels.find((lv) => TEAM_SQUAD_LEVELS.includes(lv))} default of {TEAM_SQUAD_CAPACITIES[slotDetailModal.booking.levels.find((lv) => TEAM_SQUAD_LEVELS.includes(lv))] || 20})
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    min="2"
+                    max="50"
+                    value={slotCapacityInput}
+                    onChange={(e) => setSlotCapacityInput(e.target.value)}
+                    placeholder="Leave blank to use the level default"
+                    className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900"
+                  />
+                  <button
+                    onClick={saveSlotCapacityOverride}
+                    className="px-4 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900"
+                  >
+                    Save
+                  </button>
+                </div>
+                {slotCapacitySaved && <div className="text-xs text-green-700 mt-2">Saved.</div>}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -14560,6 +14671,30 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </button>
             </div>
             {levelsError && <div className="text-xs text-red-500 mt-2">{levelsError}</div>}
+          </div>
+
+          <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4 mb-5">
+            <h4 className="font-semibold text-slate-800 text-sm mb-1">Star & Team group size</h4>
+            <p className="text-xs text-slate-400 mb-3">
+              Star 1-4 and Team are real squad practices, not ordinary 4-swimmer lesson groups — but not every hour has room for a full squad either. Set each level's own cap below; a specific hour can still fill up before this number if the pool/lane genuinely can't fit that many.
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              {TEAM_SQUAD_LEVELS.map((lvl) => (
+                <div key={lvl}>
+                  <label className="text-xs text-slate-500 mb-1 block">{lvl}</label>
+                  <input
+                    type="number"
+                    min="2"
+                    max="50"
+                    value={teamSquadCaps[lvl] ?? 20}
+                    onChange={(e) => setTeamSquadCaps({ ...teamSquadCaps, [lvl]: Math.max(2, Number(e.target.value) || 2) })}
+                    onBlur={() => saveTeamSquadCaps(teamSquadCaps)}
+                    className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                  />
+                </div>
+              ))}
+            </div>
+            {teamSquadCapsSaved && <div className="text-xs text-green-700 mt-2">Saved.</div>}
           </div>
 
           <div className="space-y-4">
@@ -17662,7 +17797,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       .plan-header { font-size: 0.9em; font-weight: 700; color: #0b1e3a; background: #eef2ff; padding: 5px 10px; margin-top: 10px; border: 1px solid #c7d2fe; }
                       .plan-count { font-weight: 400; color: #64748b; }
                       .roster-grid table { border: 1px solid #cbd5e1; }
-                      .roster-grid th, .roster-grid td { border: 1px solid #cbd5e1; padding: 5px 8px; }
+                      .roster-grid th, .roster-grid td { border: 1px solid #cbd5e1; padding: 5px 8px; text-align: inherit; }
                       .roster-grid th { background: #f1f5f9; }
                     </style>${rosterPreview.gridHtml}`,
                   }}
@@ -24357,7 +24492,7 @@ function integratedSessionCapacity(sessionType, level) {
   if (sessionType === "private") return 1;
   if (sessionType === "semi-private") return 2;
   if (sessionType === "group" && ["Exp", "Exp 2", "Exp 3"].includes(level)) return 2;
-  if (sessionType === "group" && TEAM_SQUAD_LEVELS.includes(level)) return TEAM_SQUAD_CAPACITY;
+  if (sessionType === "group" && TEAM_SQUAD_LEVELS.includes(level)) return TEAM_SQUAD_CAPACITIES[level] || 20;
   return 4;
 }
 
@@ -24476,6 +24611,8 @@ function App() {
         loadCustomPrograms().then(applyCustomPrograms),
         loadCustomBranches().then(applyCustomBranches),
         loadCustomPlanPrices().then(applyCustomPlanPrices),
+        loadCustomTeamSquadCapacities(),
+        loadSlotCapacityOverrides(),
         loadCustomSignature().then((sig) => {
           if (sig) CONFIG.signatureDataUri = sig;
         }),
