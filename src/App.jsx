@@ -1027,18 +1027,12 @@ const DEFAULT_TIME_SLOTS = JSON.parse(JSON.stringify(TIME_SLOTS));
    Helpers
    ============================================================ */
 
-/* Baby classes are 30 min, so for each normal hourly slot we also
-   offer the half-hour right after it (e.g. 3:30 -> 3:30 & 4:00) */
+/* Baby classes run on their own fully independent time slots (see
+   BABY_TIME_SLOTS above) — separate from and not derived from the
+   regular hourly slots at all. */
 function getTimeOptions(branch, day, level) {
-  const base = (TIME_SLOTS[branch] && TIME_SLOTS[branch][day]) || [];
-  if (level !== "Baby") return base;
-  const extended = [];
-  base.forEach((t) => {
-    extended.push(t);
-    const next = addMinutesToTime(t, 30);
-    if (!extended.includes(next)) extended.push(next);
-  });
-  return extended;
+  if (level === "Baby") return (BABY_TIME_SLOTS[branch] && BABY_TIME_SLOTS[branch][day]) || [];
+  return (TIME_SLOTS[branch] && TIME_SLOTS[branch][day]) || [];
 }
 
 function compressImage(file, maxWidth = 900, quality = 0.72, preserveTransparency = false) {
@@ -1786,6 +1780,44 @@ function applyCustomTimeSlots(customSlots) {
     TIME_SLOTS = { ...DEFAULT_TIME_SLOTS, [BRANCHES[0].id]: { ...DEFAULT_TIME_SLOTS[BRANCHES[0].id], ...customSlots[BRANCHES[0].id] } };
   } else {
     TIME_SLOTS = DEFAULT_TIME_SLOTS;
+  }
+}
+
+// A fully independent set of times for Baby classes — not derived from
+// the regular TIME_SLOTS at all, so Baby hours can run on their own
+// schedule entirely (a different start time, different days, whatever
+// the pool actually needs), rather than always being "half of whatever
+// the regular groups are doing". Same customization pattern as
+// TIME_SLOTS above, just its own separate storage key and defaults.
+let BABY_TIME_SLOTS = {
+  elalsson: {
+    "sun-tue": ["3:30 PM", "4:00 PM", "4:30 PM", "5:00 PM", "5:30 PM", "6:00 PM"],
+    "mon-wed": ["3:30 PM", "4:00 PM", "4:30 PM", "5:00 PM", "5:30 PM", "6:00 PM"],
+    "fri-sat": ["10:00 AM", "10:30 AM", "11:00 AM", "11:30 AM", "12:00 PM", "12:30 PM"],
+  },
+};
+const DEFAULT_BABY_TIME_SLOTS = JSON.parse(JSON.stringify(BABY_TIME_SLOTS));
+const BABY_TIME_SLOTS_KEY = "baby-time-slots-custom";
+
+async function loadCustomBabyTimeSlots() {
+  const res = await window.storage.get(BABY_TIME_SLOTS_KEY);
+  if (!res) return null;
+  try {
+    return JSON.parse(res.value);
+  } catch {
+    return null;
+  }
+}
+
+async function saveCustomBabyTimeSlots(customSlots) {
+  return storageSet(BABY_TIME_SLOTS_KEY, JSON.stringify(customSlots));
+}
+
+function applyCustomBabyTimeSlots(customSlots) {
+  if (customSlots && customSlots[BRANCHES[0].id]) {
+    BABY_TIME_SLOTS = { ...DEFAULT_BABY_TIME_SLOTS, [BRANCHES[0].id]: { ...DEFAULT_BABY_TIME_SLOTS[BRANCHES[0].id], ...customSlots[BRANCHES[0].id] } };
+  } else {
+    BABY_TIME_SLOTS = DEFAULT_BABY_TIME_SLOTS;
   }
 }
 
@@ -7020,6 +7052,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [customTimeSlots, setCustomTimeSlots] = useState({});
   const [timeSlotsRefreshKey, setTimeSlotsRefreshKey] = useState(0);
   const [newTimeSlotByDay, setNewTimeSlotByDay] = useState({});
+  const [customBabyTimeSlots, setCustomBabyTimeSlots] = useState({});
+  const [babyTimeSlotsRefreshKey, setBabyTimeSlotsRefreshKey] = useState(0);
+  const [newBabyTimeSlotByDay, setNewBabyTimeSlotByDay] = useState({});
 
   useEffect(() => {
     if (tab !== "settings") return;
@@ -7030,6 +7065,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     setSettingsSignature(CONFIG.signatureDataUri || "");
     setSettingsPrimaryColor(CONFIG.primaryColor || "#0369a1");
     loadCustomTimeSlots().then((custom) => setCustomTimeSlots(custom?.[BRANCHES[0].id] || {}));
+    loadCustomBabyTimeSlots().then((custom) => setCustomBabyTimeSlots(custom?.[BRANCHES[0].id] || {}));
   }, [tab]);
 
   const [backupRunning, setBackupRunning] = useState(false);
@@ -7770,6 +7806,36 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     const next = { ...customTimeSlots };
     delete next[dayId];
     saveTimeSlotsFor(next);
+  };
+
+  // ---- Settings tab: Baby's own, fully independent time slots ----
+  const saveBabyTimeSlotsFor = async (nextForBranch) => {
+    setCustomBabyTimeSlots(nextForBranch);
+    const next = { [BRANCHES[0].id]: nextForBranch };
+    await saveCustomBabyTimeSlots(next);
+    applyCustomBabyTimeSlots(next);
+    setBabyTimeSlotsRefreshKey((k) => k + 1);
+  };
+
+  const addBabyTimeSlot = (dayId) => {
+    const text = (newBabyTimeSlotByDay[dayId] || "").trim();
+    if (!text) return;
+    const current = BABY_TIME_SLOTS[BRANCHES[0].id]?.[dayId] || [];
+    if (current.includes(text)) return;
+    const nextForDay = [...current, text].sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
+    saveBabyTimeSlotsFor({ ...customBabyTimeSlots, [dayId]: nextForDay });
+    setNewBabyTimeSlotByDay({ ...newBabyTimeSlotByDay, [dayId]: "" });
+  };
+
+  const removeBabyTimeSlot = (dayId, slot) => {
+    const current = BABY_TIME_SLOTS[BRANCHES[0].id]?.[dayId] || [];
+    saveBabyTimeSlotsFor({ ...customBabyTimeSlots, [dayId]: current.filter((t) => t !== slot) });
+  };
+
+  const resetBabyTimeSlotsForDay = (dayId) => {
+    const next = { ...customBabyTimeSlots };
+    delete next[dayId];
+    saveBabyTimeSlotsFor(next);
   };
 
   // ---- Settings tab: manage branches ----
@@ -8522,25 +8588,29 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       // Only swimmers actually scheduled for the month being exported —
       // either their live schedule (if tagged for this month) or a
       // pending nextSchedule pre-booked for it.
-      const inSession = [];
+      const inSessionAll = [];
       all.forEach((s) => {
         const hasMonthly = !!s.monthlySchedules?.[scheduleMonth];
         if (!hasMonthly && (s.scheduleMonth || monthKey()) === scheduleMonth) {
           if (s.day === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time === scheduleTimeFilter)) {
-            inSession.push({ swimmer: s, time: s.time, coachId: s.coachId, sessionType: s.sessionType });
+            inSessionAll.push({ swimmer: s, time: s.time, coachId: s.coachId, sessionType: s.sessionType });
           }
           if (s.day2 === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time2 === scheduleTimeFilter)) {
-            inSession.push({ swimmer: s, time: s.time2, coachId: s.coachId2, sessionType: s.sessionType2 });
+            inSessionAll.push({ swimmer: s, time: s.time2, coachId: s.coachId2, sessionType: s.sessionType2 });
           }
         }
         const ms = getMonthlySchedule(s, scheduleMonth);
         if (ms && ms.day === scheduleDayFilter && (scheduleTimeFilter === "all" || ms.time === scheduleTimeFilter)) {
-          inSession.push({ swimmer: s, time: ms.time, coachId: ms.coachId, sessionType: ms.sessionType, classId: ms.classId, substituteCoachId: ms.substituteCoachId, substituteDate: ms.substituteDate });
+          inSessionAll.push({ swimmer: s, time: ms.time, coachId: ms.coachId, sessionType: ms.sessionType, classId: ms.classId, substituteCoachId: ms.substituteCoachId, substituteDate: ms.substituteDate });
         }
         if (ms && ms.day2 === scheduleDayFilter && (scheduleTimeFilter === "all" || ms.time2 === scheduleTimeFilter)) {
-          inSession.push({ swimmer: s, time: ms.time2, coachId: ms.coachId2, sessionType: ms.sessionType2, classId: ms.classId, substituteCoachId: ms.substituteCoachId, substituteDate: ms.substituteDate });
+          inSessionAll.push({ swimmer: s, time: ms.time2, coachId: ms.coachId2, sessionType: ms.sessionType2, classId: ms.classId, substituteCoachId: ms.substituteCoachId, substituteDate: ms.substituteDate });
         }
       });
+      // Respects the same "All levels" / "Baby only" / etc. filter as the
+      // on-screen grid and the coach overview PDF, so this export always
+      // matches whatever's currently selected there.
+      const inSession = scheduleLevelFilter === "all" ? inSessionAll : inSessionAll.filter((e) => e.swimmer.level === scheduleLevelFilter);
       const byCoach = {};
       inSession.forEach((entry) => {
         const key = entry.coachId || "unassigned";
@@ -8624,7 +8694,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <img src="${CONFIG.logoDataUri}" />
           <div>
             <h1>${escapeHtml(CONFIG.academyName)}</h1>
-            <div class="sub">Session roster & attendance — ${escapeHtml(dayLabel)}${scheduleTimeFilter !== "all" ? ` · ${escapeHtml(scheduleTimeFilter)}` : ""} · ${escapeHtml(monthLabel(scheduleMonth))}</div>
+            <div class="sub">Session roster & attendance — ${escapeHtml(dayLabel)}${scheduleTimeFilter !== "all" ? ` · ${escapeHtml(scheduleTimeFilter)}` : ""}${scheduleLevelFilter !== "all" ? ` · ${escapeHtml(scheduleLevelFilter)} only` : ""} · ${escapeHtml(monthLabel(scheduleMonth))}</div>
           </div>
         </div>
       `;
@@ -16552,6 +16622,59 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       />
                       <button
                         onClick={() => addTimeSlot(dg.id)}
+                        className="px-3 py-2 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div key={babyTimeSlotsRefreshKey}>
+            <h3 className="font-bold text-slate-900 mb-1">Baby session times</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              Fully independent from the day & time slots above — Baby sessions run on their own schedule (usually 30 minutes each), so their start times aren't tied to the regular groups' hours at all.
+            </p>
+            <div className="space-y-4">
+              {DAY_GROUPS.map((dg) => {
+                const slots = BABY_TIME_SLOTS[BRANCHES[0].id]?.[dg.id] || [];
+                const isCustomized = customBabyTimeSlots[dg.id] != null;
+                return (
+                  <div key={dg.id} className="bg-slate-50 rounded-2xl p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="font-semibold text-slate-800">{dg.label}</h4>
+                      {isCustomized && (
+                        <button onClick={() => resetBabyTimeSlotsForDay(dg.id)} className="text-xs text-slate-400 hover:text-slate-600 underline">
+                          Reset to default
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {slots.length === 0 && <span className="text-xs text-slate-400">No Baby times set for this day</span>}
+                      {slots.map((slot) => (
+                        <span key={slot} className="text-xs px-2.5 py-1 rounded-full bg-amber-50 text-amber-800 flex items-center gap-1.5">
+                          {slot}
+                          <button onClick={() => removeBabyTimeSlot(dg.id, slot)} className="text-amber-400 hover:text-red-500">
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        value={newBabyTimeSlotByDay[dg.id] || ""}
+                        onChange={(e) => setNewBabyTimeSlotByDay({ ...newBabyTimeSlotByDay, [dg.id]: e.target.value })}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") addBabyTimeSlot(dg.id);
+                        }}
+                        placeholder="e.g. 4:00 PM"
+                        className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900"
+                      />
+                      <button
+                        onClick={() => addBabyTimeSlot(dg.id)}
                         className="px-3 py-2 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200"
                       >
                         Add
@@ -24683,6 +24806,7 @@ function App() {
         loadCustomLevelSkills().then(applyCustomLevelSkills),
         loadCustomLevels().then(applyCustomLevels),
         loadCustomTimeSlots().then(applyCustomTimeSlots),
+        loadCustomBabyTimeSlots().then(applyCustomBabyTimeSlots),
         loadHomepageContent().then(applyHomepageContent),
         loadCustomPrograms().then(applyCustomPrograms),
         loadCustomBranches().then(applyCustomBranches),
