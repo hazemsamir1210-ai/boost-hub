@@ -8317,6 +8317,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   const [scheduleDayFilter, setScheduleDayFilter] = useState(dayGroupForToday() || DAY_GROUPS[0].id);
   const [scheduleTimeFilter, setScheduleTimeFilter] = useState("all"); // "all" or one specific time
+  const [scheduleLevelFilter, setScheduleLevelFilter] = useState("all"); // "all" or a specific level (e.g. "Baby")
   const [scheduleMonth, setScheduleMonth] = useState(monthKey()); // "YYYY-MM" — which month's sessions to report on
   const [upcomingMakeups, setUpcomingMakeups] = useState([]); // [{ swimmer, session }] — today and later, whole academy
 
@@ -8426,11 +8427,20 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     setExportingCoachGrid(true);
     try {
       const daySections = DAY_GROUPS.map((dayGroup) => {
-        const times = (TIME_SLOTS[BRANCHES[0].id]?.[dayGroup.id] || []).slice().sort(
-          (a, b) => timeToMinutes(a) - timeToMinutes(b)
-        );
+        // Same half-hour expansion as the on-screen grid when the
+        // export is generated while "Baby only" is selected.
+        const times = getTimeOptions(BRANCHES[0].id, dayGroup.id, scheduleLevelFilter === "Baby" ? "Baby" : null)
+          .slice()
+          .sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
         if (times.length === 0) return "";
-        const activeCoaches = coaches.filter((c) => !(c.offDays || []).includes(dayGroup.id));
+        const activeCoaches = coaches
+          .filter((c) => !(c.offDays || []).includes(dayGroup.id))
+          .filter((c) => {
+            if (scheduleLevelFilter === "all") return true;
+            return Object.values(coachBookingsById[c.id] || {}).some(
+              (b) => b.day === dayGroup.id && b.names.some((n) => n.level === scheduleLevelFilter)
+            );
+          });
         if (activeCoaches.length === 0) return "";
 
         const headerRow = `<tr><th>Coach</th>${times.map((t) => `<th>${escapeHtml(t)}</th>`).join("")}</tr>`;
@@ -8441,12 +8451,27 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 if (isCoachClosedAt(c, dayGroup.id, t)) {
                   return `<td class="closed">Closed</td>`;
                 }
-                const booking = (coachBookingsById[c.id] || []).find((b) => b.day === dayGroup.id && b.time === t);
+                const rawBooking = (coachBookingsById[c.id] || []).find((b) => b.day === dayGroup.id && b.time === t);
+                const booking =
+                  !rawBooking || scheduleLevelFilter === "all"
+                    ? rawBooking
+                    : (() => {
+                        const filteredNames = rawBooking.names.filter((n) => n.level === scheduleLevelFilter);
+                        if (filteredNames.length === 0) return null;
+                        return { ...rawBooking, names: filteredNames, count: filteredNames.length, levels: [scheduleLevelFilter] };
+                      })();
                 if (!booking) return `<td class="open">—</td>`;
                 const specialLevel = booking.levels.find((lv) => ["Exp", "Exp 2", "Exp 3", ...TEAM_SQUAD_LEVELS].includes(lv));
                 const capacity = effectiveSlotCapacity(booking.sessionType, specialLevel, c.id, dayGroup.id, t);
                 const full = booking.count >= capacity;
-                return `<td class="${full ? "full" : "hasroom"}">${booking.count}/${capacity}<br><span class="lvl">${escapeHtml([...booking.levels].join(", "))}</span></td>`;
+                // Every Baby swimmer is already private and level "Baby"
+                // by definition, so showing the level here is redundant —
+                // their names are the actually useful thing to see.
+                const secondLine =
+                  scheduleLevelFilter === "Baby"
+                    ? booking.names.map((n) => n.name).join(", ")
+                    : [...booking.levels].join(", ");
+                return `<td class="${full ? "full" : "hasroom"}">${booking.count}/${capacity}<br><span class="lvl">${escapeHtml(secondLine)}</span></td>`;
               })
               .join("");
             return `<tr><td class="coachname">${escapeHtml(c.name)}</td>${cells}</tr>`;
@@ -12999,6 +13024,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <option key={t} value={t}>{t}</option>
                 ))}
               </select>
+              <select
+                value={scheduleLevelFilter}
+                onChange={(e) => setScheduleLevelFilter(e.target.value)}
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+              >
+                <option value="all">All levels</option>
+                {LEVELS.map((lv) => (
+                  <option key={lv} value={lv}>{lv} only</option>
+                ))}
+              </select>
               <input
                 type="month"
                 value={scheduleMonth}
@@ -13116,9 +13151,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <div className="text-center text-slate-400 py-16">No coaches added yet</div>
           ) : (
             DAY_GROUPS.filter((d) => d.id === scheduleDayFilter).map((dayGroup) => {
-              const times = (TIME_SLOTS[BRANCHES[0].id]?.[dayGroup.id] || []).slice().sort(
-                (a, b) => timeToMinutes(a) - timeToMinutes(b)
-              );
+              // Baby sessions run 30 minutes, half the length of a normal
+              // slot, so the "Baby only" view needs a column for every
+              // half-hour (getTimeOptions is the exact same expansion the
+              // registration form already uses to offer those extra
+              // half-hour times) — every other level keeps the plain
+              // hourly columns.
+              const times = getTimeOptions(BRANCHES[0].id, dayGroup.id, scheduleLevelFilter === "Baby" ? "Baby" : null)
+                .slice()
+                .sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
               if (times.length === 0) return null;
               return (
                 <div key={dayGroup.id} className="mb-8">
@@ -13139,6 +13180,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       <tbody>
                         {coaches
                           .filter((c) => !(c.offDays || []).includes(dayGroup.id))
+                          .filter((c) => {
+                            if (scheduleLevelFilter === "all") return true;
+                            // Only show a coach row at all if they have at
+                            // least one booking that day matching the
+                            // selected level — otherwise a "Baby only"
+                            // view would still list every coach with
+                            // entirely empty rows.
+                            return Object.values(coachBookingsById[c.id] || {}).some(
+                              (b) => b.day === dayGroup.id && b.names.some((n) => n.level === scheduleLevelFilter)
+                            );
+                          })
                           .map((c) => (
                           <tr key={c.id} className="border-t border-slate-100">
                             <td className="px-3 py-2 font-medium text-slate-800 sticky left-0 bg-white whitespace-nowrap">
@@ -13154,9 +13206,22 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                   </td>
                                 );
                               }
-                              const booking = (coachBookingsById[c.id] || []).find(
+                              const rawBooking = (coachBookingsById[c.id] || []).find(
                                 (b) => b.day === dayGroup.id && b.time === t
                               );
+                              // When filtering to one level, recompute the
+                              // cell from just that level's swimmers —
+                              // otherwise "Baby only" would still show
+                              // counts/levels mixed in from other swimmers
+                              // sharing the same coach/time slot.
+                              const booking =
+                                !rawBooking || scheduleLevelFilter === "all"
+                                  ? rawBooking
+                                  : (() => {
+                                      const filteredNames = rawBooking.names.filter((n) => n.level === scheduleLevelFilter);
+                                      if (filteredNames.length === 0) return null;
+                                      return { ...rawBooking, names: filteredNames, count: filteredNames.length, levels: [scheduleLevelFilter] };
+                                    })();
                               const cellMakeups = upcomingMakeups.filter(
                                 (um) =>
                                   um.session.coachId === c.id &&
@@ -13197,7 +13262,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                     title={`${sessionTypeInfo(booking.sessionType).label} — ${booking.count}/${capacity}${agesLabel ? ` — ages: ${agesLabel}` : ""} — click to see names`}
                                   >
                                     <div>{booking.count}/{capacity}</div>
-                                    <div>{booking.levels.join(", ")}</div>
+                                    <div>
+                                      {scheduleLevelFilter === "Baby"
+                                        ? booking.names.map((n) => n.name).join(", ")
+                                        : booking.levels.join(", ")}
+                                    </div>
                                     {agesLabel && (
                                       <div className="opacity-70 whitespace-nowrap">Ages: {agesLabel}</div>
                                     )}
