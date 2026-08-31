@@ -9198,9 +9198,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       const key = targetMonth || defaultPaymentMonth(bookingOpenDateInput);
       try {
         const all = await fetchAllSwimmers();
+        // A blank record.phone must never be used to match swimmers — every
+        // swimmer with no phone on file would match too, silently marking
+        // unrelated swimmers "paid" off a single confirmation with no phone
+        // attached. Only match by phone when the request actually has one
+        // (mirrors the guard already used elsewhere, e.g. `r.phone && r.phone
+        // === s.phone`).
         const matches = record.swimmerId
           ? all.filter((s) => s.id === record.swimmerId)
-          : all.filter((s) => s.phone === record.phone);
+          : record.phone
+          ? all.filter((s) => s.phone === record.phone)
+          : [];
         const readyToMark = matches.filter((s) => s.day && s.time && !(s.paidMonths || []).includes(key));
         const needsSchedule = matches.filter((s) => (!s.day || !s.time) && !(s.paidMonths || []).includes(key));
         if (readyToMark.length > 0) {
