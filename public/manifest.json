@@ -1,15 +1,36 @@
 {
-  "name": "Swim Junior",
-  "short_name": "Swim Junior",
-  "description": "Swim academy subscriptions, attendance, and staff dashboard.",
+  "name": "Aquacore — Swimming Academy Management",
+  "short_name": "Aquacore",
+  "description": "Manage your swimming academy — swimmers, coaches, schedules, payments, and reports.",
   "start_url": "/",
-  "scope": "/",
   "display": "standalone",
-  "background_color": "#0b1e4a",
-  "theme_color": "#0b1e4a",
+  "background_color": "#ffffff",
+  "theme_color": "#0369a1",
   "orientation": "portrait-primary",
   "icons": [
-    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
-    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
   ]
 }
