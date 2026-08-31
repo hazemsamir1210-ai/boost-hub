@@ -14283,8 +14283,22 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         const prevMonthEndISO = toISODate(prevMonthEndDate);
 
         const allCoachStats = coaches.map((c) => {
-          const mySwimmers = swimmers.filter((s) => s.coachId === c.id || s.coachId2 === c.id);
-          const myActiveSwimmers = mySwimmers.filter((s) => s.day && s.time);
+          // Which swimmers count toward this coach for the selected month:
+          // read from that month's own schedule (monthlySchedules[key],
+          // falling back to live fields only for the current live month —
+          // see getMonthlySchedule) instead of the swimmer's current
+          // coachId/coachId2. Reading the live fields directly meant
+          // picking a past month here still reported today's assignment —
+          // a swimmer showed up under whichever coach has them NOW, not
+          // whoever actually had them during the month being reported on.
+          const mySwimmers = swimmers.filter((s) => {
+            const ms = getMonthlySchedule(s, selectedMonthKey);
+            return !!ms && (ms.coachId === c.id || ms.coachId2 === c.id);
+          });
+          const myActiveSwimmers = mySwimmers.filter((s) => {
+            const ms = getMonthlySchedule(s, selectedMonthKey);
+            return !!(ms?.day && ms?.time);
+          });
 
           const attendanceRateForRange = (rStartISO, rEndISO) => {
             let presentCount = 0;
@@ -14307,11 +14321,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           ).length;
           const skillsCoverage = myActiveSwimmers.length > 0 ? Math.round((ratedSwimmerCount / myActiveSwimmers.length) * 100) : null;
 
-          const myActiveInPrevMonth = mySwimmers.filter((s) => {
+          const myActiveInPrevMonth = swimmers.filter((s) => {
             const sched = (s.scheduleHistory || []).find((h) => (h.date || "").slice(0, 7) === prevSelectedMonthKey && h.coachId === c.id);
-            return !!sched || (s.coachId === c.id && s.day && s.time && (s.createdAt || "").slice(0, 7) <= prevSelectedMonthKey);
+            if (sched) return true;
+            const ms = getMonthlySchedule(s, prevSelectedMonthKey);
+            return !!ms && ms.coachId === c.id && !!ms.day && !!ms.time;
           });
-          const myStillWithMe = myActiveInPrevMonth.filter((s) => s.coachId === c.id && s.day && s.time);
+          const myStillWithMe = myActiveInPrevMonth.filter((s) => {
+            const ms = getMonthlySchedule(s, selectedMonthKey);
+            return !!ms && ms.coachId === c.id && !!ms.day && !!ms.time;
+          });
           const coachRetention = myActiveInPrevMonth.length ? Math.round((myStillWithMe.length / myActiveInPrevMonth.length) * 100) : null;
 
           // The coach's OWN attendance as staff — separate from whether
