@@ -2069,11 +2069,22 @@ function monthLabel(key) {
 
 /* Which month a NEW payment coming in right now should count for. Once
    the admin's "next month opens on" date has arrived, everyone paying is
-   pre-paying for NEXT month (this month is basically over) — so default
-   to that instead of always assuming "this month", which was silently
-   marking advance payments against the wrong month. Still just a
-   default: wherever this is used, the admin can override it. */
-function defaultPaymentMonth(bookingOpenDate) {
+   *assumed* to be pre-paying for NEXT month (this month is basically
+   over) — so default to that instead of always assuming "this month".
+   BUT that assumption breaks for a swimmer who is still behind on the
+   CURRENT month when they finally pay, after the window already opened:
+   defaulting them straight to next month silently marked their overdue
+   current-month balance as settled for the wrong month — the swimmer
+   still hadn't really paid for the month they were behind on, yet the
+   moment the calendar rolled over, isPaidThisMonth() found NEXT month
+   already in their paidMonths and read them as paid. That's why this bug
+   was invisible in August's data and only showed up the moment September
+   started. When the swimmer is known, check their real paid status first;
+   only fall back to the "next month opens" heuristic when we don't know
+   yet whether they still owe the current month. Still just a default:
+   wherever this is used, the admin can override it. */
+function defaultPaymentMonth(bookingOpenDate, swimmer) {
+  if (swimmer && !(swimmer.paidMonths || []).includes(monthKey())) return monthKey();
   if (bookingOpenDate && todayISO() >= bookingOpenDate) return nextMonthKey();
   return monthKey();
 }
@@ -2118,15 +2129,10 @@ function unfreezeSwimmer(swimmer) {
   return { ...swimmer, frozenUntil: null };
 }
 
-/* Once a swimmer's subscription month rolls over without being renewed,
-   their day/time slot is released (so it doesn't sit blocked forever) —
-   name, phone and level are kept, only the schedule is cleared.
-   A frozen swimmer is exempt — their spot stays reserved while frozen. */
-// Once the real calendar reaches whatever month a swimmer's nextSchedule
-// was pre-booked for, that becomes their live schedule — this runs
-// alongside clearedIfUnpaid, once per calendar month, so an advance
-// booking made while last month was still running switches over
-// automatically without anyone having to remember to do it by hand.
+/* Once the real calendar reaches whatever month a swimmer's nextSchedule
+   was pre-booked for, that becomes their live schedule — so an advance
+   booking made while last month was still running switches over
+   automatically without anyone having to remember to do it by hand. */
 function promotedIfDue(swimmer, currentMonthKey) {
   const monthly = swimmer.monthlySchedules?.[currentMonthKey];
   const source = monthly || (swimmer.nextSchedule?.scheduleMonth === currentMonthKey ? swimmer.nextSchedule : null);
@@ -2143,11 +2149,23 @@ function promotedIfDue(swimmer, currentMonthKey) {
   };
 }
 
+/* Payment status must never delete a swimmer's registration. This used
+   to clear day/time/coachId/scheduleMonth for anyone unpaid once their
+   month rolled over — "freeing the slot" — but that also silently
+   removed them from everything that reads day/time: the Dashboard's
+   Active/Unpaid counts, Coach Performance, and the class Schedule. An
+   unpaid swimmer would just vanish instead of showing up as "unpaid",
+   which is what actually happened the moment September started (see
+   loadSwimmers' once-per-month reset job below, which runs this on
+   every swimmer the first time anyone opens the app in a new month).
+   Kept as a real function (not deleted) so existing callers keep
+   working — it's now a no-op: registration and payment status are
+   independent, so being unpaid no longer touches the schedule or coach
+   at all. If freeing up a slot from a swimmer who's genuinely left is
+   ever needed, that should be an explicit admin action, not something
+   that happens silently based on payment status. */
 function clearedIfUnpaid(swimmer) {
-  if (isPaidThisMonth(swimmer)) return swimmer;
-  if (isFrozen(swimmer)) return swimmer;
-  if (!swimmer.day && !swimmer.time) return swimmer;
-  return { ...swimmer, day: "", time: "", coachId: null, scheduleMonth: "" };
+  return swimmer;
 }
 
 /* ---------- WhatsApp click-to-chat ----------
@@ -9172,7 +9190,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   }, [authed, requests, photos]);
 
   const setRequestStatus = async (record, status, receiptNo, targetMonth) => {
-    const paidMonth = status === "confirmed" ? targetMonth || defaultPaymentMonth(bookingOpenDateInput) : record.paidMonth;
+    const linkedSwimmerGuess = record.swimmerId ? swimmersById.get(record.swimmerId) : null;
+    const paidMonth = status === "confirmed" ? targetMonth || defaultPaymentMonth(bookingOpenDateInput, linkedSwimmerGuess) : record.paidMonth;
     const updated = {
       ...record,
       status,
@@ -9188,14 +9207,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
 
     // Auto-link: confirming a payment marks the matching swimmer(s) as paid
-    // for the chosen month — defaults to "this month", but once next
-    // month's booking window is open it defaults to next month instead,
-    // since by then everyone paying is really pre-paying ahead. The admin
-    // can always override which month from the confirm dialog.
+    // for the chosen month — a manually chosen targetMonth always wins, but
+    // the default is now worked out per swimmer (see defaultPaymentMonth),
+    // not once up front, so a family with one member still behind on the
+    // current month and another already caught up each get credited to the
+    // month they actually owe, even after the "next month opens" date.
     // A swimmer with no day/time yet is left unpaid here — activate them
     // from the Swimmers tab instead, which asks for a schedule first.
     if (status === "confirmed") {
-      const key = targetMonth || defaultPaymentMonth(bookingOpenDateInput);
       try {
         const all = await fetchAllSwimmers();
         // A blank record.phone must never be used to match swimmers — every
@@ -9209,11 +9228,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           : record.phone
           ? all.filter((s) => s.phone === record.phone)
           : [];
-        const readyToMark = matches.filter((s) => s.day && s.time && !(s.paidMonths || []).includes(key));
-        const needsSchedule = matches.filter((s) => (!s.day || !s.time) && !(s.paidMonths || []).includes(key));
+        const keyFor = (s) => targetMonth || defaultPaymentMonth(bookingOpenDateInput, s);
+        const readyToMark = matches.filter((s) => s.day && s.time && !(s.paidMonths || []).includes(keyFor(s)));
+        const needsSchedule = matches.filter((s) => (!s.day || !s.time) && !(s.paidMonths || []).includes(keyFor(s)));
         if (readyToMark.length > 0) {
           const next = all.map((s) => {
             if (!readyToMark.some((m) => m.id === s.id)) return s;
+            const key = keyFor(s);
             const plan = PLANS.find((p) => p.id === inferPlanId(s)) || { id: inferPlanId(s), name: s.planName || "Plan", price: Number(s.planPrice) || Number(record.price) || 0 };
             const amount = Number(record.price) || Number(plan.price) || 0;
             const payment = { ...record, status: "confirmed", method: record.method || "instapay", receiptNo: receiptNo || record.receiptNo || "", paidMonth: key, price: amount };
@@ -11300,7 +11321,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         onClick={() => {
                           setReceiptModal(r);
                           setReceiptNoInput(nextReceiptNo());
-                          setReceiptTargetMonth(defaultPaymentMonth(bookingOpenDateInput));
+                          setReceiptTargetMonth(defaultPaymentMonth(bookingOpenDateInput, r.swimmerId ? swimmersById.get(r.swimmerId) : null));
                           setReceiptError("");
                         }}
                         className="flex-1 py-2 rounded-lg bg-sky-950 text-white text-sm font-medium hover:bg-sky-900 flex items-center justify-center gap-1"
