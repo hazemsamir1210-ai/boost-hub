@@ -3140,7 +3140,7 @@ function applyAttendanceStatus(swimmer, date, status) {
 // swimmer had a different coach isn't separated out, since the app
 // doesn't record who the coach was at the time.
 function computeCoachPerformance(swimmers = [], coachId, feedback = []) {
-  const mine = swimmers.filter((s) => s.coachId === coachId);
+  const mine = swimmers.filter((s) => s.coachId === coachId || s.coachId2 === coachId);
   const mineIds = new Set(mine.map((s) => String(s.id)));
   let present = 0, absent = 0;
   let masteredTotal = 0, skillsTotal = 0;
@@ -5275,22 +5275,45 @@ async function syncSwimmerToCoreEngine(swimmer) {
     let cls = classes.find((c) => coreClassKey(c) === key);
     let classesChanged = false;
     if (!cls) {
-      cls = {
-        id: `cls-${genId()}`,
-        name: `${swimmer.level || "Class"} · ${swimmer.day} · ${swimmer.time}`,
-        branch: swimmer.branch || BRANCHES[0]?.id || "",
-        level: swimmer.level || "",
-        day: swimmer.day,
-        time: swimmer.time,
-        coachId: swimmer.coachId || null,
-        sessionType: swimmer.sessionType || "group",
-        capacity: Number(swimmer.sessionType === "private" ? 1 : swimmer.level === "Baby" ? 1 : 3),
-        active: true,
-        createdAt: new Date().toISOString(),
-        migratedFrom: "auto-sync",
-      };
-      classes.push(cls);
-      classesChanged = true;
+      // coreClassKey includes coachId, so a swimmer whose coach was just
+      // assigned/changed won't match the class created back when they had
+      // no coach (or a different one). Before creating a new class, check
+      // for an existing one in the same branch/level/day/time/sessionType
+      // slot and just update its coach — otherwise the old class is left
+      // behind forever with a stale/empty coachId, still showing up in the
+      // schedule as a class with "No coach".
+      const slotKey = [swimmer.branch || "", swimmer.level || "", swimmer.day || "", swimmer.time || "", swimmer.sessionType || "group"].join("|");
+      const sameSlot = classes.find(
+        (c) => [c.branch || "", c.level || "", c.day || "", c.time || "", c.sessionType || "group"].join("|") === slotKey
+      );
+      if (sameSlot) {
+        cls = sameSlot;
+        if (cls.coachId !== (swimmer.coachId || null)) {
+          cls.coachId = swimmer.coachId || null;
+          classesChanged = true;
+        }
+        if (cls.active === false) {
+          cls.active = true;
+          classesChanged = true;
+        }
+      } else {
+        cls = {
+          id: `cls-${genId()}`,
+          name: `${swimmer.level || "Class"} · ${swimmer.day} · ${swimmer.time}`,
+          branch: swimmer.branch || BRANCHES[0]?.id || "",
+          level: swimmer.level || "",
+          day: swimmer.day,
+          time: swimmer.time,
+          coachId: swimmer.coachId || null,
+          sessionType: swimmer.sessionType || "group",
+          capacity: Number(swimmer.sessionType === "private" ? 1 : swimmer.level === "Baby" ? 1 : 3),
+          active: true,
+          createdAt: new Date().toISOString(),
+          migratedFrom: "auto-sync",
+        };
+        classes.push(cls);
+        classesChanged = true;
+      }
     }
 
     // A swimmer only ever holds one RECURRING enrollment at a time — if
@@ -10722,7 +10745,23 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         weekAgo.setDate(weekAgo.getDate() - 7);
 
         const activeNow = swimmers.filter((s) => s.day && s.time);
-        const unpaidCount = activeNow.filter((s) => !isPaidThisMonth(s)).length;
+
+        // A swimmer can be behind on payment two different ways: paidMonths
+        // never got marked (the plain check below), or they have a real
+        // open order/charge sitting in the Family & Billing ledger that
+        // paidMonths was never synced to — the two payment systems aren't
+        // auto-reconciled (see syncSwimmerToCoreEngine). Catching only the
+        // first meant a swimmer with a genuine unpaid order could still
+        // read as "paid" here — and if they don't have day/time set yet,
+        // activeNow above would drop them from the count entirely too.
+        const familyIdBySwimmerId = new Map();
+        coreFamilies.forEach((f) => (f.swimmerIds || []).forEach((sid) => familyIdBySwimmerId.set(String(sid), f.id)));
+        const familiesWithBalance = new Set(
+          coreFamilies.filter((f) => getFamilyLedgerSummary(coreLedger, f.id).balance > 0).map((f) => f.id)
+        );
+        const hasOpenOrder = (s) => familiesWithBalance.has(familyIdBySwimmerId.get(String(s.id)));
+        const unpaidSwimmers = swimmers.filter((s) => (s.day && s.time && !isPaidThisMonth(s)) || hasOpenOrder(s));
+        const unpaidCount = unpaidSwimmers.length;
         const newThisWeek = swimmers.filter((s) => s.createdAt && new Date(s.createdAt) >= weekAgo).length;
 
         const revenueThisMonth = requests
