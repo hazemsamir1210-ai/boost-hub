@@ -1148,7 +1148,7 @@ function downloadReportHTML(filename, bodyHtml) {
 /* A printable copy of a swimmer's registration/waiver — for when someone
    needs proof the parent agreed to it (e.g. after an incident). Reuses
    the same download-then-print approach as the other print functions. */
-function printWaiverConfirmation({ swimmerName, age, parentName, phone, acceptedAt }) {
+function printWaiverConfirmation({ swimmerName, age, parentName, phone, acceptedAt, signature, signerName }) {
   const field = (label, value) => `
     <div class="field">
       <div class="field-label">${escapeHtml(label)}</div>
@@ -1172,6 +1172,9 @@ function printWaiverConfirmation({ swimmerName, age, parentName, phone, accepted
   .signoff .check { width: 22px; height: 22px; border-radius: 50%; background: #16a34a; color: white; display: flex; align-items: center; justify-content: center; font-size: 13px; flex-shrink: 0; }
   .signoff .text { font-size: 12.5px; color: #166534; }
   .signoff .text strong { display: block; font-size: 13px; }
+  .sig-box { margin-top: 24px; }
+  .sig-box img { max-width: 260px; max-height: 90px; border-bottom: 1.5px solid #cbd5e1; display: block; }
+  .sig-box .sig-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; color: #94a3b8; margin-top: 6px; }
   .footer { margin-top: 28px; font-size: 10px; color: #cbd5e1; text-align: center; }
   @media print { body { padding: 0; } }
 </style></head><body>
@@ -1205,9 +1208,11 @@ function printWaiverConfirmation({ swimmerName, age, parentName, phone, accepted
     <div class="check">✓</div>
     <div class="text">
       <strong>Waiver electronically accepted</strong>
-      By ${escapeHtml(parentName || "the parent/guardian")} on ${escapeHtml(new Date(acceptedAt).toLocaleString("en-GB", { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }))}
+      By ${escapeHtml(signerName || parentName || "the parent/guardian")} on ${escapeHtml(new Date(acceptedAt).toLocaleString("en-GB", { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }))}
     </div>
   </div>
+
+  ${signature ? `<div class="sig-box"><img src="${signature}" /><div class="sig-label">Signature of ${escapeHtml(signerName || parentName || "parent/guardian")}</div></div>` : ""}
 
   <div class="footer">${escapeHtml(CONFIG.academyName)} — Registration Form</div>
 <script>window.onload = () => setTimeout(() => window.print(), 300);</script>
@@ -3724,6 +3729,88 @@ function SuccessScreen({ record, onHome }) {
    A parent fills this in once (name, age, phone, waiver), it sits as
    pending until an admin reviews and approves it, and only at that point
    does an actual swimmer record get created. */
+// A real drawn signature (mouse or touch), not just a checkbox — renders
+// onto a canvas and exposes it as a PNG data URI via onChange once
+// something's actually been drawn (never fires with a blank canvas).
+function SignaturePad({ onChange, height = 140 }) {
+  const canvasRef = useRef(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [hasDrawn, setHasDrawn] = useState(false);
+  const lastPoint = useRef(null);
+
+  const getPos = (e, canvas) => {
+    const rect = canvas.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    return { x: clientX - rect.left, y: clientY - rect.top };
+  };
+
+  const start = (e) => {
+    e.preventDefault();
+    const canvas = canvasRef.current;
+    const pos = getPos(e, canvas);
+    lastPoint.current = pos;
+    setIsDrawing(true);
+  };
+
+  const draw = (e) => {
+    if (!isDrawing) return;
+    e.preventDefault();
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    const pos = getPos(e, canvas);
+    ctx.strokeStyle = "#0f172a";
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(lastPoint.current.x, lastPoint.current.y);
+    ctx.lineTo(pos.x, pos.y);
+    ctx.stroke();
+    lastPoint.current = pos;
+    if (!hasDrawn) setHasDrawn(true);
+  };
+
+  const stop = () => {
+    if (!isDrawing) return;
+    setIsDrawing(false);
+    if (hasDrawn) onChange(canvasRef.current.toDataURL("image/png"));
+  };
+
+  const clear = () => {
+    const canvas = canvasRef.current;
+    canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+    setHasDrawn(false);
+    onChange(null);
+  };
+
+  return (
+    <div>
+      <canvas
+        ref={canvasRef}
+        width={500}
+        height={height}
+        className="w-full border border-slate-200 rounded-xl bg-white touch-none"
+        style={{ height }}
+        onMouseDown={start}
+        onMouseMove={draw}
+        onMouseUp={stop}
+        onMouseLeave={stop}
+        onTouchStart={start}
+        onTouchMove={draw}
+        onTouchEnd={stop}
+      />
+      <div className="flex items-center justify-between mt-1.5">
+        <span className="text-xs text-slate-400">{hasDrawn ? "Signed" : "Sign above with your finger or mouse"}</span>
+        {hasDrawn && (
+          <button type="button" onClick={clear} className="text-xs text-slate-400 hover:text-red-500 underline">
+            Clear & re-sign
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
   const { t, dir } = useLang();
   const [swimmerName, setSwimmerName] = useState("");
@@ -3731,7 +3818,8 @@ function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
   const [phone, setPhone] = useState("");
   const [parentName, setParentName] = useState("");
   const [waiverExpanded, setWaiverExpanded] = useState(false);
-  const [waiverAccepted, setWaiverAccepted] = useState(false);
+  const [waiverSignature, setWaiverSignature] = useState(null); // PNG data URI once signed
+  const [signerName, setSignerName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
@@ -3739,7 +3827,8 @@ function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
     setError("");
     if (!swimmerName.trim()) return setError("Please enter the swimmer\'s name");
     if (!/^01[0-2,5][0-9]{8}$/.test(phone.trim())) return setError("Please enter a valid phone number");
-    if (!waiverAccepted) return setError("Please read and accept the liability waiver to continue");
+    if (!signerName.trim()) return setError("Please type your name as the parent/guardian signing below");
+    if (!waiverSignature) return setError("Please sign the liability waiver to continue");
 
     setSubmitting(true);
     try {
@@ -3753,6 +3842,8 @@ function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
         status: "pending",
         waiverAccepted: true,
         waiverAcceptedAt: new Date().toISOString(),
+        waiverSignature,
+        waiverSignerName: signerName.trim(),
         createdAt: new Date().toISOString(),
       };
       await saveCollection(STORE_KEYS.registrations, [record, ...all]);
@@ -3818,15 +3909,16 @@ function NewSwimmerRegistrationView({ onBack, onSubmitted }) {
             {waiverExpanded ? t("hideWaiver") : t("readWaiver")} {t("waiverAndTerms")}
           </button>
           {waiverExpanded && <div className="text-xs text-slate-500 leading-relaxed mb-2 max-h-40 overflow-y-auto pr-1">{WAIVER_TEXT}</div>}
-          <label className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
+          <div className="mb-3">
+            <label className="text-xs text-slate-500 mb-1 block">Your name (parent/guardian signing below)</label>
             <input
-              type="checkbox"
-              checked={waiverAccepted}
-              onChange={(e) => setWaiverAccepted(e.target.checked)}
-              className="w-4 h-4 mt-0.5 shrink-0"
+              value={signerName}
+              onChange={(e) => setSignerName(e.target.value)}
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
             />
-            {t("agreeToWaiver")}
-          </label>
+          </div>
+          <label className="text-xs text-slate-500 mb-1 block">{t("agreeToWaiver")} — sign below</label>
+          <SignaturePad onChange={setWaiverSignature} />
         </div>
 
         {error && <div className="text-red-500 text-sm">{error}</div>}
@@ -4644,6 +4736,9 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           <select value={planId} onChange={(e) => setPlanId(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white">
             {PLANS.map((p) => <option key={p.id} value={p.id}>{p.name} — {p.price} EGP</option>)}
           </select>
+          <div className="text-xs text-slate-500 mt-1">
+            Price: <span className="font-semibold text-slate-800">{PLANS.find((p) => p.id === planId)?.price ?? 0} EGP</span>/month — updates automatically with the plan chosen above.
+          </div>
         </div>
         {!isNew && (
         <div className="sm:col-span-2">
@@ -6580,6 +6675,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     })();
   }, [authed, tab, loadCoreModels]);
 
+  const [apiKey, setApiKey] = useState(null); // null = not loaded yet, "" = no key generated
+  const [apiKeyLoading, setApiKeyLoading] = useState(false);
+  const [apiKeyRevealed, setApiKeyRevealed] = useState(false);
+
   const [currentAdminPass, setCurrentAdminPass] = useState("");
   const [newAdminPass, setNewAdminPass] = useState("");
   const [confirmAdminPass, setConfirmAdminPass] = useState("");
@@ -6921,6 +7020,44 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [showPricesModal, setShowPricesModal] = useState(false);
   const [showAchievementsModal, setShowAchievementsModal] = useState(false);
   const [settingsSubTab, setSettingsSubTab] = useState("general");
+
+  useEffect(() => {
+    if (settingsSubTab !== "api" || role !== "admin") return;
+    (async () => {
+      const { data } = await supabase.from("academies").select("public_api_key").eq("id", window.__academy?.id).maybeSingle();
+      setApiKey(data?.public_api_key || "");
+    })();
+  }, [settingsSubTab, role]);
+
+  const generateApiKey = async () => {
+    setApiKeyLoading(true);
+    try {
+      const newKey = `aqc_${Array.from(crypto.getRandomValues(new Uint8Array(24))).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+      const { error } = await supabase.from("academies").update({ public_api_key: newKey, public_api_key_created_at: new Date().toISOString() }).eq("id", window.__academy?.id);
+      if (error) throw error;
+      setApiKey(newKey);
+      setApiKeyRevealed(true);
+      logActivity(accountName, role, "Generated API key", "");
+    } catch (e) {
+      // silent — the UI shows the same key it had before, nothing changed
+    } finally {
+      setApiKeyLoading(false);
+    }
+  };
+
+  const revokeApiKey = async () => {
+    setApiKeyLoading(true);
+    try {
+      await supabase.from("academies").update({ public_api_key: null, public_api_key_created_at: null }).eq("id", window.__academy?.id);
+      setApiKey("");
+      logActivity(accountName, role, "Revoked API key", "");
+    } catch (e) {
+      // silent
+    } finally {
+      setApiKeyLoading(false);
+    }
+  };
+
   const [showMoreFilters, setShowMoreFilters] = useState(false);
   const [coachPerfMonth, setCoachPerfMonth] = useState("");
   const [coachPerfCoachFilter, setCoachPerfCoachFilter] = useState("all");
@@ -7148,6 +7285,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         skills: {},
         waiverAccepted: true,
         waiverAcceptedAt: reg.waiverAcceptedAt,
+        waiverSignature: reg.waiverSignature || null,
+        waiverSignerName: reg.waiverSignerName || "",
         notes: "",
         createdAt: new Date().toISOString(),
       };
@@ -9925,7 +10064,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   };
 
   const deleteCoach = (coach) => {
-    const inUse = swimmers.some((s) => s.coachId === coach.id);
+    // Checks every place a coach reference can actually live — not just
+    // the top-level coachId — so the warning (and the cleanup below) both
+    // cover a coach who's only assigned as the second-session coach, or
+    // only inside a specific month's monthlySchedules entry.
+    const coachIsReferencedOn = (s) =>
+      s.coachId === coach.id ||
+      s.coachId2 === coach.id ||
+      Object.values(s.monthlySchedules || {}).some((ms) => ms.coachId === coach.id || ms.coachId2 === coach.id) ||
+      s.nextSchedule?.coachId === coach.id ||
+      s.nextSchedule?.coachId2 === coach.id;
+    const inUse = swimmers.some(coachIsReferencedOn);
     setConfirmAction({
       message: inUse
         ? `${coach.name} is assigned to swimmers already. Remove anyway? Their coach will be cleared.`
@@ -9945,7 +10094,38 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           logActivity(accountName, role, "Deleted coach", coach.name);
           setCoaches(nextCoaches);
           if (inUse) {
-            const nextSwimmers = swimmers.map((s) => (s.coachId === coach.id ? { ...s, coachId: null } : s));
+            // Clears the deleted coach out of every place they could be
+            // referenced — top-level fields, the second-session slot,
+            // every monthlySchedules entry (past, current, or a pending
+            // future booking), and nextSchedule — not just the one field
+            // checked before, which left "ghost" bookings for a coach
+            // that no longer exists.
+            const clearCoachFrom = (s) => {
+              if (!coachIsReferencedOn(s)) return s;
+              const next = { ...s };
+              if (next.coachId === coach.id) next.coachId = null;
+              if (next.coachId2 === coach.id) next.coachId2 = null;
+              if (next.monthlySchedules) {
+                const nextMonthly = {};
+                Object.entries(next.monthlySchedules).forEach(([month, ms]) => {
+                  nextMonthly[month] = {
+                    ...ms,
+                    coachId: ms.coachId === coach.id ? null : ms.coachId,
+                    coachId2: ms.coachId2 === coach.id ? null : ms.coachId2,
+                  };
+                });
+                next.monthlySchedules = nextMonthly;
+              }
+              if (next.nextSchedule) {
+                next.nextSchedule = {
+                  ...next.nextSchedule,
+                  coachId: next.nextSchedule.coachId === coach.id ? null : next.nextSchedule.coachId,
+                  coachId2: next.nextSchedule.coachId2 === coach.id ? null : next.nextSchedule.coachId2,
+                };
+              }
+              return next;
+            };
+            const nextSwimmers = swimmers.map(clearCoachFrom);
             setSwimmers(nextSwimmers);
             loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
             await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
@@ -12077,7 +12257,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     </div>
                   )}
 
-                  {s.waiverAccepted && (
+                  {s.waiverAccepted ? (
                     <div className="mt-4 pt-4 border-t border-slate-100">
                       <div className="flex items-center justify-between">
                         <div className="text-xs font-semibold text-slate-500">Registration & waiver</div>
@@ -12089,6 +12269,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               parentName: s.parentName,
                               phone: s.phone,
                               acceptedAt: s.waiverAcceptedAt,
+                              signature: s.waiverSignature,
+                              signerName: s.waiverSignerName,
                             })
                           }
                           className="text-xs text-sky-900 hover:underline font-medium"
@@ -12098,6 +12280,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       </div>
                       <div className="text-xs text-slate-400 mt-1">
                         Accepted {new Date(s.waiverAcceptedAt).toLocaleDateString("en-GB")}
+                        {s.waiverSignerName ? ` · signed by ${s.waiverSignerName}` : ""}
+                      </div>
+                      {s.waiverSignature && (
+                        <img src={s.waiverSignature} alt="Signature" className="h-10 mt-2 border-b border-slate-200" />
+                      )}
+                    </div>
+                  ) : (
+                    <div className="mt-4 pt-4 border-t border-slate-100">
+                      <div className="text-xs px-2.5 py-1.5 rounded-lg bg-amber-50 text-amber-700 inline-block">
+                        ⚠️ No signed waiver on file for this swimmer
                       </div>
                     </div>
                   )}
@@ -14362,6 +14554,28 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         const medals = ["🥇", "🥈", "🥉"];
         const coachInsights = coachPerfCoachFilter === "all" ? generateCoachInsights(allCoachStats) : [];
 
+        // Same underlying numbers as the cards below, as a real
+        // spreadsheet — one coach per row, for whoever wants to sort,
+        // filter, or compare coaches side by side outside the app.
+        const exportCoachPerformanceExcel = async () => {
+          const XLSX = await loadXLSX();
+          const wb = XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+            ["Coach", "Active swimmers", "Attendance rate %", "Attendance trend", "Own class attendance %", "Skills coverage %", "Retention %", "Overall score"],
+            ...allCoachStats.map((c) => [
+              c.coach.name,
+              c.activeCount,
+              c.attendanceRate ?? "",
+              c.attendanceTrend ?? "",
+              c.ownAttendanceRate ?? "",
+              c.skillsCoverage ?? "",
+              c.retention ?? "",
+              c.overallScore ?? "",
+            ]),
+          ]), "Coach performance");
+          XLSX.writeFile(wb, `coach-performance-${selectedMonthKey}.xlsx`);
+        };
+
         return (
           <div>
             <div className="flex flex-wrap items-center gap-3 mb-6">
@@ -14384,6 +14598,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <option key={m.key} value={m.key}>{m.label}</option>
                 ))}
               </select>
+              <button
+                onClick={exportCoachPerformanceExcel}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200 ml-auto"
+              >
+                <FileDown className="w-4 h-4" /> Export to Excel
+              </button>
             </div>
 
             {coachPerfCoachFilter === "all" && (
@@ -14546,31 +14766,43 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         // (sessionType + level combination maps to a PLANS entry the same
         // way subscribing does), counting only those paid for the month
         // being viewed here.
+        // Uses each swimmer's own saved planPrice — what they were
+        // actually charged — rather than re-deriving it from PLANS'
+        // current price. Re-deriving would mean any past month's revenue
+        // silently changes retroactively the next time a plan's price is
+        // edited in Settings, even though nothing about that historical
+        // payment changed.
         const revenueByPlan = {};
         activeSwimmersNow.forEach((s) => {
           if (!(s.paidMonths || []).includes(monthKeyNow)) return;
           const planId = inferPlanId(s) || "other";
           const plan = PLANS.find((p) => p.id === planId);
-          const label = plan?.name || "Other";
-          revenueByPlan[label] = (revenueByPlan[label] || 0) + (Number(plan?.price) || 0);
+          const label = plan?.name || s.planName || "Other";
+          const price = Number(s.planPrice) || Number(plan?.price) || 0;
+          revenueByPlan[label] = (revenueByPlan[label] || 0) + price;
         });
 
         const revenueByBranch = {};
         activeSwimmersNow.forEach((s) => {
           if (!(s.paidMonths || []).includes(monthKeyNow)) return;
-          const planId = inferPlanId(s);
-          const plan = PLANS.find((p) => p.id === planId);
+          const plan = PLANS.find((p) => p.id === inferPlanId(s));
+          const price = Number(s.planPrice) || Number(plan?.price) || 0;
           const label = BRANCHES.find((b) => b.id === s.branch)?.name.split(" (")[0] || "No branch";
-          revenueByBranch[label] = (revenueByBranch[label] || 0) + (Number(plan?.price) || 0);
+          revenueByBranch[label] = (revenueByBranch[label] || 0) + price;
         });
 
         const revenueByCoach = {};
         activeSwimmersNow.forEach((s) => {
-          if (!(s.paidMonths || []).includes(monthKeyNow) || !s.coachId) return;
-          const planId = inferPlanId(s);
-          const plan = PLANS.find((p) => p.id === planId);
-          const label = coaches.find((c) => c.id === s.coachId)?.name || "Unassigned";
-          revenueByCoach[label] = (revenueByCoach[label] || 0) + (Number(plan?.price) || 0);
+          // Same month-aware coach resolver used everywhere else — a
+          // swimmer's coach for the month being viewed can live in
+          // monthlySchedules rather than the top-level coachId.
+          const ms = getMonthlySchedule(s, monthKeyNow);
+          const coachIdNow = ms ? ms.coachId : s.coachId;
+          if (!(s.paidMonths || []).includes(monthKeyNow) || !coachIdNow) return;
+          const plan = PLANS.find((p) => p.id === inferPlanId(s));
+          const price = Number(s.planPrice) || Number(plan?.price) || 0;
+          const label = coaches.find((c) => c.id === coachIdNow)?.name || "Unassigned";
+          revenueByCoach[label] = (revenueByCoach[label] || 0) + price;
         });
 
         const swimmersByLevel = {};
@@ -14615,8 +14847,71 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         const maxCoachRevenue = Math.max(1, ...Object.values(revenueByCoach));
         const maxLevelCount = Math.max(1, ...Object.values(swimmersByLevel));
 
+        // Every section on this page as its own sheet in one workbook —
+        // same underlying numbers shown above, just handed over as a real
+        // spreadsheet for pivoting, filtering, or an accountant to work
+        // with directly, rather than only a formatted page to read.
+        const exportInsightsExcel = async () => {
+          const XLSX = await loadXLSX();
+          const wb = XLSX.utils.book_new();
+
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+            ["Revenue by plan", ""], ...Object.entries(revenueByPlan).map(([k, v]) => [k, v]),
+          ]), "Revenue by plan");
+
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+            ["Revenue by branch", ""], ...Object.entries(revenueByBranch).map(([k, v]) => [k, v]),
+          ]), "Revenue by branch");
+
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+            ["Revenue by coach", ""], ...Object.entries(revenueByCoach).map(([k, v]) => [k, v]),
+          ]), "Revenue by coach");
+
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+            ["Class", "Enrolled", "Capacity"],
+            ...occupancy.map((o) => [o.cls.name || "", o.filled, o.capacity]),
+          ]), "Class occupancy");
+
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+            ["Family", "Outstanding balance (EGP)", "Overdue (EGP)"],
+            ...familyBalances.map((r) => [r.family.name, r.summary.balance, r.summary.overdue]),
+          ]), "Outstanding balances");
+
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+            ["Swimmer", "Risk %", "Top reason"],
+            ...churnRisks.map((r) => [r.swimmer.name, r.score, r.reasons[0] || ""]),
+          ]), "At risk of leaving");
+
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+            ["Month", "Actual / Forecast revenue (EGP)"],
+            ...revenueHistory6mo.map((m) => [m.label, m.total]),
+            ...revenueForecast.forecasts.map((total, i) => [`${forecastMonths[i]} (forecast)`, total]),
+          ]), "Revenue forecast");
+
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+            ["Family", "Swimmers", "Months with academy", "Retention score"],
+            ...familyRetentionScores.map((r) => [r.family.name, r.swimmerCount, r.monthsWithAcademy, r.score]),
+          ]), "Parent retention");
+
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+            ["Type", "Message"],
+            ...progressInsights.map((i) => [i.type, i.text]),
+          ]), "Swimmer progress");
+
+          XLSX.writeFile(wb, `analytics-insights-${monthKeyNow}.xlsx`);
+        };
+
         return (
           <div>
+            <div className="flex items-center justify-between mb-2">
+              <div />
+              <button
+                onClick={exportInsightsExcel}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200"
+              >
+                <FileDown className="w-4 h-4" /> Export to Excel
+              </button>
+            </div>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6 pb-6 border-b border-slate-200">
               <div>
                 <div className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-1.5">{t("activeSwimmers")}</div>
@@ -16291,6 +16586,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               { id: "whatsapp", label: "WhatsApp reminders" },
               { id: "telegram", label: "Telegram alerts" },
               { id: "backup", label: "Backup" },
+              ...(role === "admin" ? [{ id: "api", label: "API access" }] : []),
               ...(role === "admin" ? [{ id: "password", label: "Password" }] : []),
             ].map((t) => (
               <button
@@ -17290,6 +17586,82 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <RefreshCw className={`w-4 h-4 ${indexRebuilding ? "animate-spin" : ""}`} /> {indexRebuilding ? "Rebuilding..." : "Rebuild now"}
               </button>
               {indexRebuildResult && <p className="text-xs text-slate-400 mt-2">{indexRebuildResult}</p>}
+            </div>
+          </div>
+          )}
+
+          {settingsSubTab === "api" && (
+          <div>
+            <h3 className="font-bold text-slate-900 mb-1">API access</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              A key for connecting your own tools or scripts to your academy's data — a personal spreadsheet, a calendar sync, anything you build or hire someone to build. Read-only, and only for the two endpoints listed below. Generating a new key immediately disables the old one everywhere it's used.
+            </p>
+            <div className="bg-slate-50 rounded-2xl p-5 mb-4">
+              {apiKey === null ? (
+                <p className="text-sm text-slate-400">Loading...</p>
+              ) : apiKey ? (
+                <>
+                  <label className="text-xs text-slate-500 mb-1 block">Your API key</label>
+                  <div className="flex gap-2 mb-3">
+                    <input
+                      readOnly
+                      value={apiKeyRevealed ? apiKey : "•".repeat(24)}
+                      className="flex-1 border border-slate-200 rounded-lg py-2.5 px-3 font-mono text-sm bg-white"
+                    />
+                    <button
+                      onClick={() => setApiKeyRevealed((v) => !v)}
+                      className="px-3 py-2 rounded-lg bg-white border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-100"
+                    >
+                      {apiKeyRevealed ? "Hide" : "Show"}
+                    </button>
+                    <button
+                      onClick={() => navigator.clipboard?.writeText(apiKey)}
+                      className="px-3 py-2 rounded-lg bg-white border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-100"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={generateApiKey}
+                      disabled={apiKeyLoading}
+                      className="px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-700 disabled:opacity-60"
+                    >
+                      {apiKeyLoading ? "Working..." : "Regenerate"}
+                    </button>
+                    <button
+                      onClick={revokeApiKey}
+                      disabled={apiKeyLoading}
+                      className="px-4 py-2 rounded-lg bg-red-50 text-red-600 text-sm font-semibold hover:bg-red-100 disabled:opacity-60"
+                    >
+                      Revoke
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <button
+                  onClick={generateApiKey}
+                  disabled={apiKeyLoading}
+                  className="px-5 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
+                >
+                  {apiKeyLoading ? "Generating..." : "Generate API key"}
+                </button>
+              )}
+            </div>
+
+            <h4 className="font-semibold text-slate-800 text-sm mb-2">Available endpoints</h4>
+            <div className="space-y-2 text-sm">
+              <div className="bg-slate-50 rounded-xl p-3">
+                <code className="font-mono text-xs text-sky-800">GET https://{window.location.hostname}/api/v1/swimmers</code>
+                <p className="text-xs text-slate-400 mt-1">Every swimmer's name, level, schedule, coach, and this month's payment status.</p>
+              </div>
+              <div className="bg-slate-50 rounded-xl p-3">
+                <code className="font-mono text-xs text-sky-800">GET https://{window.location.hostname}/api/v1/schedule</code>
+                <p className="text-xs text-slate-400 mt-1">Every coach's booked slots for the current month.</p>
+              </div>
+              <p className="text-xs text-slate-400 pt-1">
+                Send your key as a header: <code className="font-mono">Authorization: Bearer YOUR_KEY</code> (or <code className="font-mono">x-api-key: YOUR_KEY</code>).
+              </p>
             </div>
           </div>
           )}
