@@ -2069,22 +2069,11 @@ function monthLabel(key) {
 
 /* Which month a NEW payment coming in right now should count for. Once
    the admin's "next month opens on" date has arrived, everyone paying is
-   *assumed* to be pre-paying for NEXT month (this month is basically
-   over) — so default to that instead of always assuming "this month".
-   BUT that assumption breaks for a swimmer who is still behind on the
-   CURRENT month when they finally pay, after the window already opened:
-   defaulting them straight to next month silently marked their overdue
-   current-month balance as settled for the wrong month — the swimmer
-   still hadn't really paid for the month they were behind on, yet the
-   moment the calendar rolled over, isPaidThisMonth() found NEXT month
-   already in their paidMonths and read them as paid. That's why this bug
-   was invisible in August's data and only showed up the moment September
-   started. When the swimmer is known, check their real paid status first;
-   only fall back to the "next month opens" heuristic when we don't know
-   yet whether they still owe the current month. Still just a default:
-   wherever this is used, the admin can override it. */
-function defaultPaymentMonth(bookingOpenDate, swimmer) {
-  if (swimmer && !(swimmer.paidMonths || []).includes(monthKey())) return monthKey();
+   pre-paying for NEXT month (this month is basically over) — so default
+   to that instead of always assuming "this month", which was silently
+   marking advance payments against the wrong month. Still just a
+   default: wherever this is used, the admin can override it. */
+function defaultPaymentMonth(bookingOpenDate) {
   if (bookingOpenDate && todayISO() >= bookingOpenDate) return nextMonthKey();
   return monthKey();
 }
@@ -2129,10 +2118,15 @@ function unfreezeSwimmer(swimmer) {
   return { ...swimmer, frozenUntil: null };
 }
 
-/* Once the real calendar reaches whatever month a swimmer's nextSchedule
-   was pre-booked for, that becomes their live schedule — so an advance
-   booking made while last month was still running switches over
-   automatically without anyone having to remember to do it by hand. */
+/* Once a swimmer's subscription month rolls over without being renewed,
+   their day/time slot is released (so it doesn't sit blocked forever) —
+   name, phone and level are kept, only the schedule is cleared.
+   A frozen swimmer is exempt — their spot stays reserved while frozen. */
+// Once the real calendar reaches whatever month a swimmer's nextSchedule
+// was pre-booked for, that becomes their live schedule — this runs
+// alongside clearedIfUnpaid, once per calendar month, so an advance
+// booking made while last month was still running switches over
+// automatically without anyone having to remember to do it by hand.
 function promotedIfDue(swimmer, currentMonthKey) {
   const monthly = swimmer.monthlySchedules?.[currentMonthKey];
   const source = monthly || (swimmer.nextSchedule?.scheduleMonth === currentMonthKey ? swimmer.nextSchedule : null);
@@ -2149,23 +2143,11 @@ function promotedIfDue(swimmer, currentMonthKey) {
   };
 }
 
-/* Payment status must never delete a swimmer's registration. This used
-   to clear day/time/coachId/scheduleMonth for anyone unpaid once their
-   month rolled over — "freeing the slot" — but that also silently
-   removed them from everything that reads day/time: the Dashboard's
-   Active/Unpaid counts, Coach Performance, and the class Schedule. An
-   unpaid swimmer would just vanish instead of showing up as "unpaid",
-   which is what actually happened the moment September started (see
-   loadSwimmers' once-per-month reset job below, which runs this on
-   every swimmer the first time anyone opens the app in a new month).
-   Kept as a real function (not deleted) so existing callers keep
-   working — it's now a no-op: registration and payment status are
-   independent, so being unpaid no longer touches the schedule or coach
-   at all. If freeing up a slot from a swimmer who's genuinely left is
-   ever needed, that should be an explicit admin action, not something
-   that happens silently based on payment status. */
 function clearedIfUnpaid(swimmer) {
-  return swimmer;
+  if (isPaidThisMonth(swimmer)) return swimmer;
+  if (isFrozen(swimmer)) return swimmer;
+  if (!swimmer.day && !swimmer.time) return swimmer;
+  return { ...swimmer, day: "", time: "", coachId: null, scheduleMonth: "" };
 }
 
 /* ---------- WhatsApp click-to-chat ----------
@@ -3158,7 +3140,7 @@ function applyAttendanceStatus(swimmer, date, status) {
 // swimmer had a different coach isn't separated out, since the app
 // doesn't record who the coach was at the time.
 function computeCoachPerformance(swimmers = [], coachId, feedback = []) {
-  const mine = swimmers.filter((s) => s.coachId === coachId || s.coachId2 === coachId);
+  const mine = swimmers.filter((s) => s.coachId === coachId);
   const mineIds = new Set(mine.map((s) => String(s.id)));
   let present = 0, absent = 0;
   let masteredTotal = 0, skillsTotal = 0;
@@ -5293,45 +5275,22 @@ async function syncSwimmerToCoreEngine(swimmer) {
     let cls = classes.find((c) => coreClassKey(c) === key);
     let classesChanged = false;
     if (!cls) {
-      // coreClassKey includes coachId, so a swimmer whose coach was just
-      // assigned/changed won't match the class created back when they had
-      // no coach (or a different one). Before creating a new class, check
-      // for an existing one in the same branch/level/day/time/sessionType
-      // slot and just update its coach — otherwise the old class is left
-      // behind forever with a stale/empty coachId, still showing up in the
-      // schedule as a class with "No coach".
-      const slotKey = [swimmer.branch || "", swimmer.level || "", swimmer.day || "", swimmer.time || "", swimmer.sessionType || "group"].join("|");
-      const sameSlot = classes.find(
-        (c) => [c.branch || "", c.level || "", c.day || "", c.time || "", c.sessionType || "group"].join("|") === slotKey
-      );
-      if (sameSlot) {
-        cls = sameSlot;
-        if (cls.coachId !== (swimmer.coachId || null)) {
-          cls.coachId = swimmer.coachId || null;
-          classesChanged = true;
-        }
-        if (cls.active === false) {
-          cls.active = true;
-          classesChanged = true;
-        }
-      } else {
-        cls = {
-          id: `cls-${genId()}`,
-          name: `${swimmer.level || "Class"} · ${swimmer.day} · ${swimmer.time}`,
-          branch: swimmer.branch || BRANCHES[0]?.id || "",
-          level: swimmer.level || "",
-          day: swimmer.day,
-          time: swimmer.time,
-          coachId: swimmer.coachId || null,
-          sessionType: swimmer.sessionType || "group",
-          capacity: Number(swimmer.sessionType === "private" ? 1 : swimmer.level === "Baby" ? 1 : 3),
-          active: true,
-          createdAt: new Date().toISOString(),
-          migratedFrom: "auto-sync",
-        };
-        classes.push(cls);
-        classesChanged = true;
-      }
+      cls = {
+        id: `cls-${genId()}`,
+        name: `${swimmer.level || "Class"} · ${swimmer.day} · ${swimmer.time}`,
+        branch: swimmer.branch || BRANCHES[0]?.id || "",
+        level: swimmer.level || "",
+        day: swimmer.day,
+        time: swimmer.time,
+        coachId: swimmer.coachId || null,
+        sessionType: swimmer.sessionType || "group",
+        capacity: Number(swimmer.sessionType === "private" ? 1 : swimmer.level === "Baby" ? 1 : 3),
+        active: true,
+        createdAt: new Date().toISOString(),
+        migratedFrom: "auto-sync",
+      };
+      classes.push(cls);
+      classesChanged = true;
     }
 
     // A swimmer only ever holds one RECURRING enrollment at a time — if
@@ -9190,8 +9149,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   }, [authed, requests, photos]);
 
   const setRequestStatus = async (record, status, receiptNo, targetMonth) => {
-    const linkedSwimmerGuess = record.swimmerId ? swimmersById.get(record.swimmerId) : null;
-    const paidMonth = status === "confirmed" ? targetMonth || defaultPaymentMonth(bookingOpenDateInput, linkedSwimmerGuess) : record.paidMonth;
+    const paidMonth = status === "confirmed" ? targetMonth || defaultPaymentMonth(bookingOpenDateInput) : record.paidMonth;
     const updated = {
       ...record,
       status,
@@ -9207,34 +9165,24 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
 
     // Auto-link: confirming a payment marks the matching swimmer(s) as paid
-    // for the chosen month — a manually chosen targetMonth always wins, but
-    // the default is now worked out per swimmer (see defaultPaymentMonth),
-    // not once up front, so a family with one member still behind on the
-    // current month and another already caught up each get credited to the
-    // month they actually owe, even after the "next month opens" date.
+    // for the chosen month — defaults to "this month", but once next
+    // month's booking window is open it defaults to next month instead,
+    // since by then everyone paying is really pre-paying ahead. The admin
+    // can always override which month from the confirm dialog.
     // A swimmer with no day/time yet is left unpaid here — activate them
     // from the Swimmers tab instead, which asks for a schedule first.
     if (status === "confirmed") {
+      const key = targetMonth || defaultPaymentMonth(bookingOpenDateInput);
       try {
         const all = await fetchAllSwimmers();
-        // A blank record.phone must never be used to match swimmers — every
-        // swimmer with no phone on file would match too, silently marking
-        // unrelated swimmers "paid" off a single confirmation with no phone
-        // attached. Only match by phone when the request actually has one
-        // (mirrors the guard already used elsewhere, e.g. `r.phone && r.phone
-        // === s.phone`).
         const matches = record.swimmerId
           ? all.filter((s) => s.id === record.swimmerId)
-          : record.phone
-          ? all.filter((s) => s.phone === record.phone)
-          : [];
-        const keyFor = (s) => targetMonth || defaultPaymentMonth(bookingOpenDateInput, s);
-        const readyToMark = matches.filter((s) => s.day && s.time && !(s.paidMonths || []).includes(keyFor(s)));
-        const needsSchedule = matches.filter((s) => (!s.day || !s.time) && !(s.paidMonths || []).includes(keyFor(s)));
+          : all.filter((s) => s.phone === record.phone);
+        const readyToMark = matches.filter((s) => s.day && s.time && !(s.paidMonths || []).includes(key));
+        const needsSchedule = matches.filter((s) => (!s.day || !s.time) && !(s.paidMonths || []).includes(key));
         if (readyToMark.length > 0) {
           const next = all.map((s) => {
             if (!readyToMark.some((m) => m.id === s.id)) return s;
-            const key = keyFor(s);
             const plan = PLANS.find((p) => p.id === inferPlanId(s)) || { id: inferPlanId(s), name: s.planName || "Plan", price: Number(s.planPrice) || Number(record.price) || 0 };
             const amount = Number(record.price) || Number(plan.price) || 0;
             const payment = { ...record, status: "confirmed", method: record.method || "instapay", receiptNo: receiptNo || record.receiptNo || "", paidMonth: key, price: amount };
@@ -10773,24 +10721,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         const weekAgo = new Date();
         weekAgo.setDate(weekAgo.getDate() - 7);
 
-        const activeNow = swimmers.filter((s) => s.day && s.time);
-
-        // A swimmer can be behind on payment two different ways: paidMonths
-        // never got marked (the plain check below), or they have a real
-        // open order/charge sitting in the Family & Billing ledger that
-        // paidMonths was never synced to — the two payment systems aren't
-        // auto-reconciled (see syncSwimmerToCoreEngine). Catching only the
-        // first meant a swimmer with a genuine unpaid order could still
-        // read as "paid" here — and if they don't have day/time set yet,
-        // activeNow above would drop them from the count entirely too.
-        const familyIdBySwimmerId = new Map();
-        coreFamilies.forEach((f) => (f.swimmerIds || []).forEach((sid) => familyIdBySwimmerId.set(String(sid), f.id)));
-        const familiesWithBalance = new Set(
-          coreFamilies.filter((f) => getFamilyLedgerSummary(coreLedger, f.id).balance > 0).map((f) => f.id)
-        );
-        const hasOpenOrder = (s) => familiesWithBalance.has(familyIdBySwimmerId.get(String(s.id)));
-        const unpaidSwimmers = swimmers.filter((s) => (s.day && s.time && !isPaidThisMonth(s)) || hasOpenOrder(s));
-        const unpaidCount = unpaidSwimmers.length;
+        // Same month-aware resolver as everywhere else that decides "is
+        // this swimmer actually scheduled" — a swimmer booked ahead into
+        // a future month, whose top-level day/time never got touched
+        // since (that's by design — see saveSwimmer), still needs to
+        // count as active once that month becomes the current one.
+        // Checking only the raw top-level fields silently dropped exactly
+        // those swimmers from "unpaid" here.
+        const activeNow = swimmers.filter((s) => !!getMonthlySchedule(s, monthKey()));
+        const unpaidCount = activeNow.filter((s) => !isPaidThisMonth(s)).length;
         const newThisWeek = swimmers.filter((s) => s.createdAt && new Date(s.createdAt) >= weekAgo).length;
 
         const revenueThisMonth = requests
@@ -11067,12 +11006,37 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       })()}
 
       {tab === "coachassign" && canAssignCoaches && isTabEnabled("coachassign") && (() => {
-        const needsCoach = swimmers.filter((s) => s.day && s.time && !s.coachId);
-        const alreadyAssigned = swimmers.filter((s) => s.day && s.time && s.coachId);
+        // Same month-aware resolver used everywhere else — a swimmer
+        // booked for this month via monthlySchedules, whose top-level
+        // day/time was never touched (by design), still needs to show
+        // up here as scheduled and needing a coach check.
+        const needsCoach = swimmers.filter((s) => {
+          const ms = getMonthlySchedule(s, monthKey());
+          return ms && !ms.coachId;
+        });
+        const alreadyAssigned = swimmers.filter((s) => {
+          const ms = getMonthlySchedule(s, monthKey());
+          return ms && !!ms.coachId;
+        });
 
         const assignCoach = async (swimmer, newCoachId) => {
           try {
-            const updated = await updateSwimmerById(swimmer.id, (s) => ({ ...s, coachId: newCoachId || null }));
+            // Write to whichever place is actually authoritative for
+            // THIS month — a swimmer with a monthlySchedules[thisMonth]
+            // entry has that take priority over top-level fields (see
+            // getMonthlySchedule), so a plain top-level-only write here
+            // would silently do nothing for exactly those swimmers.
+            const updated = await updateSwimmerById(swimmer.id, (s) => {
+              const thisMonth = monthKey();
+              if (s.monthlySchedules?.[thisMonth]) {
+                return {
+                  ...s,
+                  coachId: newCoachId || null,
+                  monthlySchedules: { ...s.monthlySchedules, [thisMonth]: { ...s.monthlySchedules[thisMonth], coachId: newCoachId || null } },
+                };
+              }
+              return { ...s, coachId: newCoachId || null };
+            });
             setSwimmers((prev) => prev.map((s) => (s.id === swimmer.id ? updated : s)));
             logActivity(accountName, role, "Assigned coach", `${swimmer.name} → ${coaches.find((c) => c.id === newCoachId)?.name || "unassigned"}`);
           } catch (e) {
@@ -11082,7 +11046,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
         const CoachPicker = ({ s }) => (
           <select
-            value={s.coachId || ""}
+            value={getMonthlySchedule(s, monthKey())?.coachId || ""}
             onChange={(e) => assignCoach(s, e.target.value)}
             className="border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-sky-900 bg-white"
           >
@@ -11321,7 +11285,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         onClick={() => {
                           setReceiptModal(r);
                           setReceiptNoInput(nextReceiptNo());
-                          setReceiptTargetMonth(defaultPaymentMonth(bookingOpenDateInput, r.swimmerId ? swimmersById.get(r.swimmerId) : null));
+                          setReceiptTargetMonth(defaultPaymentMonth(bookingOpenDateInput));
                           setReceiptError("");
                         }}
                         className="flex-1 py-2 rounded-lg bg-sky-950 text-white text-sm font-medium hover:bg-sky-900 flex items-center justify-center gap-1"
@@ -13640,8 +13604,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         // active last month, how many are still with them (not just still
         // at the academy under a different coach) this month.
         const coachPerformance = coaches.map((c) => {
-          const mySwimmers = swimmers.filter((s) => s.coachId === c.id || s.coachId2 === c.id);
-          const myActiveSwimmers = mySwimmers.filter((s) => s.day && s.time);
+          // Same month-aware resolver used everywhere else — a swimmer's
+          // CURRENT coach for the period being viewed can live in
+          // monthlySchedules rather than the top-level coachId (e.g. they
+          // were booked ahead into this month before it arrived), so
+          // checking only the raw top-level fields under- or
+          // mis-attributed swimmers to the wrong coach here.
+          const myActiveSwimmers = swimmers.filter((s) => {
+            const ms = getMonthlySchedule(s, monthKey());
+            return ms && (ms.coachId === c.id || ms.coachId2 === c.id);
+          });
+          const mySwimmers = swimmers.filter((s) => s.coachId === c.id || s.coachId2 === c.id || myActiveSwimmers.includes(s));
 
           const attendanceRateForRange = (rStartISO, rEndISO) => {
             let presentCount = 0;
@@ -13667,9 +13640,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
           const myActiveLastMonth = mySwimmers.filter((s) => {
             const sched = (s.scheduleHistory || []).find((h) => (h.date || "").slice(0, 7) === prevMonthKeyForRetention && h.coachId === c.id);
-            return !!sched || (s.coachId === c.id && s.day && s.time && (s.createdAt || "").slice(0, 7) <= prevMonthKeyForRetention);
+            const msLastMonth = getMonthlySchedule(s, prevMonthKeyForRetention);
+            return !!sched || (msLastMonth?.coachId === c.id && (s.createdAt || "").slice(0, 7) <= prevMonthKeyForRetention);
           });
-          const myStillWithMe = myActiveLastMonth.filter((s) => s.coachId === c.id && s.day && s.time);
+          const myStillWithMe = myActiveLastMonth.filter((s) => myActiveSwimmers.includes(s));
           const coachRetention = myActiveLastMonth.length ? Math.round((myStillWithMe.length / myActiveLastMonth.length) * 100) : null;
 
           return {
@@ -13713,10 +13687,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
         // Current (always "now", not period-scoped) snapshot — level mix & who's paid this month
         const mKey = monthKey();
-        // Only swimmers who actually have a day+time set count as
-        // "registered this month" — someone with no active schedule
-        // shouldn't inflate the total or show up as "not paid".
-        const activeSwimmers = swimmers.filter((s) => s.day && s.time);
+        // Same month-aware resolver as Dashboard's own unpaid count — a
+        // swimmer booked ahead into this month, whose top-level day/time
+        // never changed since (by design), still needs to count as
+        // "registered this month" once that month arrives.
+        const activeSwimmers = swimmers.filter((s) => !!getMonthlySchedule(s, mKey));
         const paidCount = activeSwimmers.filter((s) => isPaidThisMonth(s)).length;
         const notPaidCount = activeSwimmers.length - paidCount;
         const levelCounts = {};
@@ -14283,22 +14258,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         const prevMonthEndISO = toISODate(prevMonthEndDate);
 
         const allCoachStats = coaches.map((c) => {
-          // Which swimmers count toward this coach for the selected month:
-          // read from that month's own schedule (monthlySchedules[key],
-          // falling back to live fields only for the current live month —
-          // see getMonthlySchedule) instead of the swimmer's current
-          // coachId/coachId2. Reading the live fields directly meant
-          // picking a past month here still reported today's assignment —
-          // a swimmer showed up under whichever coach has them NOW, not
-          // whoever actually had them during the month being reported on.
-          const mySwimmers = swimmers.filter((s) => {
-            const ms = getMonthlySchedule(s, selectedMonthKey);
-            return !!ms && (ms.coachId === c.id || ms.coachId2 === c.id);
+          // Same month-aware resolver used everywhere else — a swimmer's
+          // CURRENT coach can live in monthlySchedules rather than the
+          // top-level coachId (booked ahead into this month before it
+          // arrived), so checking only the raw top-level fields
+          // mis-attributed swimmers to the wrong coach, or missed them
+          // entirely, in this exact KPI.
+          const myActiveSwimmers = swimmers.filter((s) => {
+            const ms = getMonthlySchedule(s, monthKey());
+            return ms && (ms.coachId === c.id || ms.coachId2 === c.id);
           });
-          const myActiveSwimmers = mySwimmers.filter((s) => {
-            const ms = getMonthlySchedule(s, selectedMonthKey);
-            return !!(ms?.day && ms?.time);
-          });
+          const mySwimmers = swimmers.filter((s) => s.coachId === c.id || s.coachId2 === c.id || myActiveSwimmers.includes(s));
 
           const attendanceRateForRange = (rStartISO, rEndISO) => {
             let presentCount = 0;
@@ -14321,16 +14291,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           ).length;
           const skillsCoverage = myActiveSwimmers.length > 0 ? Math.round((ratedSwimmerCount / myActiveSwimmers.length) * 100) : null;
 
-          const myActiveInPrevMonth = swimmers.filter((s) => {
+          const myActiveInPrevMonth = mySwimmers.filter((s) => {
             const sched = (s.scheduleHistory || []).find((h) => (h.date || "").slice(0, 7) === prevSelectedMonthKey && h.coachId === c.id);
-            if (sched) return true;
-            const ms = getMonthlySchedule(s, prevSelectedMonthKey);
-            return !!ms && ms.coachId === c.id && !!ms.day && !!ms.time;
+            const msPrevMonth = getMonthlySchedule(s, prevSelectedMonthKey);
+            return !!sched || (msPrevMonth?.coachId === c.id && (s.createdAt || "").slice(0, 7) <= prevSelectedMonthKey);
           });
-          const myStillWithMe = myActiveInPrevMonth.filter((s) => {
-            const ms = getMonthlySchedule(s, selectedMonthKey);
-            return !!ms && ms.coachId === c.id && !!ms.day && !!ms.time;
-          });
+          const myStillWithMe = myActiveInPrevMonth.filter((s) => myActiveSwimmers.includes(s));
           const coachRetention = myActiveInPrevMonth.length ? Math.round((myStillWithMe.length / myActiveInPrevMonth.length) * 100) : null;
 
           // The coach's OWN attendance as staff — separate from whether
@@ -14503,7 +14469,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       })()}
 
       {tab === "reports" && isTabEnabled("reports") && reportsSubTab === "insights" && canViewFinancialReports && (() => {
-        const activeSwimmersNow = swimmers.filter((s) => s.day && s.time);
+        const activeSwimmersNow = swimmers.filter((s) => !!getMonthlySchedule(s, monthKey()));
         const churnRisks = activeSwimmersNow
           .map((s) => ({ swimmer: s, ...calculateChurnRisk(s) }))
           .filter((r) => r.score >= 40)
