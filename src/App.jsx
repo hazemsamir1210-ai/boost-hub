@@ -564,7 +564,17 @@ function getMonthlySchedule(swimmer, key) {
   const monthly = swimmer?.monthlySchedules?.[key];
   if (monthly) return monthly;
   if (swimmer?.nextSchedule?.scheduleMonth === key) return swimmer.nextSchedule;
-  if ((swimmer?.scheduleMonth || monthKey()) === key && (swimmer?.day || swimmer?.time)) {
+  // A swimmer's day/time is their ONGOING weekly schedule from
+  // scheduleMonth onward — not a one-month-only booking that silently
+  // stops applying the moment the calendar moves past it. scheduleMonth
+  // only ever gets set once, at creation or the last edit, and never
+  // advances on its own — so requiring an exact match here meant anyone
+  // who hadn't been touched since an earlier month quietly vanished from
+  // "who's scheduled this month" everywhere that check is used, even
+  // though their schedule was still genuinely active. "<=" keeps that
+  // schedule in effect for every later month, right up until a specific
+  // monthlySchedules entry (checked above) actually overrides it.
+  if ((swimmer?.scheduleMonth || monthKey()) <= key && (swimmer?.day || swimmer?.time)) {
     return {
       day: swimmer.day || "", time: swimmer.time || "", sessionType: swimmer.sessionType || "group", coachId: swimmer.coachId || null,
       day2: swimmer.day2 || "", time2: swimmer.time2 || "", sessionType2: swimmer.sessionType2 || "", coachId2: swimmer.coachId2 || null,
@@ -3140,7 +3150,12 @@ function applyAttendanceStatus(swimmer, date, status) {
 // swimmer had a different coach isn't separated out, since the app
 // doesn't record who the coach was at the time.
 function computeCoachPerformance(swimmers = [], coachId, feedback = []) {
-  const mine = swimmers.filter((s) => s.coachId === coachId);
+  // Same month-aware resolver used everywhere else — a swimmer's CURRENT
+  // coach can live in monthlySchedules rather than the top-level coachId.
+  const mine = swimmers.filter((s) => {
+    const ms = getMonthlySchedule(s, monthKey());
+    return (ms ? ms.coachId : s.coachId) === coachId;
+  });
   const mineIds = new Set(mine.map((s) => String(s.id)));
   let present = 0, absent = 0;
   let masteredTotal = 0, skillsTotal = 0;
@@ -5059,8 +5074,18 @@ function suggestBestCoach(candidateCoaches, swimmer, allSwimmers) {
   if (candidateCoaches.length === 0) return null;
 
   const scored = candidateCoaches.map((c) => {
-    const myLoad = allSwimmers.filter((s) => s.coachId === c.id || s.coachId2 === c.id).length;
-    const myLevelExperience = allSwimmers.filter((s) => (s.coachId === c.id || s.coachId2 === c.id) && s.level === swimmer.level).length;
+    // Same month-aware resolver used everywhere else, so a coach's real
+    // current roster (including swimmers whose coach for this month
+    // lives in monthlySchedules rather than the top-level coachId) is
+    // what actually drives the suggestion.
+    const myRoster = allSwimmers.filter((s) => {
+      const ms = getMonthlySchedule(s, monthKey());
+      const coachIdNow = ms ? ms.coachId : s.coachId;
+      const coachId2Now = ms ? ms.coachId2 : s.coachId2;
+      return coachIdNow === c.id || coachId2Now === c.id;
+    });
+    const myLoad = myRoster.length;
+    const myLevelExperience = myRoster.filter((s) => s.level === swimmer.level).length;
     // Experience matters most; a lighter overall load breaks ties between
     // similarly-experienced coaches, rather than dominating the ranking.
     const score = myLevelExperience * 10 - myLoad * 0.5;
@@ -5973,7 +5998,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     setBackfillMessage("");
     try {
       const all = await fetchAllSwimmers();
-      const scheduled = all.filter((s) => s.day && s.time);
+      // Same month-aware resolver as everywhere else — a swimmer whose
+      // scheduleMonth is from an earlier month (never re-touched since,
+      // by far the normal case for an ongoing weekly booking) still has
+      // a genuinely active schedule and needs syncing, not just ones
+      // exactly tagged with the current month.
+      const scheduled = all.filter((s) => !!getMonthlySchedule(s, monthKey()));
       const result = await syncManySwimmersToCoreEngine(scheduled);
       await loadCoreModels();
       setBackfillMessage(`Synced ${scheduled.length} scheduled swimmer${scheduled.length === 1 ? "" : "s"} — ${result.classesCreated} class${result.classesCreated === 1 ? "" : "es"} and ${result.enrollmentsCreated} enrollment${result.enrollmentsCreated === 1 ? "" : "s"} added.`);
@@ -9178,8 +9208,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         const matches = record.swimmerId
           ? all.filter((s) => s.id === record.swimmerId)
           : all.filter((s) => s.phone === record.phone);
-        const readyToMark = matches.filter((s) => s.day && s.time && !(s.paidMonths || []).includes(key));
-        const needsSchedule = matches.filter((s) => (!s.day || !s.time) && !(s.paidMonths || []).includes(key));
+        const readyToMark = matches.filter((s) => !!getMonthlySchedule(s, key) && !(s.paidMonths || []).includes(key));
+        const needsSchedule = matches.filter((s) => !getMonthlySchedule(s, key) && !(s.paidMonths || []).includes(key));
         if (readyToMark.length > 0) {
           const next = all.map((s) => {
             if (!readyToMark.some((m) => m.id === s.id)) return s;
@@ -13587,9 +13617,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         })();
         const activeLastMonth = swimmers.filter((s) => {
           const sched = (s.scheduleHistory || []).find((h) => (h.date || "").slice(0, 7) === prevMonthKeyForRetention);
-          return !!sched || (s.day && s.time && (s.createdAt || "").slice(0, 7) <= prevMonthKeyForRetention);
+          return !!sched || (!!getMonthlySchedule(s, prevMonthKeyForRetention) && (s.createdAt || "").slice(0, 7) <= prevMonthKeyForRetention);
         });
-        const stillActiveThisMonth = activeLastMonth.filter((s) => s.day && s.time);
+        const stillActiveThisMonth = activeLastMonth.filter((s) => !!getMonthlySchedule(s, monthKey()));
         const retentionRate = activeLastMonth.length ? Math.round((stillActiveThisMonth.length / activeLastMonth.length) * 100) : null;
 
         const prevRangeForCoaches = periodRange(reportType, previousAnchor(reportType, reportAnchor));
@@ -20495,7 +20525,18 @@ function CoachView({ onExit, preAuthedCoach = null }) {
         .eq("academy_id", window.__academy?.id);
       if (error) throw error;
       const all = (data || []).map((r) => r.data);
-      setSwimmers(all.filter((s) => s.coachId === authedCoach.id || (canFollowProgram && coachSwimmerInScope(s))));
+      // Same month-aware resolver used everywhere else — a swimmer whose
+      // current coach lives in monthlySchedules (booked ahead, or
+      // reassigned for this specific month) rather than the top-level
+      // coachId would otherwise not show up in — or wrongly show up in —
+      // a coach's own "my swimmers" list.
+      setSwimmers(
+        all.filter((s) => {
+          const ms = getMonthlySchedule(s, monthKey());
+          const myCoachIdNow = ms ? ms.coachId : s.coachId;
+          return myCoachIdNow === authedCoach.id || (canFollowProgram && coachSwimmerInScope(s));
+        })
+      );
     } catch (e) {
       console.warn("load swimmers failed", e);
     } finally {
