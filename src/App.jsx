@@ -1333,6 +1333,7 @@ function printWorkout({ coachName, level, date, ...sections }) {
   <div class="title">Daily Training Plan</div>
   <div class="meta">${coachName ? `Coach: ${escapeHtml(coachName)} &nbsp;·&nbsp; ` : ""}${level ? `${escapeHtml(level)} &nbsp;·&nbsp; ` : ""}${escapeHtml(date)}</div>
   ${sectionDefs.map((s) => section(s.label, sections[s.key])).join("")}
+  ${sections.coachNotes ? section("Coach notes", sections.coachNotes) : ""}
 <script>window.onload = () => setTimeout(() => window.print(), 300);</script>
 </body></html>`;
   const blob = new Blob([html], { type: "text/html" });
@@ -1416,6 +1417,71 @@ function exportSeasonPdf(season, level, weeks) {
   const a = document.createElement("a");
   a.href = url;
   a.download = `season-plan-${level.replace(/[^a-zA-Z0-9أ-ي]/g, "-")}${season ? `-${season.name.replace(/[^a-zA-Z0-9أ-ي]/g, "-")}` : ""}.html`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+// One week, shown as a day-by-day card layout instead of the season
+// grid's row-per-week table — closer to a printed poolside sheet than a
+// spreadsheet, so a coach can glance at "what are we doing today" at a
+// bigger, more readable size than a shared table row would allow.
+function exportWeekDayByDay(season, level, week) {
+  const brandColor = CONFIG.primaryColor || "#0369a1";
+  const dayCards = WEEK_DAYS.map((d) => {
+    const day = week.days?.[d.id];
+    const isOff = !day || day.off;
+    return `
+      <div class="day-card ${isOff ? "off" : ""}">
+        <div class="day-name">${escapeHtml(d.label)}</div>
+        <div class="day-focus">${isOff ? "Rest day" : escapeHtml(day.focus || "—")}</div>
+      </div>`;
+  }).join("");
+
+  const zoneChips = VOLUME_ZONES.map((z) => {
+    const pct = Number(week.zones?.[z.id]) || 0;
+    const meters = Math.round((Number(week.totalVolume || 0) * pct) / 100);
+    return `<div class="zone-chip"><div class="zone-label">${z.label}</div><div class="zone-value">${pct}%</div><div class="zone-sub">${meters.toLocaleString()}m</div></div>`;
+  }).join("");
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Week Plan</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: #1e293b; padding: 30px; max-width: 800px; margin: 0 auto; }
+  .header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+  .header img { width: 44px; height: 44px; object-fit: contain; }
+  .header h1 { font-size: 16px; margin: 0; color: ${brandColor}; }
+  .meta { color: #64748b; font-size: 13px; margin-bottom: 4px; }
+  .title { font-size: 22px; font-weight: 700; margin: 8px 0 16px; }
+  .zones { display: flex; gap: 10px; margin-bottom: 24px; }
+  .zone-chip { flex: 1; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px; text-align: center; }
+  .zone-label { font-size: 10px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.3px; }
+  .zone-value { font-size: 18px; font-weight: 700; color: ${brandColor}; }
+  .zone-sub { font-size: 10px; color: #94a3b8; }
+  .days { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .day-card { border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; }
+  .day-card.off { background: #f8fafc; }
+  .day-name { font-size: 12px; font-weight: 700; color: ${brandColor}; text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 4px; }
+  .day-card.off .day-name { color: #94a3b8; }
+  .day-focus { font-size: 14px; white-space: pre-wrap; }
+  .day-card.off .day-focus { color: #cbd5e1; font-style: italic; }
+  @media print { body { padding: 0; } }
+</style></head><body>
+  <div class="header">
+    <img src="${CONFIG.logoDataUri}" />
+    <h1>${escapeHtml(CONFIG.academyName)}</h1>
+  </div>
+  <div class="meta">${escapeHtml(level)}${season ? ` · ${escapeHtml(season.name)}` : ""} · ${new Date(week.startDate).toLocaleDateString("en-GB", { day: "numeric", month: "long" })}</div>
+  <div class="title">${escapeHtml(week.weekLabel)} — ${Number(week.totalVolume || 0).toLocaleString()}m total</div>
+  <div class="zones">${zoneChips}</div>
+  <div class="days">${dayCards}</div>
+<script>window.onload = () => setTimeout(() => window.print(), 300);</script>
+</body></html>`;
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `week-plan-${week.weekLabel.replace(/[^a-zA-Z0-9أ-ي]/g, "-")}.html`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -6229,6 +6295,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [dailyWorkoutDate, setDailyWorkoutDate] = useState(todayISO());
   const [dailyWorkoutLevel, setDailyWorkoutLevel] = useState(TEAM_SQUAD_LEVELS[0]);
   const [dailyWorkoutForm, setDailyWorkoutForm] = useState({ warmUp: "", en1: "", en2: "", en3: "", sp1: "", coolDown: "" });
+  const [dailyWorkoutNotes, setDailyWorkoutNotes] = useState("");
+  const [dailyWorkoutMeta, setDailyWorkoutMeta] = useState(null); // { updatedBy, updatedAt } of the record currently loaded, if any
+  const [duplicateTargetDate, setDuplicateTargetDate] = useState("");
+  const [duplicateMessage, setDuplicateMessage] = useState("");
   const [dailyWorkoutSaving, setDailyWorkoutSaving] = useState(false);
   const [dailyWorkoutSaved, setDailyWorkoutSaved] = useState(false);
 
@@ -6362,7 +6432,58 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       blank[s.key] = existing?.[s.key] || "";
     });
     setDailyWorkoutForm(blank);
+    setDailyWorkoutNotes(existing?.coachNotes || "");
+    setDailyWorkoutMeta(existing ? { updatedBy: existing.updatedBy, updatedAt: existing.updatedAt } : null);
+    setDuplicateMessage("");
   }, [dailyWorkoutDate, dailyWorkoutLevel, dailyWorkouts]);
+
+  // Fills the form from whichever saved workout for this level is most
+  // recent BEFORE the date currently being edited — a starting point to
+  // adjust rather than writing every session from a blank page. Doesn't
+  // save anything itself; the usual Save button still does that, so
+  // nothing is overwritten until the technical director actually commits it.
+  const copyPreviousWorkout = () => {
+    const previous = dailyWorkouts
+      .filter((w) => w.level === dailyWorkoutLevel && w.date < dailyWorkoutDate)
+      .sort((a, b) => b.date.localeCompare(a.date))[0];
+    if (!previous) return;
+    const copied = {};
+    workoutSectionsFor(dailyWorkoutLevel).forEach((s) => {
+      copied[s.key] = previous[s.key] || "";
+    });
+    setDailyWorkoutForm(copied);
+    setDailyWorkoutNotes(previous.coachNotes || "");
+  };
+
+  // Saves the CURRENTLY EDITED content (whatever's in the form right
+  // now, whether saved yet or not) to a different date, without
+  // changing what's on the date being viewed — the two dates end up
+  // holding independent copies, not a shared reference.
+  const duplicateWorkoutToDate = async () => {
+    if (!duplicateTargetDate) return;
+    setDuplicateMessage("");
+    try {
+      const all = await loadCollection(STORE_KEYS.workouts);
+      const idx = all.findIndex((w) => w.date === duplicateTargetDate && w.level === dailyWorkoutLevel);
+      const record = {
+        id: idx === -1 ? genId() : all[idx].id,
+        date: duplicateTargetDate,
+        level: dailyWorkoutLevel,
+        ...dailyWorkoutForm,
+        coachNotes: dailyWorkoutNotes,
+        updatedBy: accountName || "Admin",
+        updatedAt: new Date().toISOString(),
+      };
+      const next = idx === -1 ? [...all, record] : all.map((w, i) => (i === idx ? record : w));
+      await saveCollection(STORE_KEYS.workouts, next);
+      setDailyWorkouts(next);
+      logActivity(accountName, role, "Duplicated daily training plan", `${dailyWorkoutLevel} — to ${duplicateTargetDate}`);
+      setDuplicateMessage(`Copied to ${duplicateTargetDate}.`);
+      setTimeout(() => setDuplicateMessage(""), 3000);
+    } catch (e) {
+      setDuplicateMessage("Could not duplicate, please try again.");
+    }
+  };
 
   // Written for a squad LEVEL, not a specific coach — whichever coach is
   // actually running that squad on a given day reads the same plan, so
@@ -6379,6 +6500,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         date: dailyWorkoutDate,
         level: dailyWorkoutLevel,
         ...dailyWorkoutForm,
+        coachNotes: dailyWorkoutNotes,
         updatedBy: accountName || "Admin",
         updatedAt: new Date().toISOString(),
       };
@@ -18613,7 +18735,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               </div>
                             </div>
 
-                            <div className="flex justify-end mt-4">
+                            <div className="flex items-center justify-between mt-4">
+                              <button
+                                onClick={() => exportWeekDayByDay(seasonsForLevel.find((s) => s.id === activeSeasonId), weeklyVolumeLevel, week)}
+                                className="text-xs text-sky-800 hover:text-sky-900 font-medium flex items-center gap-1"
+                              >
+                                <FileDown className="w-3.5 h-3.5" /> View week day by day
+                              </button>
                               <button
                                 onClick={() => deleteWeek(week.id)}
                                 className="text-xs text-red-500 hover:text-red-700 font-medium flex items-center gap-1"
@@ -18654,6 +18782,20 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </div>
 
               <div className="bg-slate-50 rounded-2xl p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-xs text-slate-400">
+                    {dailyWorkoutMeta
+                      ? `Last updated by ${dailyWorkoutMeta.updatedBy || "Admin"} · ${new Date(dailyWorkoutMeta.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`
+                      : "No plan saved yet for this date"}
+                  </div>
+                  <button
+                    onClick={copyPreviousWorkout}
+                    className="text-xs text-sky-800 hover:text-sky-900 font-medium flex items-center gap-1 shrink-0"
+                    title="Fill this form from the most recent saved plan for this level — nothing is saved until you press Save"
+                  >
+                    <Copy className="w-3.5 h-3.5" /> Copy previous workout
+                  </button>
+                </div>
                 <div className="space-y-3">
                   {workoutSectionsFor(dailyWorkoutLevel).map((section) => (
                     <div key={section.key}>
@@ -18667,6 +18809,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       />
                     </div>
                   ))}
+                  <div>
+                    <label className="text-xs text-slate-500 mb-1 block">Coach notes (optional)</label>
+                    <textarea
+                      value={dailyWorkoutNotes}
+                      onChange={(e) => setDailyWorkoutNotes(e.target.value)}
+                      rows={2}
+                      className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900"
+                      placeholder="e.g. Focus on streamline, watch breaststroke kick"
+                    />
+                  </div>
                 </div>
                 <div className="flex items-center gap-2 mt-4">
                   <button
@@ -18677,11 +18829,31 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     {dailyWorkoutSaving ? "Saving..." : dailyWorkoutSaved ? "Saved ✓" : "Save"}
                   </button>
                   <button
-                    onClick={() => printWorkout({ level: dailyWorkoutLevel, date: dailyWorkoutDate, ...dailyWorkoutForm })}
+                    onClick={() => printWorkout({ level: dailyWorkoutLevel, date: dailyWorkoutDate, ...dailyWorkoutForm, coachNotes: dailyWorkoutNotes })}
                     className="px-4 py-2.5 rounded-lg bg-white border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-100"
                   >
                     Print
                   </button>
+                </div>
+
+                <div className="mt-4 pt-4 border-t border-slate-200">
+                  <label className="text-xs text-slate-500 mb-1 block">Duplicate this plan to another date</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="date"
+                      value={duplicateTargetDate}
+                      onChange={(e) => setDuplicateTargetDate(e.target.value)}
+                      className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                    />
+                    <button
+                      onClick={duplicateWorkoutToDate}
+                      disabled={!duplicateTargetDate}
+                      className="px-4 py-2 rounded-lg bg-white border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-100 disabled:opacity-50"
+                    >
+                      Duplicate
+                    </button>
+                  </div>
+                  {duplicateMessage && <div className="text-xs text-green-700 mt-1.5">{duplicateMessage}</div>}
                 </div>
               </div>
 
@@ -22128,6 +22300,17 @@ function CoachView({ onExit, preAuthedCoach = null }) {
                     <div className="text-sm text-slate-700 whitespace-pre-wrap">{w[s.key]}</div>
                   </div>
                 ))}
+                {w.coachNotes && (
+                  <div className="mt-2.5 pt-2.5 border-t border-slate-100">
+                    <div className="text-[10px] font-semibold text-amber-600 uppercase tracking-wide mb-0.5">Coach notes</div>
+                    <div className="text-sm text-slate-700 whitespace-pre-wrap">{w.coachNotes}</div>
+                  </div>
+                )}
+                {w.updatedAt && (
+                  <div className="text-[10px] text-slate-300 mt-2.5">
+                    Last updated by {w.updatedBy || "Admin"} · {new Date(w.updatedAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                  </div>
+                )}
               </div>
             ))}
           </div>
