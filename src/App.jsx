@@ -5912,6 +5912,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [coreCoaches, setCoreCoaches] = useState([]);
   const [coreSwimmersForEnroll, setCoreSwimmersForEnroll] = useState([]);
   const [classModal, setClassModal] = useState(null); // null | { mode: "new"|"edit", classId?, form }
+  const [calendarSlotDetail, setCalendarSlotDetail] = useState(null); // { day, time, coachName, group } | null
   const [classSaving, setClassSaving] = useState(false);
   const [classError, setClassError] = useState("");
   const [enrollModal, setEnrollModal] = useState(null); // null | { form }
@@ -12522,10 +12523,39 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   enrollments={coreEnrollments}
                   coaches={coreCoaches}
                   swimmers={coreSwimmersForEnroll}
-                  onCellClick={(day, time) => openNewClassModal({ day, time })}
-                  onClassClick={openEditClassModal}
+                  onCellClick={(day, time) => openNewEnrollModal()}
+                  onSlotClick={(day, time, coachId, group) =>
+                    setCalendarSlotDetail({
+                      day: DAY_GROUPS.find((d) => d.id === day)?.label || day,
+                      time,
+                      coachName: coreCoaches.find((c) => c.id === coachId)?.name || "No coach",
+                      group,
+                    })
+                  }
                 />
               )
+            )}
+
+            {calendarSlotDetail && (
+              <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setCalendarSlotDetail(null)}>
+                <div className="bg-white rounded-2xl p-5 max-w-sm w-full max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center justify-between mb-1">
+                    <h3 className="text-lg font-bold text-slate-900">{calendarSlotDetail.coachName}</h3>
+                    <button onClick={() => setCalendarSlotDetail(null)}><X className="w-5 h-5 text-slate-400" /></button>
+                  </div>
+                  <p className="text-sm text-slate-500 mb-4">
+                    {calendarSlotDetail.day} · {calendarSlotDetail.time} — {calendarSlotDetail.group.length} swimmer{calendarSlotDetail.group.length === 1 ? "" : "s"}
+                  </p>
+                  <div className="space-y-1.5">
+                    {calendarSlotDetail.group.map((g, i) => (
+                      <div key={i} className="flex items-center justify-between text-sm border-b border-slate-50 pb-1.5">
+                        <span className="text-slate-800">{g.swimmer.name}</span>
+                        <span className="text-xs text-slate-400">{g.level}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
             )}
 
             {coreTab === "reminders" && (
@@ -12638,9 +12668,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     })}
                   </>
                 )}
-                {coreTab === "ledger" && coreLedger.filter(l => `${l.description} ${l.month} ${l.type}`.toLowerCase().includes(coreSearch.toLowerCase())).slice().reverse().map(l => (
-                  <div key={l.id} className="border border-slate-100 rounded-xl p-3 flex items-center justify-between gap-3"><div><div className="font-semibold flex items-center gap-1.5">{l.description || l.type}{l.autoRenewed && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-sky-50 text-sky-700 font-medium">Auto-renewed</span>}</div><div className="text-xs text-slate-400">{l.month} · {l.type} · Swimmer {l.swimmerId}</div></div><div className="text-sm font-semibold">{Number(l.amount || 0).toLocaleString()} EGP</div></div>
-                ))}
+                {coreTab === "ledger" && coreLedger.filter(l => `${l.description} ${l.month} ${l.type}`.toLowerCase().includes(coreSearch.toLowerCase())).slice().reverse().map(l => {
+                  // Same swimmer source Swimmers/Schedule read from, so
+                  // the name shown here can never drift from what's
+                  // shown everywhere else — and shows an actual name
+                  // instead of the raw internal swimmer ID.
+                  const swimmerName = coreSwimmersForEnroll.find(s => String(s.id) === String(l.swimmerId))?.name || "Unknown swimmer";
+                  return (
+                    <div key={l.id} className="border border-slate-100 rounded-xl p-3 flex items-center justify-between gap-3"><div><div className="font-semibold flex items-center gap-1.5">{l.description || l.type}{l.autoRenewed && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-sky-50 text-sky-700 font-medium">Auto-renewed</span>}</div><div className="text-xs text-slate-400">{l.month} · {l.type} · {swimmerName}</div></div><div className="text-sm font-semibold">{Number(l.amount || 0).toLocaleString()} EGP</div></div>
+                  );
+                })}
               </div>
             ))}
           </div>
@@ -25492,11 +25529,31 @@ function DailyRemindersPanel({ classes = [], enrollments = [], swimmers = [], fa
   );
 }
 
-function ClassCalendarGrid({ classes = [], enrollments = [], coaches = [], swimmers = [], onCellClick, onClassClick }) {
+function ClassCalendarGrid({ classes = [], enrollments = [], coaches = [], swimmers = [], onCellClick, onSlotClick }) {
   const branchId = BRANCHES[0]?.id;
   const allTimes = Array.from(
     new Set(DAY_GROUPS.flatMap((d) => TIME_SLOTS[branchId]?.[d.id] || []))
   ).sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
+
+  // Reads the exact same source Schedule reads — each swimmer's
+  // month-resolved coach/day/time — instead of the separate
+  // Classes/Enrollments records, so this calendar can never show
+  // something different from what Schedule shows for the same slot.
+  // Classes/Enrollments still exist for Family & Billing's own features
+  // (credits, trials, drop-ins) — they're just no longer what this grid
+  // displays.
+  const bookingsByDayTime = React.useMemo(() => {
+    const map = {};
+    const thisMonth = monthKey();
+    swimmers.forEach((s) => {
+      const ms = getMonthlySchedule(s, thisMonth);
+      if (!ms || !ms.day || !ms.time) return;
+      const key = `${ms.day}|${ms.time}`;
+      if (!map[key]) map[key] = [];
+      map[key].push({ swimmer: s, coachId: ms.coachId, level: s.level, age: s.age });
+    });
+    return map;
+  }, [swimmers]);
 
   if (allTimes.length === 0) {
     return <div className="py-12 text-center text-slate-400 text-sm">No time slots configured yet — set them up in Settings.</div>;
@@ -25520,30 +25577,32 @@ function ClassCalendarGrid({ classes = [], enrollments = [], coaches = [], swimm
               {DAY_GROUPS.map((d) => {
                 const offered = (TIME_SLOTS[branchId]?.[d.id] || []).includes(t);
                 if (!offered) return <td key={d.id} className="p-2 bg-slate-50/50"></td>;
-                const classesHere = classes.filter((c) => c.active !== false && c.day === d.id && c.time === t);
+                const entries = bookingsByDayTime[`${d.id}|${t}`] || [];
+                const byCoach = {};
+                entries.forEach((e) => {
+                  const key = e.coachId || "none";
+                  if (!byCoach[key]) byCoach[key] = [];
+                  byCoach[key].push(e);
+                });
                 return (
                   <td key={d.id} className="p-1.5 align-top border-l border-slate-50 min-w-[120px]">
                     <div className="space-y-1">
-                      {classesHere.map((c) => {
-                        const count = activeEnrollmentCountForClass(enrollments, c.id);
-                        const full = count >= Number(c.capacity || 0);
-                        const coachName = coaches.find((co) => co.id === c.coachId)?.name;
-                        const agesHere = enrollments
-                          .filter((e) => e.classId === c.id && isEnrollmentCurrentlyActive(e))
-                          .map((e) => swimmers.find((s) => String(s.id) === String(e.swimmerId))?.age)
-                          .filter((a) => a != null && a !== "")
-                          .map((a) => Number(a))
-                          .sort((a, b) => a - b);
+                      {Object.entries(byCoach).map(([coachId, group]) => {
+                        const coachName = coaches.find((co) => co.id === coachId)?.name;
+                        const specialLevel = group.map((g) => g.level).find((lv) => ["Exp", "Exp 2", "Exp 3", ...TEAM_SQUAD_LEVELS].includes(lv));
+                        const capacity = effectiveSlotCapacity(group[0]?.sessionType || "group", specialLevel, coachId, d.id, t);
+                        const full = group.length >= capacity;
+                        const ages = group.map((g) => Number(g.age)).filter((a) => !isNaN(a)).sort((a, b) => a - b);
                         return (
                           <button
-                            key={c.id}
-                            onClick={() => onClassClick(c)}
+                            key={coachId}
+                            onClick={() => onSlotClick(d.id, t, coachId, group)}
                             className={`w-full text-left rounded-lg px-2 py-1.5 ${full ? "bg-red-50 hover:bg-red-100" : "bg-sky-50 hover:bg-sky-100"}`}
                           >
-                            <div className="font-semibold text-slate-800">{c.level}</div>
-                            <div className="text-slate-400">{coachName || "No coach"} · {count}/{c.capacity}</div>
-                            {agesHere.length > 0 && (
-                              <div className="text-slate-400">Ages: {agesHere.join(", ")}</div>
+                            <div className="font-semibold text-slate-800">{coachName || "No coach"}</div>
+                            <div className="text-slate-400">{group.length}/{capacity}</div>
+                            {ages.length > 0 && (
+                              <div className="text-slate-400">Ages: {ages.join(", ")}</div>
                             )}
                           </button>
                         );
@@ -25551,7 +25610,7 @@ function ClassCalendarGrid({ classes = [], enrollments = [], coaches = [], swimm
                       <button
                         onClick={() => onCellClick(d.id, t)}
                         className="w-full text-slate-300 hover:text-sky-900 hover:bg-sky-50 rounded-lg py-1 flex items-center justify-center"
-                        title="New class at this slot"
+                        title="New enrollment at this slot"
                       >
                         <Plus className="w-3.5 h-3.5" />
                       </button>
