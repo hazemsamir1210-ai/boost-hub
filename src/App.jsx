@@ -116,6 +116,7 @@ const TOGGLEABLE_FEATURES = [
   { key: "courses", label: "Courses" },
   { key: "chat", label: "Chat" },
   { key: "activity", label: "Activity log" },
+  { key: "trainingplans", label: "Training Plans" },
 ];
 
 // True unless the super admin has explicitly switched this tab off for
@@ -747,6 +748,31 @@ const WAITLIST_PRIORITY_TIERS = [
 // ordinary lesson group — capped at 20 instead of the usual 4, rather
 // than treating them as a normal-sized group.
 const TEAM_SQUAD_LEVELS = ["Star 1", "Star 2", "Star 3", "Star 4", "Team"];
+
+// Star squads plan a session the traditional way (named blocks); Team
+// (the advanced/competitive squad) plans by energy zone instead — two
+// different vocabularies for the exact same "daily workout" feature,
+// picked automatically by which level is selected rather than needing
+// two separate tools.
+const STAR_WORKOUT_SECTIONS = [
+  { key: "warmUp", label: "Warm up", placeholder: "e.g. 400m easy freestyle, 200m kick" },
+  { key: "mainSet", label: "Main set", placeholder: "e.g. 8x100m freestyle @ 1:30 rest" },
+  { key: "kickSet", label: "Kick set", placeholder: "e.g. 6x50m kick @ 1:00 rest" },
+  { key: "drillSet", label: "Drill set", placeholder: "e.g. 4x50m catch-up drill @ 1:00 rest" },
+  { key: "coolDown", label: "Cool down", placeholder: "e.g. 200m easy swim" },
+];
+const TEAM_WORKOUT_SECTIONS = [
+  { key: "warmUp", label: "Warm up", placeholder: "e.g. 400m easy freestyle, 200m kick" },
+  { key: "en1", label: "EN1 — Aerobic base", placeholder: "e.g. 8x100m @ EN1, rest 15 sec" },
+  { key: "en2", label: "EN2 — Aerobic threshold", placeholder: "e.g. 6x100m @ EN2, rest 20 sec" },
+  { key: "en3", label: "EN3 — Aerobic overload", placeholder: "e.g. 4x100m @ EN3, rest 30 sec" },
+  { key: "sp1", label: "SP1 — Sprint", placeholder: "e.g. 8x25m sprint @ SP1, full rest" },
+  { key: "coolDown", label: "Cool down", placeholder: "e.g. 200m easy swim" },
+];
+function workoutSectionsFor(level) {
+  return level === "Team" ? TEAM_WORKOUT_SECTIONS : STAR_WORKOUT_SECTIONS;
+}
+
 // Each level's own cap — not every hour has room for a full squad of 20,
 // so this is per-level and admin-editable (Settings → Skills & Levels),
 // rather than one fixed number applied to all of them. Starts at 20 for
@@ -1280,12 +1306,13 @@ function printReceipt({ swimmerName, phone, planName, price, receiptNo, paymentM
 /* A printable daily training plan — logo, academy name, coach name, date,
    and the three sections a swim workout is normally broken into. Same
    download-then-print-dialog approach as the receipt above. */
-function printWorkout({ coachName, date, warmUp, mainSet, coolDown }) {
+function printWorkout({ coachName, level, date, ...sections }) {
   const section = (title, text) => `
     <div class="section">
       <div class="section-title">${escapeHtml(title)}</div>
       <div class="section-body">${escapeHtml(text || "—").replace(/\n/g, "<br>")}</div>
     </div>`;
+  const sectionDefs = workoutSectionsFor(level);
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Training Plan</title>
 <style>
   body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: #1e293b; padding: 40px; max-width: 640px; margin: 0 auto; }
@@ -1304,10 +1331,8 @@ function printWorkout({ coachName, date, warmUp, mainSet, coolDown }) {
     <h1>${escapeHtml(CONFIG.academyName)}</h1>
   </div>
   <div class="title">Daily Training Plan</div>
-  <div class="meta">Coach: ${escapeHtml(coachName)} &nbsp;·&nbsp; ${escapeHtml(date)}</div>
-  ${section("Warm up", warmUp)}
-  ${section("Main set", mainSet)}
-  ${section("Cool down", coolDown)}
+  <div class="meta">${coachName ? `Coach: ${escapeHtml(coachName)} &nbsp;·&nbsp; ` : ""}${level ? `${escapeHtml(level)} &nbsp;·&nbsp; ` : ""}${escapeHtml(date)}</div>
+  ${sectionDefs.map((s) => section(s.label, sections[s.key])).join("")}
 <script>window.onload = () => setTimeout(() => window.print(), 300);</script>
 </body></html>`;
   const blob = new Blob([html], { type: "text/html" });
@@ -1315,6 +1340,82 @@ function printWorkout({ coachName, date, warmUp, mainSet, coolDown }) {
   const a = document.createElement("a");
   a.href = url;
   a.download = `workout-${(coachName || "coach").replace(/[^a-zA-Z0-9أ-ي]/g, "-")}-${date}.html`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+// One row per week, laid out as a real bordered grid (not free-flowing
+// text blocks) — reads like a spreadsheet on purpose, since that's the
+// shape coaches actually think in for a volume/zone breakdown. Colored
+// using the academy's own brand color instead of a fixed navy, so it
+// matches the logo on the same page.
+function exportSeasonPdf(season, level, weeks) {
+  const brandColor = CONFIG.primaryColor || "#0369a1";
+  const sorted = [...weeks].sort((a, b) => a.startDate.localeCompare(b.startDate));
+  const dayCell = (day) => {
+    if (!day || day.off) return `<span class="off">Off</span>`;
+    return escapeHtml(day.focus || "—");
+  };
+  const rows = sorted
+    .map((w) => {
+      const zoneCells = VOLUME_ZONES.map((z) => {
+        const pct = Number(w.zones?.[z.id]) || 0;
+        const meters = Math.round((Number(w.totalVolume || 0) * pct) / 100);
+        return `<td>${pct}% <span class="sub">(${meters.toLocaleString()}m)</span></td>`;
+      }).join("");
+      const dayCells = WEEK_DAYS.map((d) => `<td>${dayCell(w.days?.[d.id])}</td>`).join("");
+      return `<tr>
+        <td class="week-label">${escapeHtml(w.weekLabel)}</td>
+        <td>${new Date(w.startDate).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</td>
+        <td>${Number(w.totalVolume || 0).toLocaleString()}m</td>
+        ${zoneCells}
+        ${dayCells}
+      </tr>`;
+    })
+    .join("");
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Season Plan</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: #1e293b; padding: 30px; }
+  .header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+  .header img { width: 44px; height: 44px; object-fit: contain; }
+  .header h1 { font-size: 16px; margin: 0; color: ${brandColor}; }
+  .meta { color: #64748b; font-size: 13px; margin-bottom: 20px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: center; white-space: nowrap; }
+  th { background: ${brandColor}; color: #fff; font-weight: 600; text-transform: uppercase; font-size: 9px; letter-spacing: 0.3px; }
+  .week-label { font-weight: 700; text-align: left; background: #f8fafc; }
+  .sub { color: #94a3b8; font-size: 9px; }
+  .off { color: #cbd5e1; font-style: italic; }
+  tr:nth-child(even) td:not(.week-label) { background: #fafbfc; }
+  @media print { body { padding: 0; } @page { size: landscape; } }
+</style></head><body>
+  <div class="header">
+    <img src="${CONFIG.logoDataUri}" />
+    <h1>${escapeHtml(CONFIG.academyName)}</h1>
+  </div>
+  <div class="meta">${escapeHtml(level)} season plan${season ? ` — ${escapeHtml(season.name)}` : ""}</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Week</th>
+        <th>Start</th>
+        <th>Volume</th>
+        ${VOLUME_ZONES.map((z) => `<th>${z.label}</th>`).join("")}
+        ${WEEK_DAYS.map((d) => `<th>${d.label.slice(0, 3)}</th>`).join("")}
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>
+<script>window.onload = () => setTimeout(() => window.print(), 300);</script>
+</body></html>`;
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `season-plan-${level.replace(/[^a-zA-Z0-9أ-ي]/g, "-")}${season ? `-${season.name.replace(/[^a-zA-Z0-9أ-ي]/g, "-")}` : ""}.html`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -1560,7 +1661,41 @@ async function setStaffPasswordOverride(newPassword) {
    and any save right after that can fail with "Couldn't save...".
    Instead, each data type now lives as a single array under one key, so
    loading or saving a whole collection is exactly one storage call. */
-const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all", incidents: "incidents-all", registrations: "registrations-all", feedback: "parent-feedback-all", waitlist: "waitlist-all", courses: "coach-courses-all", coursePayments: "course-payments-all", courseStudents: "course-students-all", payrollAdjustments: "payroll-adjustments-all" };
+const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all", incidents: "incidents-all", registrations: "registrations-all", feedback: "parent-feedback-all", waitlist: "waitlist-all", courses: "coach-courses-all", coursePayments: "course-payments-all", courseStudents: "course-students-all", payrollAdjustments: "payroll-adjustments-all", trainingPlans: "training-plans-all", weeklyVolumes: "weekly-volumes-all", seasons: "training-seasons-all" };
+
+// Standard periodization phases used in competitive swimming training
+// (the same general model most swim federation coaching courses teach —
+// USA Swimming, FINA-aligned curricula, etc.) — a season-long plan is
+// built by sequencing these, not free-typed from scratch.
+const TRAINING_PHASE_TYPES = [
+  { id: "base", label: "General Preparation (Base)", color: "#0284c7", description: "High volume, low intensity — builds the aerobic foundation everything else is built on." },
+  { id: "build", label: "Specific Preparation (Build)", color: "#0d9488", description: "Volume stays high but intensity rises — stroke-specific work, threshold sets." },
+  { id: "precomp", label: "Pre-Competition", color: "#ca8a04", description: "Volume drops, intensity rises further — race-pace work, starts/turns." },
+  { id: "peak", label: "Competition (Peak)", color: "#dc2626", description: "Lowest volume, highest intensity — race simulation, sharpening." },
+  { id: "taper", label: "Taper", color: "#9333ea", description: "Volume cut drastically while intensity holds — the body arrives fresh for competition." },
+  { id: "recovery", label: "Transition / Recovery", color: "#64748b", description: "Active rest and cross-training — physical and mental recovery before the next cycle." },
+];
+
+// Energy zones a week's total volume gets split across — percentages are
+// left entirely up to whoever's planning the week (they shift week to
+// week depending on where the squad is in the season), never a fixed
+// template; this is just the ordered list of zones to show.
+const VOLUME_ZONES = [
+  { id: "en1", label: "EN1", description: "Aerobic base" },
+  { id: "en2", label: "EN2", description: "Aerobic threshold" },
+  { id: "en3", label: "EN3", description: "Aerobic overload" },
+  { id: "sp1", label: "SP1", description: "Sprint" },
+];
+
+const WEEK_DAYS = [
+  { id: "sunday", label: "Sunday" },
+  { id: "monday", label: "Monday" },
+  { id: "tuesday", label: "Tuesday" },
+  { id: "wednesday", label: "Wednesday" },
+  { id: "thursday", label: "Thursday" },
+  { id: "friday", label: "Friday" },
+  { id: "saturday", label: "Saturday" },
+];
 
 // The single latest announcement shown as a banner to every parent when
 // they open the Parent Portal — simple broadcast, not per-person messages.
@@ -1874,6 +2009,7 @@ const PERMISSION_DEFS = [
   ["assignCoaches", "Change main coach"],
   ["viewCoachReports", "View coach reports / KPI"],
   ["manageCurriculum", "Manage levels / curriculum"],
+  ["manageTrainingPlans", "Manage team training plans"],
   ["viewAssessments", "View swimmer assessments"],
   ["editAssessments", "Edit swimmer assessments"],
   ["viewStaffAttendance", "View staff attendance / payroll"],
@@ -4397,6 +4533,189 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
 /* ============================================================
    Swimmer registration form (used for both add & edit)
    ============================================================ */
+// A season plan is a sequence of standard periodization phases (see
+// TRAINING_PHASE_TYPES) — this form lets you add/reorder/edit each phase
+// inline, rather than free-typing a training plan from scratch.
+function TrainingPlanForm({ modal, onSave, onCancel }) {
+  const [form, setForm] = useState(modal.form);
+  const [error, setError] = useState("");
+
+  const addPhase = () => {
+    const lastEnd = form.phases[form.phases.length - 1]?.endDate || form.startDate;
+    setForm({
+      ...form,
+      phases: [
+        ...form.phases,
+        { id: genId(), type: "base", startDate: lastEnd, endDate: lastEnd, weeklySessions: "", notes: "" },
+      ],
+    });
+  };
+
+  const updatePhase = (id, patch) => {
+    setForm({ ...form, phases: form.phases.map((p) => (p.id === id ? { ...p, ...patch } : p)) });
+  };
+
+  const removePhase = (id) => {
+    setForm({ ...form, phases: form.phases.filter((p) => p.id !== id) });
+  };
+
+  const handleSave = () => {
+    setError("");
+    if (!form.name.trim()) return setError("Please name this plan");
+    if (form.endDate < form.startDate) return setError("End date can't be before the start date");
+    onSave(form);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={onCancel}>
+      <div className="bg-white rounded-2xl p-5 max-w-lg w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold text-slate-900">{modal.mode === "new" ? "New training plan" : "Edit training plan"}</h3>
+          <button onClick={onCancel}><X className="w-5 h-5 text-slate-400" /></button>
+        </div>
+
+        <div className="space-y-3 mb-4">
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Plan name</label>
+            <input
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder="e.g. Winter Season 2026 — Star 2"
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
+            />
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Squad / level</label>
+              <select
+                value={form.level}
+                onChange={(e) => setForm({ ...form, level: e.target.value })}
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
+              >
+                <option value="all">All levels</option>
+                {TEAM_SQUAD_LEVELS.map((lv) => (
+                  <option key={lv} value={lv}>{lv}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">Start date</label>
+              <input
+                type="date"
+                value={form.startDate}
+                onChange={(e) => setForm({ ...form, startDate: e.target.value })}
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-500 mb-1 block">End date</label>
+              <input
+                type="date"
+                value={form.endDate}
+                onChange={(e) => setForm({ ...form, endDate: e.target.value })}
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Season goal (optional)</label>
+            <textarea
+              value={form.goal}
+              onChange={(e) => setForm({ ...form, goal: e.target.value })}
+              rows={2}
+              placeholder="e.g. Peak for the Governorate Championship in April"
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 resize-none"
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between mb-2">
+          <h4 className="font-semibold text-slate-800 text-sm">Phases</h4>
+          <button onClick={addPhase} className="text-xs px-2.5 py-1.5 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200 flex items-center gap-1">
+            <Plus className="w-3 h-3" /> Add phase
+          </button>
+        </div>
+
+        {form.phases.length === 0 && (
+          <p className="text-xs text-slate-400 text-center py-4">No phases yet — add one to start sequencing the season.</p>
+        )}
+
+        <div className="space-y-3">
+          {form.phases.map((ph, i) => (
+            <div key={ph.id} className="bg-slate-50 rounded-xl p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold text-slate-500">Phase {i + 1}</span>
+                <button onClick={() => removePhase(ph.id)} className="text-slate-400 hover:text-red-500">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <select
+                value={ph.type}
+                onChange={(e) => updatePhase(ph.id, { type: e.target.value })}
+                className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white mb-2"
+              >
+                {TRAINING_PHASE_TYPES.map((t) => (
+                  <option key={t.id} value={t.id}>{t.label}</option>
+                ))}
+              </select>
+              <p className="text-xs text-slate-400 mb-2">{TRAINING_PHASE_TYPES.find((t) => t.id === ph.type)?.description}</p>
+              <div className="grid grid-cols-3 gap-2 mb-2">
+                <div>
+                  <label className="text-[10px] text-slate-400 mb-0.5 block">Start</label>
+                  <input
+                    type="date"
+                    value={ph.startDate}
+                    onChange={(e) => updatePhase(ph.id, { startDate: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg py-1.5 px-2 text-xs outline-none focus:border-sky-900"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 mb-0.5 block">End</label>
+                  <input
+                    type="date"
+                    value={ph.endDate}
+                    onChange={(e) => updatePhase(ph.id, { endDate: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg py-1.5 px-2 text-xs outline-none focus:border-sky-900"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 mb-0.5 block">Sessions/week</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="14"
+                    value={ph.weeklySessions}
+                    onChange={(e) => updatePhase(ph.id, { weeklySessions: e.target.value })}
+                    className="w-full border border-slate-200 rounded-lg py-1.5 px-2 text-xs outline-none focus:border-sky-900"
+                  />
+                </div>
+              </div>
+              <textarea
+                value={ph.notes}
+                onChange={(e) => updatePhase(ph.id, { notes: e.target.value })}
+                rows={2}
+                placeholder="Notes for coaches — specific sets, technique focus, etc."
+                className="w-full border border-slate-200 rounded-lg py-2 px-3 text-xs outline-none focus:border-sky-900 resize-none"
+              />
+            </div>
+          ))}
+        </div>
+
+        {error && <div className="text-red-500 text-sm mt-3">{error}</div>}
+
+        <div className="flex gap-2 mt-5">
+          <button onClick={handleSave} className="flex-1 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900">
+            Save plan
+          </button>
+          <button onClick={onCancel} className="px-5 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = false, onJoinWaitlist, canManageSubstitute = true }) {
   const isNew = !initial;
   const [name, setName] = useState(initial?.name || "");
@@ -5901,6 +6220,204 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [coreTab, setCoreTab] = useState("families");
   const [coreFamilies, setCoreFamilies] = useState([]);
   const [coreClasses, setCoreClasses] = useState([]);
+  const [trainingPlans, setTrainingPlans] = useState([]);
+  const [trainingPlansLoading, setTrainingPlansLoading] = useState(false);
+  const [planModal, setPlanModal] = useState(null); // null | { mode: "new"|"edit", form }
+  const [trainingPlansSubTab, setTrainingPlansSubTab] = useState("daily"); // "daily" | "phases"
+  const [dailyWorkouts, setDailyWorkouts] = useState([]);
+  const [dailyWorkoutsLoading, setDailyWorkoutsLoading] = useState(false);
+  const [dailyWorkoutDate, setDailyWorkoutDate] = useState(todayISO());
+  const [dailyWorkoutLevel, setDailyWorkoutLevel] = useState(TEAM_SQUAD_LEVELS[0]);
+  const [dailyWorkoutForm, setDailyWorkoutForm] = useState({ warmUp: "", en1: "", en2: "", en3: "", sp1: "", coolDown: "" });
+  const [dailyWorkoutSaving, setDailyWorkoutSaving] = useState(false);
+  const [dailyWorkoutSaved, setDailyWorkoutSaved] = useState(false);
+
+  const blankWeekDays = () => Object.fromEntries(WEEK_DAYS.map((d) => [d.id, { off: false, focus: "" }]));
+  const [weeklyVolumes, setWeeklyVolumes] = useState([]);
+  const [weeklyVolumesLoading, setWeeklyVolumesLoading] = useState(false);
+  const [weeklyVolumeLevel, setWeeklyVolumeLevel] = useState(TEAM_SQUAD_LEVELS[0]);
+  const [activeWeekId, setActiveWeekId] = useState(null);
+  const weekSaveTimers = useRef({});
+
+  // A season is just a named container a set of weeks belongs to — lets
+  // last winter's whole plan stay saved and re-openable exactly as it
+  // was, rather than every new season overwriting the last one's weeks.
+  const [seasons, setSeasons] = useState([]);
+  const [seasonsLoading, setSeasonsLoading] = useState(false);
+  const [activeSeasonId, setActiveSeasonId] = useState(null);
+  const [newSeasonName, setNewSeasonName] = useState("");
+
+  const loadSeasons = useCallback(async () => {
+    setSeasonsLoading(true);
+    try {
+      const all = await loadCollection(STORE_KEYS.seasons);
+      setSeasons(all);
+    } finally {
+      setSeasonsLoading(false);
+    }
+  }, []);
+
+  const seasonsForLevel = seasons.filter((s) => s.level === weeklyVolumeLevel).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  // Whichever season was last opened for this level, or the most
+  // recently created one if none was — never silently falls back to
+  // "no season selected" once at least one exists for this level.
+  useEffect(() => {
+    if (seasonsForLevel.length === 0) {
+      setActiveSeasonId(null);
+    } else if (!seasonsForLevel.some((s) => s.id === activeSeasonId)) {
+      setActiveSeasonId(seasonsForLevel[0].id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weeklyVolumeLevel, seasons]);
+
+  const createSeason = async () => {
+    const name = newSeasonName.trim();
+    if (!name) return;
+    const record = { id: genId(), name, level: weeklyVolumeLevel, createdAt: new Date().toISOString() };
+    const all = await loadCollection(STORE_KEYS.seasons);
+    const next = [...all, record];
+    await saveCollection(STORE_KEYS.seasons, next);
+    setSeasons(next);
+    setActiveSeasonId(record.id);
+    setNewSeasonName("");
+  };
+
+  const loadWeeklyVolumes = useCallback(async () => {
+    setWeeklyVolumesLoading(true);
+    try {
+      const all = await loadCollection(STORE_KEYS.weeklyVolumes);
+      setWeeklyVolumes(all);
+    } finally {
+      setWeeklyVolumesLoading(false);
+    }
+  }, []);
+
+  const weeksForLevel = weeklyVolumes
+    .filter((w) => w.level === weeklyVolumeLevel && w.seasonId === activeSeasonId)
+    .sort((a, b) => a.startDate.localeCompare(b.startDate));
+
+  const addWeek = async () => {
+    if (!activeSeasonId) return; // needs a season to belong to first
+    const lastWeek = weeksForLevel[weeksForLevel.length - 1];
+    const nextStart = lastWeek
+      ? new Date(new Date(lastWeek.startDate).getTime() + 7 * 86400000).toISOString().slice(0, 10)
+      : todayISO();
+    const record = {
+      id: genId(),
+      level: weeklyVolumeLevel,
+      seasonId: activeSeasonId,
+      weekLabel: `Week ${weeksForLevel.length + 1}`,
+      startDate: nextStart,
+      totalVolume: lastWeek?.totalVolume || 0,
+      zones: lastWeek?.zones || { en1: 0, en2: 0, en3: 0, sp1: 0 },
+      days: blankWeekDays(),
+    };
+    const all = await loadCollection(STORE_KEYS.weeklyVolumes);
+    const next = [...all, record];
+    await saveCollection(STORE_KEYS.weeklyVolumes, next);
+    setWeeklyVolumes(next);
+    setActiveWeekId(record.id);
+  };
+
+  const updateWeek = async (weekId, patch) => {
+    const next = weeklyVolumes.map((w) => (w.id === weekId ? { ...w, ...patch } : w));
+    setWeeklyVolumes(next); // optimistic — feels instant while typing
+    // Debounced, not saved on every keystroke — typing in the volume or
+    // a day's focus field would otherwise fire a save per character,
+    // and overlapping saves from fast typing could race and clobber
+    // each other the same way the swimmer-save race did earlier.
+    clearTimeout(weekSaveTimers.current[weekId]);
+    weekSaveTimers.current[weekId] = setTimeout(() => {
+      saveCollection(STORE_KEYS.weeklyVolumes, next);
+    }, 700);
+  };
+
+  const deleteWeek = async (weekId) => {
+    const next = weeklyVolumes.filter((w) => w.id !== weekId);
+    setWeeklyVolumes(next);
+    await saveCollection(STORE_KEYS.weeklyVolumes, next);
+    if (activeWeekId === weekId) setActiveWeekId(null);
+  };
+
+
+  const loadDailyWorkouts = useCallback(async () => {
+    setDailyWorkoutsLoading(true);
+    try {
+      const all = await loadCollection(STORE_KEYS.workouts);
+      setDailyWorkouts(all);
+    } finally {
+      setDailyWorkoutsLoading(false);
+    }
+  }, []);
+
+  // Populate the form whenever the date/level being edited changes, from
+  // whatever's already saved for that exact combination (or blank if
+  // none) — reads whichever section keys apply to the level currently
+  // selected (Star's named blocks, or Team's energy zones).
+  useEffect(() => {
+    const existing = dailyWorkouts.find((w) => w.date === dailyWorkoutDate && w.level === dailyWorkoutLevel);
+    const blank = {};
+    workoutSectionsFor(dailyWorkoutLevel).forEach((s) => {
+      blank[s.key] = existing?.[s.key] || "";
+    });
+    setDailyWorkoutForm(blank);
+  }, [dailyWorkoutDate, dailyWorkoutLevel, dailyWorkouts]);
+
+  // Written for a squad LEVEL, not a specific coach — whichever coach is
+  // actually running that squad on a given day reads the same plan, so
+  // reassigning a coach never leaves them looking at someone else's plan
+  // (or none at all).
+  const saveDailyWorkout = async () => {
+    setDailyWorkoutSaving(true);
+    setDailyWorkoutSaved(false);
+    try {
+      const all = await loadCollection(STORE_KEYS.workouts);
+      const idx = all.findIndex((w) => w.date === dailyWorkoutDate && w.level === dailyWorkoutLevel);
+      const record = {
+        id: idx === -1 ? genId() : all[idx].id,
+        date: dailyWorkoutDate,
+        level: dailyWorkoutLevel,
+        ...dailyWorkoutForm,
+        updatedBy: accountName || "Admin",
+        updatedAt: new Date().toISOString(),
+      };
+      const next = idx === -1 ? [...all, record] : all.map((w, i) => (i === idx ? record : w));
+      await saveCollection(STORE_KEYS.workouts, next);
+      setDailyWorkouts(next);
+      logActivity(accountName, role, "Saved daily training plan", `${dailyWorkoutLevel} — ${dailyWorkoutDate}`);
+      setDailyWorkoutSaved(true);
+      setTimeout(() => setDailyWorkoutSaved(false), 2500);
+    } finally {
+      setDailyWorkoutSaving(false);
+    }
+  };
+
+
+  const savePlan = async (record) => {
+    const all = await loadCollection(STORE_KEYS.trainingPlans);
+    const exists = all.some((p) => p.id === record.id);
+    const next = exists ? all.map((p) => (p.id === record.id ? record : p)) : [...all, record];
+    await saveCollection(STORE_KEYS.trainingPlans, next);
+    setTrainingPlans(next);
+    logActivity(accountName, role, exists ? "Edited training plan" : "Added training plan", record.name);
+    setPlanModal(null);
+  };
+
+  const deletePlan = (plan) => {
+    setConfirmAction({
+      message: `Delete the training plan "${plan.name}"?`,
+      onConfirm: async () => {
+        const all = await loadCollection(STORE_KEYS.trainingPlans);
+        const next = all.filter((p) => p.id !== plan.id);
+        await saveCollection(STORE_KEYS.trainingPlans, next);
+        setTrainingPlans(next);
+        logActivity(accountName, role, "Deleted training plan", plan.name);
+      },
+    });
+  };
+
+
   const [coreEnrollments, setCoreEnrollments] = useState([]);
   const [coreLedger, setCoreLedger] = useState([]);
   const [posProducts, setPosProducts] = useState([]);
@@ -6602,6 +7119,27 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   };
 
   const [tab, setTab] = useState("dashboard");
+
+  useEffect(() => {
+    if (tab === "trainingplans" && trainingPlansSubTab === "daily") loadDailyWorkouts();
+  }, [tab, trainingPlansSubTab, loadDailyWorkouts]);
+
+  useEffect(() => {
+    if (tab === "trainingplans" && trainingPlansSubTab === "weekly") {
+      loadWeeklyVolumes();
+      loadSeasons();
+    }
+  }, [tab, trainingPlansSubTab, loadWeeklyVolumes, loadSeasons]);
+
+
+  useEffect(() => {
+    if (tab !== "trainingplans") return;
+    setTrainingPlansLoading(true);
+    loadCollection(STORE_KEYS.trainingPlans)
+      .then(setTrainingPlans)
+      .finally(() => setTrainingPlansLoading(false));
+  }, [tab]);
+
   const [reportsSubTab, setReportsSubTab] = useState("ops");
 
   useEffect(() => {
@@ -10778,6 +11316,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           className={navBtnClass("coachperformance")}
         >
           <Award className="w-4 h-4" /> {t("coachPerformance")}
+        </button>
+        )}
+        {(can("manageTrainingPlans") || role === "technical_director") && isTabEnabled("trainingplans") && (
+        <button
+          onClick={() => setTab("trainingplans")}
+          className={navBtnClass("trainingplans")}
+        >
+          <CalendarDays className="w-4 h-4" /> Training Plans
         </button>
         )}
         {canEdit && role !== "technical_director" && isTabEnabled("accounts") && (
@@ -17856,6 +18402,426 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         </div>
       )}
 
+      {tab === "trainingplans" && (can("manageTrainingPlans") || role === "technical_director") && isTabEnabled("trainingplans") && (
+        <div>
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+            <div>
+              <h2 className="text-xl font-bold text-slate-900">Training Plans</h2>
+              <p className="text-sm text-slate-400">Daily session content for Star & Team squads, and season-long periodization phases.</p>
+            </div>
+          </div>
+
+          <div className="flex gap-2 mb-5 border-b border-slate-200 pb-3">
+            {[
+              { id: "weekly", label: "Season builder" },
+              { id: "daily", label: "Daily workouts" },
+              { id: "phases", label: "Season phases" },
+            ].map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setTrainingPlansSubTab(t.id)}
+                className={`text-sm px-3 py-1.5 rounded-lg font-medium transition ${
+                  trainingPlansSubTab === t.id ? "bg-sky-950 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {trainingPlansSubTab === "weekly" && (
+            <div>
+              <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+                <select
+                  value={weeklyVolumeLevel}
+                  onChange={(e) => { setWeeklyVolumeLevel(e.target.value); setActiveWeekId(null); }}
+                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                >
+                  {TEAM_SQUAD_LEVELS.map((lv) => (
+                    <option key={lv} value={lv}>{lv}</option>
+                  ))}
+                </select>
+                {seasonsForLevel.length > 0 && (
+                  <select
+                    value={activeSeasonId || ""}
+                    onChange={(e) => { setActiveSeasonId(e.target.value); setActiveWeekId(null); }}
+                    className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                  >
+                    {seasonsForLevel.map((s) => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                )}
+                <div className="flex-1" />
+                {weeksForLevel.length > 0 && (
+                  <button
+                    onClick={() => exportSeasonPdf(seasonsForLevel.find((s) => s.id === activeSeasonId), weeklyVolumeLevel, weeksForLevel)}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200"
+                  >
+                    <FileDown className="w-4 h-4" /> Export PDF
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 mb-4">
+                <input
+                  value={newSeasonName}
+                  onChange={(e) => setNewSeasonName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") createSeason(); }}
+                  placeholder="e.g. Winter 2026"
+                  className="flex-1 max-w-xs border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                />
+                <button
+                  onClick={createSeason}
+                  disabled={!newSeasonName.trim()}
+                  className="px-3 py-2 rounded-lg bg-white border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-100 disabled:opacity-50"
+                >
+                  New season
+                </button>
+              </div>
+
+              {seasonsForLevel.length === 0 ? (
+                <div className="py-16 text-center text-slate-400">
+                  No season started yet for {weeklyVolumeLevel} — name one above (e.g. "Winter 2026") to start adding weeks.
+                </div>
+              ) : (
+              <>
+              <div className="flex items-center justify-end mb-2">
+                <button
+                  onClick={addWeek}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900"
+                >
+                  <Plus className="w-4 h-4" /> Add week
+                </button>
+              </div>
+
+              {weeklyVolumesLoading ? (
+                <div className="py-8 text-center text-slate-400 text-sm">Loading...</div>
+              ) : weeksForLevel.length === 0 ? (
+                <div className="py-16 text-center text-slate-400">No weeks planned yet for this season — add the first one.</div>
+              ) : (
+                <div className="space-y-3">
+                  {weeksForLevel.map((week) => {
+                    const isOpen = activeWeekId === week.id;
+                    const zoneTotal = VOLUME_ZONES.reduce((sum, z) => sum + (Number(week.zones?.[z.id]) || 0), 0);
+                    return (
+                      <div key={week.id} className="bg-slate-50 rounded-2xl overflow-hidden">
+                        <button
+                          onClick={() => setActiveWeekId(isOpen ? null : week.id)}
+                          className="w-full flex items-center justify-between gap-3 px-5 py-4 text-left"
+                        >
+                          <div>
+                            <div className="font-semibold text-slate-800">{week.weekLabel}</div>
+                            <div className="text-xs text-slate-400">
+                              {new Date(week.startDate).toLocaleDateString("en-GB", { day: "numeric", month: "short" })} · {Number(week.totalVolume || 0).toLocaleString()}m
+                              {zoneTotal !== 100 && zoneTotal > 0 && <span className="text-amber-600"> · zones sum to {zoneTotal}%, not 100%</span>}
+                            </div>
+                          </div>
+                          <ChevronLeft className={`w-4 h-4 text-slate-400 transition-transform ${isOpen ? "-rotate-90" : "rotate-180"}`} />
+                        </button>
+
+                        {isOpen && (
+                          <div className="px-5 pb-5">
+                            <div className="grid sm:grid-cols-2 gap-3 mb-4">
+                              <div>
+                                <label className="text-xs text-slate-500 mb-1 block">Week label</label>
+                                <input
+                                  value={week.weekLabel}
+                                  onChange={(e) => updateWeek(week.id, { weekLabel: e.target.value })}
+                                  className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-xs text-slate-500 mb-1 block">Start date</label>
+                                <input
+                                  type="date"
+                                  value={week.startDate}
+                                  onChange={(e) => updateWeek(week.id, { startDate: e.target.value })}
+                                  className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="mb-4">
+                              <label className="text-xs text-slate-500 mb-1 block">Total volume for the week (meters)</label>
+                              <input
+                                type="number"
+                                min="0"
+                                value={week.totalVolume}
+                                onChange={(e) => updateWeek(week.id, { totalVolume: Number(e.target.value) || 0 })}
+                                className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                                placeholder="e.g. 20000"
+                              />
+                            </div>
+
+                            <div className="mb-5">
+                              <div className="text-xs font-semibold text-slate-500 mb-2">
+                                Energy zone split — whatever percentages fit this week, they don't have to match last week's
+                              </div>
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                {VOLUME_ZONES.map((z) => {
+                                  const pct = Number(week.zones?.[z.id]) || 0;
+                                  const meters = Math.round((Number(week.totalVolume || 0) * pct) / 100);
+                                  return (
+                                    <div key={z.id} className="bg-white rounded-xl p-2.5">
+                                      <label className="text-xs text-slate-500 block mb-1">{z.label}</label>
+                                      <div className="flex items-center gap-1">
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          max="100"
+                                          value={week.zones?.[z.id] ?? 0}
+                                          onChange={(e) => updateWeek(week.id, { zones: { ...week.zones, [z.id]: Number(e.target.value) || 0 } })}
+                                          className="w-full border border-slate-200 rounded-lg py-1.5 px-2 text-sm outline-none focus:border-sky-900"
+                                        />
+                                        <span className="text-xs text-slate-400 shrink-0">%</span>
+                                      </div>
+                                      <div className="text-[11px] text-slate-400 mt-1">{meters.toLocaleString()}m</div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            <div>
+                              <div className="text-xs font-semibold text-slate-500 mb-2">Days this week</div>
+                              <div className="space-y-2">
+                                {WEEK_DAYS.map((d) => {
+                                  const day = week.days?.[d.id] || { off: false, focus: "" };
+                                  return (
+                                    <div key={d.id} className="flex items-center gap-2 bg-white rounded-xl p-2.5">
+                                      <span className="text-xs font-medium text-slate-600 w-20 shrink-0">{d.label}</span>
+                                      <label className="flex items-center gap-1.5 text-xs text-slate-500 shrink-0 cursor-pointer select-none">
+                                        <input
+                                          type="checkbox"
+                                          checked={day.off}
+                                          onChange={(e) => updateWeek(week.id, { days: { ...week.days, [d.id]: { ...day, off: e.target.checked } } })}
+                                          className="w-3.5 h-3.5 accent-slate-500"
+                                        />
+                                        Off
+                                      </label>
+                                      <input
+                                        value={day.focus}
+                                        disabled={day.off}
+                                        onChange={(e) => updateWeek(week.id, { days: { ...week.days, [d.id]: { ...day, focus: e.target.value } } })}
+                                        placeholder={day.off ? "Rest day" : "e.g. Freestyle + Backstroke, Mixed, Long"}
+                                        className="flex-1 border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-sky-900 disabled:bg-slate-50 disabled:text-slate-300"
+                                      />
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            <div className="flex justify-end mt-4">
+                              <button
+                                onClick={() => deleteWeek(week.id)}
+                                className="text-xs text-red-500 hover:text-red-700 font-medium flex items-center gap-1"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" /> Delete this week
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              </>
+              )}
+            </div>
+          )}
+
+          {trainingPlansSubTab === "daily" && (
+            <div>
+              <div className="flex flex-wrap gap-2 mb-4">
+                <input
+                  type="date"
+                  value={dailyWorkoutDate}
+                  onChange={(e) => setDailyWorkoutDate(e.target.value)}
+                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                />
+                <select
+                  value={dailyWorkoutLevel}
+                  onChange={(e) => setDailyWorkoutLevel(e.target.value)}
+                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                >
+                  {TEAM_SQUAD_LEVELS.map((lv) => (
+                    <option key={lv} value={lv}>{lv}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="bg-slate-50 rounded-2xl p-5">
+                <div className="space-y-3">
+                  {workoutSectionsFor(dailyWorkoutLevel).map((section) => (
+                    <div key={section.key}>
+                      <label className="text-xs text-slate-500 mb-1 block">{section.label}</label>
+                      <textarea
+                        value={dailyWorkoutForm[section.key]}
+                        onChange={(e) => setDailyWorkoutForm({ ...dailyWorkoutForm, [section.key]: e.target.value })}
+                        rows={section.key === "warmUp" || section.key === "coolDown" ? 2 : 3}
+                        className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900"
+                        placeholder={section.placeholder}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2 mt-4">
+                  <button
+                    onClick={saveDailyWorkout}
+                    disabled={dailyWorkoutSaving}
+                    className="flex-1 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
+                  >
+                    {dailyWorkoutSaving ? "Saving..." : dailyWorkoutSaved ? "Saved ✓" : "Save"}
+                  </button>
+                  <button
+                    onClick={() => printWorkout({ level: dailyWorkoutLevel, date: dailyWorkoutDate, ...dailyWorkoutForm })}
+                    className="px-4 py-2.5 rounded-lg bg-white border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-100"
+                  >
+                    Print
+                  </button>
+                </div>
+              </div>
+
+              {dailyWorkoutsLoading ? (
+                <div className="py-8 text-center text-slate-400 text-sm">Loading...</div>
+              ) : (
+                (() => {
+                  const recentForLevel = dailyWorkouts
+                    .filter((w) => w.level === dailyWorkoutLevel)
+                    .sort((a, b) => b.date.localeCompare(a.date))
+                    .slice(0, 14);
+                  return recentForLevel.length > 0 ? (
+                    <div className="mt-4">
+                      <div className="text-xs text-slate-400 mb-1.5">Recent plans for {dailyWorkoutLevel}</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {recentForLevel.map((w) => (
+                          <button
+                            key={w.id}
+                            onClick={() => setDailyWorkoutDate(w.date)}
+                            className={`text-xs px-2.5 py-1 rounded-full font-medium ${
+                              w.date === dailyWorkoutDate ? "bg-sky-950 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                            }`}
+                          >
+                            {w.date}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null;
+                })()
+              )}
+            </div>
+          )}
+
+          {trainingPlansSubTab === "phases" && (
+          <>
+          <div className="flex items-center justify-end gap-3 flex-wrap mb-4">
+            {can("manageTrainingPlans") && (
+              <button
+                onClick={() =>
+                  setPlanModal({
+                    mode: "new",
+                    form: { id: genId(), name: "", level: "all", startDate: todayISO(), endDate: todayISO(), goal: "", phases: [] },
+                  })
+                }
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900"
+              >
+                <Plus className="w-4 h-4" /> New plan
+              </button>
+            )}
+          </div>
+
+          {trainingPlansLoading ? (
+            <div className="py-12 text-center text-slate-400 flex items-center justify-center gap-2">
+              <RefreshCw className="w-4 h-4 animate-spin" /> Loading...
+            </div>
+          ) : trainingPlans.length === 0 ? (
+            <div className="py-16 text-center text-slate-400">
+              No training plans yet. {can("manageTrainingPlans") && "Create your first one to start planning the season."}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {trainingPlans
+                .slice()
+                .sort((a, b) => b.startDate.localeCompare(a.startDate))
+                .map((plan) => {
+                  const totalDays = Math.max(1, (new Date(plan.endDate) - new Date(plan.startDate)) / 86400000);
+                  return (
+                    <div key={plan.id} className="bg-slate-50 rounded-2xl p-5">
+                      <div className="flex items-start justify-between gap-3 mb-1">
+                        <div>
+                          <h3 className="font-bold text-slate-900">{plan.name}</h3>
+                          <p className="text-xs text-slate-400">
+                            {plan.level === "all" ? "All levels" : plan.level} · {new Date(plan.startDate).toLocaleDateString("en-GB")} → {new Date(plan.endDate).toLocaleDateString("en-GB")}
+                          </p>
+                        </div>
+                        {can("manageTrainingPlans") && (
+                          <div className="flex gap-1 shrink-0">
+                            <button onClick={() => setPlanModal({ mode: "edit", form: plan })} className="p-1.5 rounded-lg hover:bg-slate-200">
+                              <Pencil className="w-3.5 h-3.5 text-slate-500" />
+                            </button>
+                            <button onClick={() => deletePlan(plan)} className="p-1.5 rounded-lg hover:bg-slate-200">
+                              <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      {plan.goal && <p className="text-sm text-slate-600 mt-2 mb-3">{plan.goal}</p>}
+
+                      {plan.phases.length > 0 && (
+                        <>
+                          <div className="flex w-full h-6 rounded-lg overflow-hidden mt-3 mb-2">
+                            {plan.phases.map((ph) => {
+                              const phaseDays = Math.max(1, (new Date(ph.endDate) - new Date(ph.startDate)) / 86400000);
+                              const width = (phaseDays / totalDays) * 100;
+                              const info = TRAINING_PHASE_TYPES.find((t) => t.id === ph.type) || TRAINING_PHASE_TYPES[0];
+                              return (
+                                <div
+                                  key={ph.id}
+                                  style={{ width: `${width}%`, backgroundColor: info.color }}
+                                  title={`${info.label}: ${new Date(ph.startDate).toLocaleDateString("en-GB")} → ${new Date(ph.endDate).toLocaleDateString("en-GB")}`}
+                                />
+                              );
+                            })}
+                          </div>
+                          <div className="space-y-2 mt-3">
+                            {plan.phases.map((ph) => {
+                              const info = TRAINING_PHASE_TYPES.find((t) => t.id === ph.type) || TRAINING_PHASE_TYPES[0];
+                              return (
+                                <div key={ph.id} className="bg-white rounded-xl p-3 flex items-start gap-3">
+                                  <span className="w-2.5 h-2.5 rounded-full mt-1 shrink-0" style={{ backgroundColor: info.color }} />
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="font-semibold text-sm text-slate-800">{info.label}</span>
+                                      <span className="text-xs text-slate-400 shrink-0">
+                                        {new Date(ph.startDate).toLocaleDateString("en-GB")} → {new Date(ph.endDate).toLocaleDateString("en-GB")}
+                                      </span>
+                                    </div>
+                                    <p className="text-xs text-slate-400 mt-0.5">{info.description}</p>
+                                    {ph.weeklySessions && <p className="text-xs text-slate-500 mt-1">{ph.weeklySessions} sessions/week</p>}
+                                    {ph.notes && <p className="text-xs text-slate-600 mt-1">{ph.notes}</p>}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+            </div>
+          )}
+          </>
+          )}
+
+          {planModal && <TrainingPlanForm modal={planModal} onSave={savePlan} onCancel={() => setPlanModal(null)} />}
+        </div>
+      )}
+
       {tab === "accounts" && canEdit && isTabEnabled("accounts") && (
         <div>
           <div className="flex items-center justify-between mb-4 gap-2">
@@ -20736,12 +21702,7 @@ function CoachView({ onExit, preAuthedCoach = null }) {
   const [coachLevelAccess, setCoachLevelAccess] = useState([]);
   const [myPayroll, setMyPayroll] = useState(null); // this coach's own net pay, this month — only computed if showOwnSalary is on
   const [workoutDate, setWorkoutDate] = useState(todayISO());
-  const [warmUp, setWarmUp] = useState("");
-  const [mainSet, setMainSet] = useState("");
-  const [coolDown, setCoolDown] = useState("");
-  const [workoutSaving, setWorkoutSaving] = useState(false);
-  const [workoutSaved, setWorkoutSaved] = useState(false);
-  const [pastWorkouts, setPastWorkouts] = useState([]);
+  const [myLevelWorkouts, setMyLevelWorkouts] = useState([]); // every daily workout matching a level this coach currently teaches
 
   useEffect(() => {
     if (!authedCoach) return;
@@ -20770,41 +21731,6 @@ function CoachView({ onExit, preAuthedCoach = null }) {
     return false;
   }, [coachProgramAccess, coachLevelAccess]);
 
-  const loadWorkoutForDate = useCallback(
-    async (date) => {
-      if (!authedCoach) return;
-      const all = await loadCollection(STORE_KEYS.workouts);
-      const mine = all.filter((w) => w.coachId === authedCoach.id);
-      setPastWorkouts(mine.sort((a, b) => b.date.localeCompare(a.date)).slice(0, 14));
-      const existing = mine.find((w) => w.date === date);
-      setWarmUp(existing?.warmUp || "");
-      setMainSet(existing?.mainSet || "");
-      setCoolDown(existing?.coolDown || "");
-    },
-    [authedCoach]
-  );
-
-  useEffect(() => {
-    if (authedCoach?.canWriteWorkouts) loadWorkoutForDate(workoutDate);
-  }, [authedCoach, workoutDate, loadWorkoutForDate]);
-
-  const saveWorkout = async () => {
-    setWorkoutSaving(true);
-    setWorkoutSaved(false);
-    try {
-      const all = await loadCollection(STORE_KEYS.workouts);
-      const idx = all.findIndex((w) => w.coachId === authedCoach.id && w.date === workoutDate);
-      const record = { id: idx === -1 ? genId() : all[idx].id, coachId: authedCoach.id, coachName: authedCoach.name, date: workoutDate, warmUp, mainSet, coolDown };
-      const next = idx === -1 ? [...all, record] : all.map((w, i) => (i === idx ? record : w));
-      await saveCollection(STORE_KEYS.workouts, next);
-      setWorkoutSaved(true);
-      loadWorkoutForDate(workoutDate);
-      setTimeout(() => setWorkoutSaved(false), 2500);
-    } finally {
-      setWorkoutSaving(false);
-    }
-  };
-
 
   useEffect(() => {
     if (!authedCoach?.showOwnSalary || !authedCoach?.monthlySalary) { setMyPayroll(null); return; }
@@ -20831,6 +21757,49 @@ function CoachView({ onExit, preAuthedCoach = null }) {
   const [checkingInOut, setCheckingInOut] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanMessage, setScanMessage] = useState("");
+
+  const loadWorkoutForDate = useCallback(
+    async (date) => {
+      if (!authedCoach) return;
+      const all = await loadCollection(STORE_KEYS.workouts);
+      // Written by admin/technical director per squad LEVEL, not per
+      // coach — a coach sees whichever plan matches a level they
+      // currently teach (from their own swimmer roster), so reassigning
+      // who runs a squad never leaves anyone looking at the wrong plan
+      // or a blank one.
+      const myLevels = new Set(swimmers.map((s) => s.level).filter(Boolean));
+      const relevant = all.filter((w) => myLevels.has(w.level) && w.date === date);
+      setMyLevelWorkouts(relevant);
+    },
+    [authedCoach, swimmers]
+  );
+
+  useEffect(() => {
+    if (authedCoach) loadWorkoutForDate(workoutDate);
+  }, [authedCoach, workoutDate, loadWorkoutForDate]);
+
+  // Same "which levels does this coach currently teach" resolution as
+  // the daily workout above — finds whichever week (across every level
+  // this coach teaches) actually contains today's date, so the coach
+  // sees this week's volume/zone split and today's specific focus
+  // without needing to know which week number it is.
+  const [myCurrentWeeks, setMyCurrentWeeks] = useState([]);
+  useEffect(() => {
+    if (!authedCoach) return;
+    (async () => {
+      const all = await loadCollection(STORE_KEYS.weeklyVolumes);
+      const myLevels = new Set(swimmers.map((s) => s.level).filter(Boolean));
+      const todayKey = todayISO();
+      const relevant = all.filter((w) => {
+        if (!myLevels.has(w.level)) return false;
+        const start = new Date(w.startDate);
+        const end = new Date(start.getTime() + 7 * 86400000);
+        const today = new Date(todayKey);
+        return today >= start && today < end;
+      });
+      setMyCurrentWeeks(relevant);
+    })();
+  }, [authedCoach, swimmers]);
 
   useEffect(() => {
     if (!authedCoach) return;
@@ -21093,84 +22062,77 @@ function CoachView({ onExit, preAuthedCoach = null }) {
         </div>
       )}
 
-      {authedCoach?.canWriteWorkouts && (
-        <div className="mb-6 bg-slate-50 rounded-2xl p-4">
-          <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-            <h3 className="font-bold text-slate-900">Daily training plan</h3>
-            <input
-              type="date"
-              value={workoutDate}
-              onChange={(e) => setWorkoutDate(e.target.value)}
-              className="border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-sky-900 bg-white"
-            />
-          </div>
-          <div className="space-y-3">
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">Warm up</label>
-              <textarea
-                value={warmUp}
-                onChange={(e) => setWarmUp(e.target.value)}
-                rows={3}
-                className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900"
-                placeholder="e.g. 400m easy freestyle, 200m kick"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">Main set</label>
-              <textarea
-                value={mainSet}
-                onChange={(e) => setMainSet(e.target.value)}
-                rows={4}
-                className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900"
-                placeholder="e.g. 8x100m freestyle @1:30, 4x50m sprint"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500 mb-1 block">Cool down</label>
-              <textarea
-                value={coolDown}
-                onChange={(e) => setCoolDown(e.target.value)}
-                rows={2}
-                className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900"
-                placeholder="e.g. 200m easy swim"
-              />
-            </div>
-          </div>
-          <div className="flex items-center gap-2 mt-3">
-            <button
-              onClick={saveWorkout}
-              disabled={workoutSaving}
-              className="flex-1 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
-            >
-              {workoutSaving ? "Saving..." : workoutSaved ? "Saved ✓" : "Save"}
-            </button>
-            <button
-              onClick={() => printWorkout({ coachName: authedCoach.name, date: workoutDate, warmUp, mainSet, coolDown })}
-              className="px-4 py-2.5 rounded-lg bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200"
-            >
-              Print
-            </button>
-          </div>
-          {pastWorkouts.length > 0 && (
-            <div className="mt-4 pt-4 border-t border-slate-100">
-              <div className="text-xs text-slate-400 mb-1.5">Recent plans</div>
-              <div className="flex flex-wrap gap-1.5">
-                {pastWorkouts.map((w) => (
-                  <button
-                    key={w.id}
-                    onClick={() => setWorkoutDate(w.date)}
-                    className={`text-xs px-2.5 py-1 rounded-full font-medium ${
-                      w.date === workoutDate ? "bg-sky-950 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                    }`}
-                  >
-                    {w.date}
-                  </button>
-                ))}
+      {myCurrentWeeks.length > 0 && (
+        <div className="mb-6 space-y-3">
+          {myCurrentWeeks.map((week) => {
+            const todayIdx = new Date().getDay(); // 0=Sunday, matching WEEK_DAYS order
+            const todayInfo = week.days?.[WEEK_DAYS[todayIdx].id];
+            return (
+              <div key={week.id} className="bg-slate-50 rounded-2xl p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold px-2 py-1 rounded-full bg-sky-50 text-sky-800">{week.level}</span>
+                  <span className="text-xs text-slate-400">{week.weekLabel} · {Number(week.totalVolume || 0).toLocaleString()}m total</span>
+                </div>
+                <div className="grid grid-cols-4 gap-2 mb-3">
+                  {VOLUME_ZONES.map((z) => (
+                    <div key={z.id} className="bg-white rounded-lg p-2 text-center">
+                      <div className="text-[10px] text-slate-400">{z.label}</div>
+                      <div className="text-sm font-semibold text-slate-800">{week.zones?.[z.id] || 0}%</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="bg-white rounded-lg p-2.5">
+                  <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-0.5">Today</div>
+                  {todayInfo?.off ? (
+                    <div className="text-sm text-slate-400">Rest day</div>
+                  ) : (
+                    <div className="text-sm text-slate-700">{todayInfo?.focus || "No focus set for today"}</div>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })}
         </div>
       )}
+
+      <div className="mb-6 bg-slate-50 rounded-2xl p-4">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <h3 className="font-bold text-slate-900">Today's training plan</h3>
+          <input
+            type="date"
+            value={workoutDate}
+            onChange={(e) => setWorkoutDate(e.target.value)}
+            className="border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-sky-900 bg-white"
+          />
+        </div>
+        {myLevelWorkouts.length === 0 ? (
+          <p className="text-sm text-slate-400 text-center py-6">
+            No training plan set for this date yet — check back closer to the session, or ask the technical director.
+          </p>
+        ) : (
+          <div className="space-y-4">
+            {myLevelWorkouts.map((w) => (
+              <div key={w.id} className="bg-white rounded-xl p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold px-2 py-1 rounded-full bg-sky-50 text-sky-800">{w.level}</span>
+                  <button
+                    onClick={() => printWorkout({ level: w.level, date: w.date, ...w })}
+                    className="text-xs text-slate-500 hover:text-sky-900 font-medium"
+                  >
+                    Print
+                  </button>
+                </div>
+                {workoutSectionsFor(w.level).filter((s) => w[s.key]).map((s) => (
+                  <div key={s.key} className="mb-2.5 last:mb-0">
+                    <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-0.5">{s.label}</div>
+                    <div className="text-sm text-slate-700 whitespace-pre-wrap">{w[s.key]}</div>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <CoachTrainingSection coachId={authedCoach?.id} coachName={authedCoach?.name} />
 
