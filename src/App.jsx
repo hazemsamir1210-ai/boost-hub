@@ -1367,13 +1367,13 @@ function exportSeasonPdf(season, level, weeks) {
         return `<td>${pct}% <span class="sub">(${meters.toLocaleString()}m)</span></td>`;
       }).join("");
       const dayCells = WEEK_DAYS.map((d) => `<td>${dayCell(w.days?.[d.id])}</td>`).join("");
-      const loadInfo = TRAINING_LOAD_LEVELS.find((l) => l.id === (w.trainingLoad || "moderate"));
+      const loadInfo = loadInfoForWeek(w);
       const completionPct = w.actualVolume != null && w.totalVolume > 0 ? Math.round((Number(w.actualVolume) / Number(w.totalVolume)) * 100) : null;
       return `<tr>
         <td class="week-label">${escapeHtml(w.weekLabel)}</td>
         <td>${new Date(w.startDate).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</td>
         <td>${Number(w.totalVolume || 0).toLocaleString()}m${completionPct != null ? `<br><span class="sub">${completionPct}% actual</span>` : ""}</td>
-        <td><span class="load-chip" style="background:${loadInfo.color}">${loadInfo.label}</span></td>
+        <td><span class="load-chip" style="background:${loadInfo.color}">RPE ${loadInfo.rpe} · ${loadInfo.label}</span></td>
         ${zoneCells}
         ${dayCells}
       </tr>`;
@@ -1773,6 +1773,20 @@ const TRAINING_LOAD_LEVELS = [
   { id: "hard", label: "Hard", color: "#dc2626" },
 ];
 
+// A week's intensity is set on a 1-10 RPE scale, with the Easy/Moderate/
+// Hard label and color derived from it rather than chosen separately —
+// one number driving both, instead of two fields that could disagree.
+// Weeks saved before RPE existed only have the old trainingLoad string,
+// so this also accepts that as a fallback and maps it to a sensible
+// starting number.
+const RPE_TO_LOAD_ID = (rpe) => (rpe <= 3 ? "easy" : rpe <= 7 ? "moderate" : "hard");
+const LOAD_ID_TO_RPE = { easy: 3, moderate: 5, hard: 8 };
+function loadInfoForWeek(week) {
+  const rpe = week.rpe ?? LOAD_ID_TO_RPE[week.trainingLoad || "moderate"];
+  const loadId = RPE_TO_LOAD_ID(rpe);
+  return { rpe, ...TRAINING_LOAD_LEVELS.find((l) => l.id === loadId) };
+}
+
 // Works out which season phase (Base/Build/Peak/etc, from the separate
 // Season Phases plans) a given week actually falls inside, purely by
 // date overlap — no manual linking required, and it can never drift out
@@ -1789,6 +1803,51 @@ function phaseForWeek(week, seasonPlans) {
     }
   }
   return null;
+}
+
+// Finds which Season Builder week (for this level) a given daily
+// workout date falls inside — purely by date range, exactly like
+// phaseForWeek above, so a daily workout is never explicitly tagged
+// with a week ID that could go stale if the week's dates get edited.
+function weekForDate(date, level, allWeeks, allSeasons) {
+  const target = new Date(date);
+  const week = allWeeks
+    .filter((w) => w.level === level)
+    .find((w) => {
+      const start = new Date(w.startDate);
+      const end = new Date(start.getTime() + 7 * 86400000);
+      return target >= start && target < end;
+    });
+  if (!week) return null;
+  const season = allSeasons.find((s) => s.id === week.seasonId);
+  return { week, season };
+}
+
+// Turns the week's own day-by-day plan into real numbers from the
+// attendance already being recorded elsewhere in the app — no separate
+// "log attendance for training plans" step, since the swimmers at this
+// level are already being checked in and out day to day regardless of
+// this feature. Only counts days NOT marked Off, and only swimmers who
+// actually have a session on this level that week (matches WEEK_DAYS'
+// Sun-first order against JS's own Date.getDay()).
+function weeklyAttendanceSummary(week, swimmers) {
+  const weekStart = new Date(week.startDate);
+  const mySwimmers = swimmers.filter((s) => s.level === week.level);
+  let expected = 0;
+  let present = 0;
+  WEEK_DAYS.forEach((d, i) => {
+    const dayInfo = week.days?.[d.id];
+    if (!dayInfo || dayInfo.off) return;
+    const dateISO = toISODate(new Date(weekStart.getTime() + i * 86400000));
+    mySwimmers.forEach((s) => {
+      const status = s.attendance?.[dateISO];
+      if (status === "present" || status === "absent") {
+        expected++;
+        if (status === "present") present++;
+      }
+    });
+  });
+  return { expected, present, pct: expected > 0 ? Math.round((present / expected) * 100) : null };
 }
 
 const WEEK_DAYS = [
@@ -6442,9 +6501,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       startDate: nextStart,
       totalVolume: lastWeek?.totalVolume || 0,
       actualVolume: null, // filled in after the week actually happens — null (not 0) means "not recorded yet"
-      trainingLoad: lastWeek?.trainingLoad || "moderate",
+      rpe: lastWeek?.rpe ?? LOAD_ID_TO_RPE[lastWeek?.trainingLoad || "moderate"],
       weeklyGoal: "",
       technicalFocus: "",
+      technicalSkills: [],
       zones: lastWeek?.zones || { warmUp: 0, en1: 0, en2: 0, en3: 0, sp1: 0, coolDown: 0 },
       strokes: lastWeek?.strokes || { freestyle: 0, backstroke: 0, breaststroke: 0, butterfly: 0 },
       days: blankWeekDays(),
@@ -18719,7 +18779,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     const zoneTotal = VOLUME_ZONES.reduce((sum, z) => sum + (Number(week.zones?.[z.id]) || 0), 0);
                     const phase = phaseForWeek(week, trainingPlans);
                     const phaseInfo = phase ? TRAINING_PHASE_TYPES.find((t) => t.id === phase.type) : null;
-                    const loadInfo = TRAINING_LOAD_LEVELS.find((l) => l.id === (week.trainingLoad || "moderate"));
+                    const loadInfo = loadInfoForWeek(week);
                     const completionPct = week.actualVolume != null && week.totalVolume > 0
                       ? Math.round((Number(week.actualVolume) / Number(week.totalVolume)) * 100)
                       : null;
@@ -18738,7 +18798,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                 </span>
                               )}
                               <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium text-white" style={{ backgroundColor: loadInfo.color }}>
-                                {loadInfo.label} load
+                                RPE {loadInfo.rpe} · {loadInfo.label}
                               </span>
                             </div>
                             <div className="text-xs text-slate-400">
@@ -18779,21 +18839,31 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                             )}
 
                             <div className="mb-4">
-                              <label className="text-xs text-slate-500 mb-1 block">Training load for the week</label>
-                              <div className="flex gap-2">
-                                {TRAINING_LOAD_LEVELS.map((l) => (
-                                  <button
-                                    key={l.id}
-                                    onClick={() => updateWeek(week.id, { trainingLoad: l.id })}
-                                    className={`flex-1 py-2 rounded-lg text-sm font-medium border-2 transition ${
-                                      (week.trainingLoad || "moderate") === l.id ? "text-white border-transparent" : "bg-white text-slate-500 border-slate-200"
-                                    }`}
-                                    style={(week.trainingLoad || "moderate") === l.id ? { backgroundColor: l.color } : {}}
-                                  >
-                                    {l.label}
-                                  </button>
-                                ))}
-                              </div>
+                              {(() => {
+                                const li = loadInfoForWeek(week);
+                                return (
+                                  <>
+                                    <label className="text-xs text-slate-500 mb-1 flex items-center justify-between">
+                                      <span>Training load (RPE) for the week</span>
+                                      <span className="font-semibold" style={{ color: li.color }}>{li.rpe}/10 · {li.label}</span>
+                                    </label>
+                                    <input
+                                      type="range"
+                                      min="1"
+                                      max="10"
+                                      step="1"
+                                      value={li.rpe}
+                                      onChange={(e) => updateWeek(week.id, { rpe: Number(e.target.value) })}
+                                      className="w-full accent-current"
+                                      style={{ accentColor: li.color }}
+                                    />
+                                    <div className="flex justify-between text-[10px] text-slate-400 mt-0.5">
+                                      <span>1 · Very easy</span>
+                                      <span>10 · Maximal</span>
+                                    </div>
+                                  </>
+                                );
+                              })()}
                             </div>
 
                             <div className="grid sm:grid-cols-2 gap-3 mb-4">
@@ -18807,15 +18877,45 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                 />
                               </div>
                               <div>
-                                <label className="text-xs text-slate-500 mb-1 block">Technical focus</label>
+                                <label className="text-xs text-slate-500 mb-1 block">Technical focus — other notes</label>
                                 <input
                                   value={week.technicalFocus || ""}
                                   onChange={(e) => updateWeek(week.id, { technicalFocus: e.target.value })}
-                                  placeholder="e.g. Breaststroke timing, turns"
+                                  placeholder="Anything not covered by the skills below"
                                   className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                                 />
                               </div>
                             </div>
+
+                            {(LEVEL_SKILLS[week.level] || []).length > 0 && (
+                              <div className="mb-4">
+                                <label className="text-xs text-slate-500 mb-1.5 block">
+                                  Technical focus — from {week.level}'s skill list
+                                </label>
+                                <div className="flex flex-wrap gap-2">
+                                  {LEVEL_SKILLS[week.level].map((skill) => {
+                                    const selected = (week.technicalSkills || []).includes(skill);
+                                    return (
+                                      <button
+                                        key={skill}
+                                        onClick={() =>
+                                          updateWeek(week.id, {
+                                            technicalSkills: selected
+                                              ? (week.technicalSkills || []).filter((s) => s !== skill)
+                                              : [...(week.technicalSkills || []), skill],
+                                          })
+                                        }
+                                        className={`text-xs px-2.5 py-1.5 rounded-full font-medium transition ${
+                                          selected ? "bg-sky-950 text-white" : "bg-white text-slate-500 border border-slate-200 hover:border-slate-300"
+                                        }`}
+                                      >
+                                        {skill}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
 
                             <div className="grid sm:grid-cols-2 gap-3 mb-4">
                               <div>
@@ -18846,6 +18946,21 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                 )}
                               </div>
                             </div>
+
+                            {(() => {
+                              const att = weeklyAttendanceSummary(week, swimmers);
+                              if (att.pct == null) return null;
+                              return (
+                                <div className="bg-white rounded-xl p-3 mb-4 flex items-center justify-between">
+                                  <div className="text-xs text-slate-500">
+                                    Attendance across this week's training days — from the same records used in Attendance/Payroll, not entered separately here
+                                  </div>
+                                  <div className={`text-sm font-semibold shrink-0 ml-3 ${att.pct >= 90 ? "text-green-700" : att.pct >= 70 ? "text-amber-600" : "text-red-500"}`}>
+                                    {att.present}/{att.expected} · {att.pct}%
+                                  </div>
+                                </div>
+                              );
+                            })()}
 
                             <div className="mb-5">
                               <div className="text-xs font-semibold text-slate-500 mb-2">
@@ -18981,6 +19096,28 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 </select>
               </div>
 
+
+              {(() => {
+                const linked = weekForDate(dailyWorkoutDate, dailyWorkoutLevel, weeklyVolumes, seasons);
+                if (!linked) return null;
+                const phase = phaseForWeek(linked.week, trainingPlans);
+                const phaseInfo = phase ? TRAINING_PHASE_TYPES.find((t) => t.id === phase.type) : null;
+                return (
+                  <div className="text-xs text-slate-500 bg-sky-50 rounded-lg px-3 py-2 mb-3 flex items-center gap-2 flex-wrap">
+                    <span className="font-medium text-sky-900">{linked.season?.name || "Season"}</span>
+                    <span>·</span>
+                    <span>{linked.week.weekLabel}</span>
+                    {phaseInfo && (
+                      <>
+                        <span>·</span>
+                        <span className="px-1.5 py-0.5 rounded-full text-white text-[10px] font-medium" style={{ backgroundColor: phaseInfo.color }}>
+                          {phaseInfo.label}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
               <div className="bg-slate-50 rounded-2xl p-5">
                 <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                   <div className="text-xs text-slate-400">
@@ -22110,6 +22247,21 @@ function CoachView({ onExit, preAuthedCoach = null }) {
   const [myPayroll, setMyPayroll] = useState(null); // this coach's own net pay, this month — only computed if showOwnSalary is on
   const [workoutDate, setWorkoutDate] = useState(todayISO());
   const [myLevelWorkouts, setMyLevelWorkouts] = useState([]); // every daily workout matching a level this coach currently teaches
+  const [myWeeklyVolumes, setMyWeeklyVolumes] = useState([]);
+  const [mySeasons, setMySeasons] = useState([]);
+  const [myTrainingPlans, setMyTrainingPlans] = useState([]);
+  useEffect(() => {
+    if (!authedCoach) return;
+    Promise.all([
+      loadCollection(STORE_KEYS.weeklyVolumes),
+      loadCollection(STORE_KEYS.seasons),
+      loadCollection(STORE_KEYS.trainingPlans),
+    ]).then(([weeklyVolumes, seasons, trainingPlans]) => {
+      setMyWeeklyVolumes(weeklyVolumes);
+      setMySeasons(seasons);
+      setMyTrainingPlans(trainingPlans);
+    });
+  }, [authedCoach]);
 
   useEffect(() => {
     if (!authedCoach) return;
@@ -22568,8 +22720,27 @@ function CoachView({ onExit, preAuthedCoach = null }) {
           </p>
         ) : (
           <div className="space-y-4">
-            {myLevelWorkouts.map((w) => (
+            {myLevelWorkouts.map((w) => {
+              const linked = weekForDate(w.date, w.level, myWeeklyVolumes, mySeasons);
+              const phase = linked ? phaseForWeek(linked.week, myTrainingPlans) : null;
+              const phaseInfo = phase ? TRAINING_PHASE_TYPES.find((t) => t.id === phase.type) : null;
+              return (
               <div key={w.id} className="bg-white rounded-xl p-4">
+                {linked && (
+                  <div className="text-[11px] text-slate-400 mb-2 flex items-center gap-1.5 flex-wrap">
+                    {linked.season?.name && <span>{linked.season.name}</span>}
+                    <span>·</span>
+                    <span>{linked.week.weekLabel}</span>
+                    {phaseInfo && (
+                      <span className="px-1.5 py-0.5 rounded-full text-white font-medium" style={{ backgroundColor: phaseInfo.color }}>
+                        {phaseInfo.label}
+                      </span>
+                    )}
+                    {(linked.week.technicalSkills || []).length > 0 && (
+                      <span>· Focus: {linked.week.technicalSkills.join(", ")}</span>
+                    )}
+                  </div>
+                )}
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-semibold px-2 py-1 rounded-full bg-sky-50 text-sky-800">{w.level}</span>
                   <button
@@ -22647,7 +22818,8 @@ function CoachView({ onExit, preAuthedCoach = null }) {
                   )}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
