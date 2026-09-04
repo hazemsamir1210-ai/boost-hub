@@ -22403,25 +22403,14 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   const loadMakeupToday = useCallback(async () => {
     if (!authed) return;
     try {
-      // Fetched and filtered in plain JS rather than a jsonb query — a
-      // branch's roster is small enough that this is simpler and more
-      // reliable than a partial-match query against a jsonb array.
-      // Not filtered by branch — there's only ever one, and this way a
-      // swimmer with a slightly different/missing branch value still
-      // shows up here instead of silently vanishing.
-      const { data, error } = await supabase
-        .from("swimmers")
-        .select("data")
-        .eq("academy_id", window.__academy?.id);
-      if (error) {
-        console.warn("load makeup sessions failed", error);
-        return;
-      }
+      // Reads the canonical roster (same as loadSwimmers above), not the
+      // Supabase mirror table — same consistency reasoning as there.
+      const all = await fetchAllSwimmers();
       const today = todayISO();
       const rows = [];
-      (data || []).forEach((r) => {
-        (r.data.makeupSessions || []).forEach((m) => {
-          if (m.date === today) rows.push({ swimmer: r.data, session: m });
+      all.forEach((s) => {
+        (s.makeupSessions || []).forEach((m) => {
+          if (m.date === today) rows.push({ swimmer: s, session: m });
         });
       });
       rows.sort((a, b) => a.session.time.localeCompare(b.session.time));
@@ -22457,38 +22446,31 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   const loadSwimmers = useCallback(async () => {
     setLoading(true);
     try {
-      // Fetch every swimmer in this branch (and level, if this account is
-      // restricted to one), then match the session in JS using each
-      // swimmer's MONTH-RESOLVED schedule (getMonthlySchedule) — the same
-      // source ClassCalendarGrid reads — instead of filtering the raw
-      // top-level day/time columns in the query. A swimmer's real slot for
-      // this month can live entirely inside monthlySchedules[thisMonth]
-      // and differ from their top-level day/time, so filtering on those
-      // raw columns silently dropped anyone with a monthly override —
-      // they'd show on the Schedule/calendar screens but never appear
-      // here for staff to search or check in.
-      let query = supabase.from("swimmers").select("data").eq("academy_id", window.__academy?.id);
-      // Same reasoning as loadMakeupToday above: only filter by branch at
-      // the database level when this academy actually has more than one.
-      // With just a single branch (the common case), filtering strictly
-      // on the "branch" column meant a swimmer whose stored branch value
-      // was missing or slightly different (e.g. left over from before
-      // multi-branch support, or a record touched by an older import)
-      // silently disappeared from every session here — even though they
-      // showed up fine on Schedule/the calendar, and there was never a
-      // second real branch for them to actually belong to instead.
-      if (BRANCHES.length > 1) query = query.eq("branch", branch);
-      if (effectiveLevel) query = query.eq("level", effectiveLevel);
-      const { data, error } = await query;
-      if (error) throw error;
+      // Reads the SAME canonical roster the admin's Schedule/Dashboard/
+      // Coaches tabs read (fetchAllSwimmers -> the "swimmers-all" store),
+      // not the separate "swimmers" table in Supabase. That table is only
+      // a denormalized mirror kept for search/pagination, synced in the
+      // background — and every bug chased on this screen so far
+      // (raw day/time columns not accounting for monthlySchedules
+      // overrides, a branch mismatch silently excluding swimmers, an RLS
+      // policy blocking the mirror sync outright, an oversized delete
+      // query failing the sync) came from relying on that second copy.
+      // Reading the real roster directly removes that whole category of
+      // drift: whatever Schedule shows for a slot, Technical now shows
+      // the exact same thing, because it's the exact same data. Matching
+      // the session uses each swimmer's MONTH-RESOLVED schedule
+      // (getMonthlySchedule) — the same source ClassCalendarGrid reads —
+      // so a swimmer whose slot for this month lives in a
+      // monthlySchedules override is matched correctly too.
+      const all = await fetchAllSwimmers();
       const thisMonth = monthKey();
-      const inSlot = (data || [])
-        .map((r) => r.data)
-        .filter((s) => {
-          const ms = getMonthlySchedule(s, thisMonth);
-          if (!ms) return false;
-          return (ms.day === dayGroup && ms.time === time) || (ms.day2 === dayGroup && ms.time2 === time);
-        });
+      const inSlot = all.filter((s) => {
+        if (BRANCHES.length > 1 && s.branch !== branch) return false;
+        if (effectiveLevel && s.level !== effectiveLevel) return false;
+        const ms = getMonthlySchedule(s, thisMonth);
+        if (!ms) return false;
+        return (ms.day === dayGroup && ms.time === time) || (ms.day2 === dayGroup && ms.time2 === time);
+      });
       setSwimmers(inSlot);
     } catch (e) {
       console.warn("load swimmers failed", e);
