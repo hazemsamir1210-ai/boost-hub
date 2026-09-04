@@ -11969,9 +11969,6 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         } else if (role === "technical" && myAccount?.levelRestriction && levelFilter === "all") {
           query = query.eq("level", myAccount.levelRestriction);
         }
-        if (dayFilter !== "all") query = query.filter("data->>day", "eq", dayFilter);
-        if (timeFilter !== "all") query = query.filter("data->>time", "eq", timeFilter);
-        if (sessionTypeFilter !== "all") query = query.filter("data->>sessionType", "eq", sessionTypeFilter);
         if (paymentStatusFilter === "paid") {
           query = query.filter("data->paidMonths", "cs", JSON.stringify([paymentMonthFilter]));
         } else if (paymentStatusFilter === "unpaid") {
@@ -11979,30 +11976,38 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         }
         const q = search.trim();
         if (q) query = query.or(`name.ilike.%${q}%,phone.ilike.%${q}%`);
-        // Every coachId comparison — a specific coach or "no coach" — is
-        // filtered client-side, never at the database level. The
-        // server-side JSON-path filter for this one field has proved
-        // unreliable across several attempts (both equality and null
-        // checks), so this fetches every swimmer matching every OTHER
-        // filter (uncapped, not paginated) and does the coachId match in
-        // plain JS, which is guaranteed correct no matter how coachId
-        // happens to be represented in the stored data.
-        if (coachFilterValue !== "all") {
+        // Day, time, session type, and coach can each be overridden for a
+        // specific month inside monthlySchedules without touching the
+        // swimmer's top-level fields. Filtering any of these at the
+        // database level (data->>day, data->>time, data->>sessionType)
+        // only ever matched the top-level values, so a swimmer who moved
+        // days/times/coach for the month being viewed (via a
+        // monthlySchedules override) was silently dropped from these
+        // filtered results even though getMonthlySchedule() would
+        // correctly place them in that slot. All four are matched
+        // client-side instead, against getMonthlySchedule(), which keeps
+        // this filter's answer consistent with getMonthlySchedule() and
+        // with what Schedule/the coach grid show for the same slot.
+        if (dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || coachFilterValue !== "all") {
           query = query.order("name", { ascending: true });
           const { data, error } = await query;
           if (error) throw error;
-          // The coach that actually applies to the month being viewed
-          // ("Acting on") — a swimmer edited for a future month has that
-          // month's own coachId saved separately under monthlySchedules,
-          // without touching their top-level coachId at all, so checking
-          // only the top-level field misses exactly those swimmers.
-          const effectiveCoachId = (s) => {
-            const monthEntry = s.monthlySchedules?.[paymentMonthFilter];
-            return monthEntry ? monthEntry.coachId : s.coachId;
-          };
           const items = (data || [])
             .map((r) => r.data)
-            .filter((s) => (coachFilterValue === "none" ? !effectiveCoachId(s) : String(effectiveCoachId(s)) === String(coachFilterValue)));
+            .filter((s) => {
+              const ms = getMonthlySchedule(s, paymentMonthFilter);
+              const effDay = ms ? ms.day : s.day;
+              const effTime = ms ? ms.time : s.time;
+              const effSessionType = ms ? ms.sessionType : s.sessionType;
+              const effCoachId = ms ? ms.coachId : s.coachId;
+              if (dayFilter !== "all" && effDay !== dayFilter) return false;
+              if (timeFilter !== "all" && effTime !== timeFilter) return false;
+              if (sessionTypeFilter !== "all" && effSessionType !== sessionTypeFilter) return false;
+              if (coachFilterValue !== "all") {
+                if (coachFilterValue === "none" ? !!effCoachId : String(effCoachId) !== String(coachFilterValue)) return false;
+              }
+              return true;
+            });
           setSwimmersPage(items);
           setSwimmersPageTotal(items.length);
           return;
@@ -16124,9 +16129,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           // top-level coachId (booked ahead into this month before it
           // arrived), so checking only the raw top-level fields
           // mis-attributed swimmers to the wrong coach, or missed them
-          // entirely, in this exact KPI.
+          // entirely, in this exact KPI. Resolved against the MONTH BEING
+          // VIEWED (selectedMonthKey), not always today's real month —
+          // otherwise picking a past month in the dropdown still showed
+          // today's active-swimmer set, throwing off active count, skills
+          // coverage, retention, and overall score for anything but the
+          // current month.
           const myActiveSwimmers = swimmers.filter((s) => {
-            const ms = getMonthlySchedule(s, monthKey());
+            const ms = getMonthlySchedule(s, selectedMonthKey);
             return ms && (ms.coachId === c.id || ms.coachId2 === c.id);
           });
           const mySwimmers = swimmers.filter((s) => s.coachId === c.id || s.coachId2 === c.id || myActiveSwimmers.includes(s));
@@ -22342,17 +22352,29 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   const loadSwimmers = useCallback(async () => {
     setLoading(true);
     try {
-      // Only fetch swimmers in THIS exact session (branch/day/time, and
-      // level if this account is restricted to one) — a staff member is
-      // only ever looking at one session at a time, so there's no reason
-      // to load the whole roster to show it. Matches either a swimmer's
-      // main slot OR their second weekly slot, if they have one.
-      let query = supabase.from("swimmers").select("data").eq("academy_id", window.__academy?.id).eq("branch", branch)
-        .or(`and(data->>day.eq.${dayGroup},data->>time.eq.${time}),and(data->>day2.eq.${dayGroup},data->>time2.eq.${time})`);
+      // Fetch every swimmer in this branch (and level, if this account is
+      // restricted to one), then match the session in JS using each
+      // swimmer's MONTH-RESOLVED schedule (getMonthlySchedule) — the same
+      // source ClassCalendarGrid reads — instead of filtering the raw
+      // top-level day/time columns in the query. A swimmer's real slot for
+      // this month can live entirely inside monthlySchedules[thisMonth]
+      // and differ from their top-level day/time, so filtering on those
+      // raw columns silently dropped anyone with a monthly override —
+      // they'd show on the Schedule/calendar screens but never appear
+      // here for staff to search or check in.
+      let query = supabase.from("swimmers").select("data").eq("academy_id", window.__academy?.id).eq("branch", branch);
       if (effectiveLevel) query = query.eq("level", effectiveLevel);
       const { data, error } = await query;
       if (error) throw error;
-      setSwimmers((data || []).map((r) => r.data));
+      const thisMonth = monthKey();
+      const inSlot = (data || [])
+        .map((r) => r.data)
+        .filter((s) => {
+          const ms = getMonthlySchedule(s, thisMonth);
+          if (!ms) return false;
+          return (ms.day === dayGroup && ms.time === time) || (ms.day2 === dayGroup && ms.time2 === time);
+        });
+      setSwimmers(inSlot);
     } catch (e) {
       console.warn("load swimmers failed", e);
     } finally {
