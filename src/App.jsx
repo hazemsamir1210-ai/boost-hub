@@ -10815,16 +10815,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     setSwimmersLoading(true);
     try {
       const items = await loadCollection(STORE_KEYS.swimmers);
-      // Release the day/time slot for anyone who didn't renew — but only
-      // once per calendar month, not on every load/poll (otherwise a
-      // schedule just set on an unpaid swimmer would get wiped again
-      // within seconds by the next refresh).
+      // Advance anyone whose pre-booked NEXT month has now arrived — this
+      // still runs once per calendar month. Unpaid swimmers are NO LONGER
+      // auto-unscheduled here: payment is expected to be settled in
+      // person, so a swimmer who hasn't paid yet this month keeps their
+      // day/time/coach exactly as-is (they still show up on
+      // Schedule/Technical/etc.) instead of losing their slot the moment
+      // the calendar rolls over.
       const key = monthKey();
       let finalItems = items;
       if (resetCheckedForMonthRef.current !== key) {
         const lastReset = await getLastScheduleResetMonth();
         if (lastReset !== key) {
-          const reset = items.map((s) => clearedIfUnpaid(promotedIfDue(s, key)));
+          const reset = items.map((s) => promotedIfDue(s, key));
           if (reset.some((s, i) => s !== items[i])) {
             try {
               await saveCollection(STORE_KEYS.swimmers, reset);
