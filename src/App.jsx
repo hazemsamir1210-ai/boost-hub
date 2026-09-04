@@ -22464,7 +22464,17 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
       // raw columns silently dropped anyone with a monthly override —
       // they'd show on the Schedule/calendar screens but never appear
       // here for staff to search or check in.
-      let query = supabase.from("swimmers").select("data").eq("academy_id", window.__academy?.id).eq("branch", branch);
+      let query = supabase.from("swimmers").select("data").eq("academy_id", window.__academy?.id);
+      // Same reasoning as loadMakeupToday above: only filter by branch at
+      // the database level when this academy actually has more than one.
+      // With just a single branch (the common case), filtering strictly
+      // on the "branch" column meant a swimmer whose stored branch value
+      // was missing or slightly different (e.g. left over from before
+      // multi-branch support, or a record touched by an older import)
+      // silently disappeared from every session here — even though they
+      // showed up fine on Schedule/the calendar, and there was never a
+      // second real branch for them to actually belong to instead.
+      if (BRANCHES.length > 1) query = query.eq("branch", branch);
       if (effectiveLevel) query = query.eq("level", effectiveLevel);
       const { data, error } = await query;
       if (error) throw error;
