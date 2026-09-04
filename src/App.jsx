@@ -1216,6 +1216,7 @@ function escapeHtml(str) {
 function downloadReportHTML(filename, bodyHtml) {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(filename)}</title>
 <style>
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
   body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: #1e293b; padding: 32px; max-width: 800px; margin: 0 auto; }
   h1 { font-size: 18px; margin: 0 0 4px; }
   .sub { color: #64748b; font-size: 13px; margin-bottom: 24px; }
@@ -1269,6 +1270,7 @@ function printWaiverConfirmation({ swimmerName, age, parentName, phone, accepted
     </div>`;
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Registration Form</title>
 <style>
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
   body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: #1e293b; padding: 40px; max-width: 620px; margin: 0 auto; }
   .header { display: flex; align-items: center; gap: 14px; border-bottom: 3px solid #0b1e3a; padding-bottom: 16px; margin-bottom: 24px; }
   .header img { width: 52px; height: 52px; object-fit: contain; }
@@ -1344,6 +1346,7 @@ function printWaiverConfirmation({ swimmerName, age, parentName, phone, accepted
 function printReceipt({ swimmerName, phone, planName, price, receiptNo, paymentMethod, date }) {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Receipt</title>
 <style>
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
   body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: #1e293b; padding: 40px; max-width: 480px; margin: 0 auto; }
   .header { text-align: center; margin-bottom: 24px; }
   .header img { width: 56px; height: 56px; object-fit: contain; margin-bottom: 8px; }
@@ -1431,6 +1434,7 @@ function printWorkout({ coachName, level, date, totalDistance, ...sections }) {
   const computedTotal = totalDistance != null ? totalDistance : workoutTotalMeters(sections.sets, level);
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Training Plan</title>
 <style>
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
   body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: #1e293b; padding: 40px; max-width: 720px; margin: 0 auto; }
   .header { text-align: center; margin-bottom: 8px; }
   .header img { width: 56px; height: 56px; object-fit: contain; margin-bottom: 8px; }
@@ -1470,7 +1474,80 @@ function printWorkout({ coachName, level, date, totalDistance, ...sections }) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-// One row per week, laid out as a real bordered grid (not free-flowing
+// Test-set / personal-best report — same "download an auto-printing
+// HTML file" pattern as printWorkout above, so it opens straight into
+// the print dialog (handy right before a competition) with no popup
+// blocker in the way.
+function printTestReport({ swimmerName, level, rows }) {
+  const rowsHtml = rows
+    .map((t) => {
+      const eventLabel = TEST_EVENTS.find((e) => e.id === t.event)?.label || t.event;
+      return `<tr>
+        <td>${escapeHtml(new Date(t.date).toLocaleDateString("en-GB"))}</td>
+        ${swimmerName ? "" : `<td>${escapeHtml(t.swimmerName)}</td>`}
+        <td>${escapeHtml(eventLabel)}</td>
+        <td>${escapeHtml(formatSeconds(t.seconds))}</td>
+        <td>${escapeHtml(t.notes || "—")}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const pbBlock = swimmerName
+    ? (() => {
+        const events = [...new Set(rows.map((r) => r.event))];
+        const pbRows = events
+          .map((eventId) => {
+            const best = rows.filter((r) => r.event === eventId).reduce((b, r) => (r.seconds < b.seconds ? r : b));
+            const label = TEST_EVENTS.find((e) => e.id === eventId)?.label || eventId;
+            return `<div class="pb-chip"><div class="pb-event">${escapeHtml(label)}</div><div class="pb-time">${escapeHtml(formatSeconds(best.seconds))}</div><div class="pb-date">${escapeHtml(new Date(best.date).toLocaleDateString("en-GB"))}</div></div>`;
+          })
+          .join("");
+        return `<div class="pb-grid">${pbRows}</div>`;
+      })()
+    : "";
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Test Results</title>
+<style>
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
+  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: #1e293b; padding: 40px; max-width: 720px; margin: 0 auto; }
+  .header { text-align: center; margin-bottom: 8px; }
+  .header img { width: 56px; height: 56px; object-fit: contain; margin-bottom: 8px; }
+  .header h1 { font-size: 17px; margin: 0; }
+  .title { text-align: center; font-size: 20px; font-weight: 700; margin: 4px 0 4px; letter-spacing: 0.5px; }
+  .meta { text-align: center; color: #64748b; font-size: 13px; margin-bottom: 20px; }
+  .pb-grid { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 24px; }
+  .pb-chip { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 14px; min-width: 120px; }
+  .pb-event { font-size: 10px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.3px; }
+  .pb-time { font-size: 16px; font-weight: 700; color: #0b1e3a; }
+  .pb-date { font-size: 10px; color: #94a3b8; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #f1f5f9; }
+  th { color: #64748b; font-size: 11px; background: #f8fafc; }
+  @media print { body { padding: 0; } }
+</style></head><body>
+  <div class="header">
+    <img src="${CONFIG.logoDataUri}" />
+    <h1>${escapeHtml(CONFIG.academyName)}</h1>
+  </div>
+  <div class="title">Test Results</div>
+  <div class="meta">${swimmerName ? `${escapeHtml(swimmerName)} · ` : ""}${escapeHtml(level || "")} · ${escapeHtml(new Date().toLocaleDateString("en-GB"))}</div>
+  ${pbBlock}
+  <table>
+    <thead><tr><th>Date</th>${swimmerName ? "" : "<th>Swimmer</th>"}<th>Event</th><th>Time</th><th>Notes</th></tr></thead>
+    <tbody>${rowsHtml}</tbody>
+  </table>
+<script>window.onload = () => setTimeout(() => window.print(), 300);</script>
+</body></html>`;
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `test-results-${(swimmerName || "all-swimmers").replace(/[^a-zA-Z0-9أ-ي]/g, "-")}.html`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
 // text blocks) — reads like a spreadsheet on purpose, since that's the
 // shape coaches actually think in for a volume/zone breakdown. Colored
 // using the academy's own brand color instead of a fixed navy, so it
@@ -1661,6 +1738,7 @@ function exportSeasonPdf(season, level, weeks) {
 
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Season Plan</title>
 <style>
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
   body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: #1e293b; padding: 30px; }
   .header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
   .header img { width: 44px; height: 44px; object-fit: contain; }
@@ -1729,6 +1807,7 @@ function exportWeekDayByDay(season, level, week) {
 
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Week Plan</title>
 <style>
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
   body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: #1e293b; padding: 30px; max-width: 800px; margin: 0 auto; }
   .header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
   .header img { width: 44px; height: 44px; object-fit: contain; }
@@ -1783,6 +1862,7 @@ async function printCertificate({ swimmerName, level, date }) {
     const pos = (p, extra = "") => `position:absolute; left:${p.x}%; top:${p.y}%; transform:translate(-50%,-50%); text-align:center; ${extra}`;
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Certificate</title>
 <style>
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
   @page { size: A4 landscape; margin: 0; }
   html, body { width: 297mm; height: 210mm; }
   body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; padding: 0; margin: 0; }
@@ -1824,6 +1904,7 @@ async function printCertificate({ swimmerName, level, date }) {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Certificate</title>
 ${fontImport}
 <style>
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
   @page { size: A4 landscape; margin: 0; }
   html, body { width: 297mm; height: 210mm; }
   body { font-family: ${fontChoice.body}; color: #1e293b; padding: 0; margin: 0; background: #e2e8f0; }
@@ -1894,6 +1975,7 @@ async function printCourseCertificate({ coachName, courseTitle, date }) {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Certificate</title>
 ${fontImport}
 <style>
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
   @page { size: A4 landscape; margin: 0; }
   html, body { width: 297mm; height: 210mm; }
   body { font-family: ${fontChoice.body}; color: #1e293b; padding: 0; margin: 0; background: #e2e8f0; }
@@ -2009,7 +2091,7 @@ async function setStaffPasswordOverride(newPassword) {
    and any save right after that can fail with "Couldn't save...".
    Instead, each data type now lives as a single array under one key, so
    loading or saving a whole collection is exactly one storage call. */
-const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all", incidents: "incidents-all", registrations: "registrations-all", feedback: "parent-feedback-all", waitlist: "waitlist-all", courses: "coach-courses-all", coursePayments: "course-payments-all", courseStudents: "course-students-all", payrollAdjustments: "payroll-adjustments-all", trainingPlans: "training-plans-all", weeklyVolumes: "weekly-volumes-all", seasons: "training-seasons-all", testSets: "test-sets-all" };
+const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all", incidents: "incidents-all", registrations: "registrations-all", feedback: "parent-feedback-all", waitlist: "waitlist-all", courses: "coach-courses-all", coursePayments: "course-payments-all", courseStudents: "course-students-all", payrollAdjustments: "payroll-adjustments-all", trainingPlans: "training-plans-all", weeklyVolumes: "weekly-volumes-all", seasons: "training-seasons-all", testSets: "test-sets-all", workoutTemplates: "workout-templates-all" };
 
 // Standard periodization phases used in competitive swimming training
 // (the same general model most swim federation coaching courses teach —
@@ -4990,6 +5072,33 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
 // One row per set (e.g. "8 × 100m Freestyle @ 1:30, 15 sec rest"). Reps
 // and distance auto-multiply into a subtotal so nobody adds these up by
 // hand, and the section/day/week totals all derive from these rows.
+// A small inline SVG trend line for a swimmer's times in one event —
+// lower is better, so the line is drawn inverted (fastest = highest
+// point) and the most recent point is highlighted.
+function ProgressSparkline({ points }) {
+  if (!points || points.length < 2) return null;
+  const w = 220, h = 48, pad = 4;
+  const values = points.map((p) => p.seconds);
+  const min = Math.min(...values), max = Math.max(...values);
+  const range = max - min || 1;
+  const coords = points.map((p, i) => {
+    const x = pad + (i / (points.length - 1)) * (w - pad * 2);
+    // inverted: slower time (max) -> bottom, faster time (min) -> top
+    const y = pad + ((p.seconds - min) / range) * (h - pad * 2);
+    return { x, y };
+  });
+  const path = coords.map((c, i) => `${i === 0 ? "M" : "L"}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(" ");
+  const last = coords[coords.length - 1];
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-12">
+      <path d={path} fill="none" stroke="#0284c7" strokeWidth="2" />
+      {coords.map((c, i) => (
+        <circle key={i} cx={c.x} cy={c.y} r={i === coords.length - 1 ? 3 : 2} fill={i === coords.length - 1 ? "#0284c7" : "#bae6fd"} />
+      ))}
+    </svg>
+  );
+}
+
 function WorkoutSetBuilder({ sectionKey, sets, onChange, defaultIntensity }) {
   const rows = sets || [];
 
@@ -6979,6 +7088,57 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [dailyWorkoutSaving, setDailyWorkoutSaving] = useState(false);
   const [dailyWorkoutSaved, setDailyWorkoutSaved] = useState(false);
 
+  // --- Workout templates (save a built workout, reuse it later) ---
+  const [workoutTemplates, setWorkoutTemplates] = useState([]);
+  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
+  const [templateSaveOpen, setTemplateSaveOpen] = useState(false);
+  const [templateNameDraft, setTemplateNameDraft] = useState("");
+
+  const loadWorkoutTemplates = useCallback(async () => {
+    const all = await loadCollection(STORE_KEYS.workoutTemplates);
+    setWorkoutTemplates(all);
+  }, []);
+
+  const saveAsTemplate = async () => {
+    if (!templateNameDraft.trim()) return;
+    const record = {
+      id: genId(),
+      name: templateNameDraft.trim(),
+      level: dailyWorkoutLevel,
+      sections: dailyWorkoutForm,
+      sets: dailyWorkoutSets,
+      createdAt: new Date().toISOString(),
+    };
+    const all = await loadCollection(STORE_KEYS.workoutTemplates);
+    const next = [...all, record];
+    await saveCollection(STORE_KEYS.workoutTemplates, next);
+    setWorkoutTemplates(next);
+    setTemplateSaveOpen(false);
+    setTemplateNameDraft("");
+  };
+
+  // Loads a saved template into the form currently being edited —
+  // replaces whatever is there, so this is only offered from the
+  // template picker (which the coach opens deliberately), not applied
+  // silently.
+  const applyTemplate = (tpl) => {
+    setDailyWorkoutForm({ ...tpl.sections });
+    setDailyWorkoutSets({ ...tpl.sets });
+    setTemplatePickerOpen(false);
+  };
+
+  const deleteTemplate = (tpl) => {
+    setConfirmAction({
+      message: `Delete template "${tpl.name}"?`,
+      onConfirm: async () => {
+        const all = await loadCollection(STORE_KEYS.workoutTemplates);
+        const next = all.filter((t) => t.id !== tpl.id);
+        await saveCollection(STORE_KEYS.workoutTemplates, next);
+        setWorkoutTemplates(next);
+      },
+    });
+  };
+
   const blankWeekDays = () => Object.fromEntries(WEEK_DAYS.map((d) => [d.id, { off: false, focus: "" }]));
   const [weeklyVolumes, setWeeklyVolumes] = useState([]);
   const [weeklyVolumesLoading, setWeeklyVolumesLoading] = useState(false);
@@ -6992,6 +7152,22 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [seasons, setSeasons] = useState([]);
   const [seasonsLoading, setSeasonsLoading] = useState(false);
   const [activeSeasonId, setActiveSeasonId] = useState(null);
+  const [seasonCalendarView, setSeasonCalendarView] = useState(false);
+
+  // Which Season Phase (from the Season Phases tab) a given date falls
+  // in, for coloring the calendar view the same way phases are colored
+  // there — "all" level phases apply to every squad.
+  const phaseForDate = (level, dateStr) => {
+    for (const plan of trainingPlans) {
+      if (plan.level !== "all" && plan.level !== level) continue;
+      for (const ph of plan.phases || []) {
+        if (dateStr >= ph.startDate && dateStr <= ph.endDate) {
+          return TRAINING_PHASE_TYPES.find((t) => t.id === ph.type) || null;
+        }
+      }
+    }
+    return null;
+  };
   const [newSeasonName, setNewSeasonName] = useState("");
   const [seasonPreviewHtml, setSeasonPreviewHtml] = useState(null);
 
@@ -7976,15 +8152,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [tab, setTab] = useState("dashboard");
 
   useEffect(() => {
-    if (tab === "trainingplans" && trainingPlansSubTab === "daily") loadDailyWorkouts();
-  }, [tab, trainingPlansSubTab, loadDailyWorkouts]);
+    if (tab === "trainingplans" && trainingPlansSubTab === "daily") { loadDailyWorkouts(); loadWorkoutTemplates(); }
+  }, [tab, trainingPlansSubTab, loadDailyWorkouts, loadWorkoutTemplates]);
 
   useEffect(() => {
     if (tab === "trainingplans" && trainingPlansSubTab === "weekly") {
       loadWeeklyVolumes();
       loadSeasons();
+      loadSquadSwimmers();
     }
-  }, [tab, trainingPlansSubTab, loadWeeklyVolumes, loadSeasons]);
+  }, [tab, trainingPlansSubTab, loadWeeklyVolumes, loadSeasons, loadSquadSwimmers]);
 
   useEffect(() => {
     if (tab === "trainingplans" && trainingPlansSubTab === "testing") {
@@ -8655,10 +8832,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   }, []);
 
   useEffect(() => {
+    // Guard added — every sibling loader in this component checks
+    // `authed` first; this one didn't, so it was polling registrations
+    // from the login/PIN screen every 20s, before anyone had signed in.
+    if (!authed) return;
     loadRegistrations();
     const t = setInterval(loadRegistrations, 20000);
     return () => clearInterval(t);
-  }, [loadRegistrations]);
+  }, [authed, loadRegistrations]);
 
   const approveRegistration = async (reg) => {
     setRegistrationActing(reg.id);
@@ -10123,6 +10304,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
       const html = `
         <style>
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
           .grid-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 24px; }
           .grid-table th, .grid-table td { border: 1px solid #e2e8f0; padding: 6px; text-align: center; }
           .grid-table th { background: #f8fafc; font-weight: 600; }
@@ -11749,13 +11931,25 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         // selected "Acting on" month — have a real day/time for that
         // specific month, not just whatever their current/latest one is.
         // Swimmers imported with full per-month history (monthlySchedules)
-        // are checked against that exact month; swimmers with no such
-        // history at all (added normally, one schedule only) fall back to
-        // their flat day/time, since there's no month-by-month record for
-        // them to check instead.
+        // are checked against that exact month. Anyone WITHOUT an override
+        // for this specific month falls back to their flat day/time — this
+        // has to be "no override for THIS month", not "no monthlySchedules
+        // object at all": a swimmer edited once for some other month ends
+        // up with a non-null monthlySchedules that simply has no entry for
+        // the month currently being viewed, and the earlier version of
+        // this filter only fell back to top-level day/time when
+        // monthlySchedules was completely absent — so anyone with any
+        // per-month history but no entry for THIS month silently vanished
+        // from the roster for that month, even though getMonthlySchedule()
+        // (used everywhere else this same question is asked, e.g.
+        // Dashboard) would still correctly treat them as scheduled. Since
+        // a missing key and a genuinely-null object both resolve the JSON
+        // path below to null, checking only "->>day.is.null" covers both
+        // cases in one clause and keeps this filter's answer consistent
+        // with getMonthlySchedule()'s.
         if (!showUnscheduled) {
           query = query.or(
-            `data->monthlySchedules->${paymentMonthFilter}->>day.neq.,and(data->monthlySchedules.is.null,data->>day.neq.,data->>time.neq.)`
+            `data->monthlySchedules->${paymentMonthFilter}->>day.neq.,and(data->monthlySchedules->${paymentMonthFilter}->>day.is.null,data->>day.neq.,data->>time.neq.)`
           );
         }
         // A branch-restricted account always gets this filter, regardless
@@ -19361,7 +19555,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 </div>
               ) : (
               <>
-              <div className="flex items-center justify-end mb-2">
+              <div className="flex items-center justify-end gap-2 mb-2">
+                <button
+                  onClick={() => setSeasonCalendarView((v) => !v)}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-100"
+                >
+                  <CalendarCheck className="w-4 h-4" /> {seasonCalendarView ? "List view" : "Calendar view"}
+                </button>
                 <button
                   onClick={addWeek}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900"
@@ -19370,7 +19570,43 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 </button>
               </div>
 
-              {weeklyVolumesLoading ? (
+              {seasonCalendarView ? (
+                weeksForLevel.length === 0 ? (
+                  <div className="py-16 text-center text-slate-400">No weeks planned yet for this season — add the first one.</div>
+                ) : (
+                  <div className="space-y-5">
+                    {Object.entries(
+                      weeksForLevel.reduce((acc, week) => {
+                        const key = new Date(week.startDate).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+                        (acc[key] = acc[key] || []).push(week);
+                        return acc;
+                      }, {})
+                    ).map(([month, weeks]) => (
+                      <div key={month}>
+                        <div className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">{month}</div>
+                        <div className="space-y-1.5">
+                          {weeks.map((week) => {
+                            const phase = phaseForDate(weeklyVolumeLevel, week.startDate);
+                            return (
+                              <button
+                                key={week.id}
+                                onClick={() => { setActiveWeekId(week.id); setSeasonCalendarView(false); }}
+                                className="w-full flex items-center gap-3 bg-slate-50 hover:bg-slate-100 rounded-xl px-4 py-2.5 text-left transition"
+                              >
+                                <span className="w-2 h-8 rounded-full shrink-0" style={{ backgroundColor: phase?.color || "#cbd5e1" }} />
+                                <span className="text-sm font-semibold text-slate-800 w-28 shrink-0 truncate">{week.weekLabel}</span>
+                                <span className="text-xs text-slate-400 w-24 shrink-0">{new Date(week.startDate).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>
+                                {phase && <span className="text-xs px-2 py-0.5 rounded-full shrink-0" style={{ backgroundColor: `${phase.color}20`, color: phase.color }}>{phase.label}</span>}
+                                <span className="text-sm font-semibold text-slate-700 ml-auto shrink-0">{Number(week.totalVolume || 0).toLocaleString()}m</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )
+              ) : weeklyVolumesLoading ? (
                 <div className="py-8 text-center text-slate-400 text-sm">Loading...</div>
               ) : weeksForLevel.length === 0 ? (
                 <div className="py-16 text-center text-slate-400">No weeks planned yet for this season — add the first one.</div>
@@ -19512,6 +19748,28 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               </div>
                             </div>
 
+                            <div className="mb-4">
+                              <div className="text-xs font-semibold text-slate-500 mb-2">
+                                Individual adjustments — this week's squad plan stays the same for everyone; note anything a specific swimmer should do differently
+                              </div>
+                              <div className="space-y-1.5">
+                                {squadSwimmers.filter((s) => s.level === weeklyVolumeLevel).length === 0 && (
+                                  <div className="text-xs text-slate-400">No swimmers found for {weeklyVolumeLevel}.</div>
+                                )}
+                                {squadSwimmers.filter((s) => s.level === weeklyVolumeLevel).map((s) => (
+                                  <div key={s.id} className="flex items-center gap-2 bg-white rounded-xl p-2.5">
+                                    <span className="text-xs font-medium text-slate-600 w-28 shrink-0 truncate">{s.name}</span>
+                                    <input
+                                      value={week.individualAdjustments?.[s.id] || ""}
+                                      onChange={(e) => updateWeek(week.id, { individualAdjustments: { ...week.individualAdjustments, [s.id]: e.target.value } })}
+                                      placeholder="e.g. +200m aerobic, or reduce butterfly — shoulder recovery"
+                                      className="flex-1 border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-sky-900"
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
                             <div className="flex items-center justify-between mt-4">
                               <button
                                 onClick={() => exportWeekDayByDay(seasonsForLevel.find((s) => s.id === activeSeasonId), weeklyVolumeLevel, week)}
@@ -19639,8 +19897,57 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     >
                       <Copy className="w-3.5 h-3.5" /> Copy previous workout
                     </button>
+                    <button
+                      onClick={() => setTemplatePickerOpen(true)}
+                      className="text-xs text-sky-800 hover:text-sky-900 font-medium flex items-center gap-1 shrink-0"
+                    >
+                      <FileDown className="w-3.5 h-3.5" /> Load template
+                    </button>
+                    <button
+                      onClick={() => setTemplateSaveOpen(true)}
+                      className="text-xs text-slate-500 hover:text-sky-900 font-medium flex items-center gap-1 shrink-0"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Save as template
+                    </button>
                   </div>
                 </div>
+
+                {templateSaveOpen && (
+                  <div className="mb-4 bg-white border border-slate-200 rounded-xl p-3 flex items-center gap-2">
+                    <input
+                      value={templateNameDraft}
+                      onChange={(e) => setTemplateNameDraft(e.target.value)}
+                      placeholder="Template name, e.g. EN2 Base Week Main Set"
+                      className="flex-1 border border-slate-200 rounded-lg py-1.5 px-2.5 text-sm outline-none focus:border-sky-900"
+                      autoFocus
+                    />
+                    <button onClick={saveAsTemplate} className="text-xs px-3 py-1.5 rounded-lg bg-sky-950 text-white font-semibold hover:bg-sky-900">Save</button>
+                    <button onClick={() => { setTemplateSaveOpen(false); setTemplateNameDraft(""); }} className="text-xs px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200">Cancel</button>
+                  </div>
+                )}
+
+                {templatePickerOpen && (
+                  <div className="mb-4 bg-white border border-slate-200 rounded-xl p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-xs font-semibold text-slate-500">Templates for {dailyWorkoutLevel}</div>
+                      <button onClick={() => setTemplatePickerOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+                    </div>
+                    {workoutTemplates.filter((t) => t.level === dailyWorkoutLevel).length === 0 ? (
+                      <div className="text-xs text-slate-400 py-2">No templates saved yet for {dailyWorkoutLevel}. Build a workout below, then "Save as template".</div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {workoutTemplates.filter((t) => t.level === dailyWorkoutLevel).map((tpl) => (
+                          <div key={tpl.id} className="flex items-center justify-between gap-2 bg-slate-50 rounded-lg px-2.5 py-2">
+                            <button onClick={() => applyTemplate(tpl)} className="text-sm text-slate-700 hover:text-sky-900 font-medium text-left flex-1">
+                              {tpl.name} <span className="text-xs text-slate-400 font-normal">· {workoutTotalMeters(tpl.sets, tpl.level).toLocaleString()}m</span>
+                            </button>
+                            <button onClick={() => deleteTemplate(tpl)} className="p-1 rounded hover:bg-slate-200"><Trash2 className="w-3.5 h-3.5 text-red-500" /></button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="space-y-4">
                   {workoutSectionsFor(dailyWorkoutLevel).map((section) => (
                     <div key={section.key}>
@@ -19700,7 +20007,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     {dailyWorkoutSaving ? "Saving..." : dailyWorkoutSaved ? "Saved ✓" : "Save"}
                   </button>
                   <button
-                    onClick={() => printWorkout({ level: dailyWorkoutLevel, date: dailyWorkoutDate, ...dailyWorkoutForm, sets: dailyWorkoutSets, totalDistance: workoutTotalMeters(dailyWorkoutSets, dailyWorkoutLevel), coachNotes: dailyWorkoutNotes })}
+                    onClick={() => printWorkout({ coachName: dailyWorkoutMeta?.updatedBy || accountName, level: dailyWorkoutLevel, date: dailyWorkoutDate, ...dailyWorkoutForm, sets: dailyWorkoutSets, totalDistance: workoutTotalMeters(dailyWorkoutSets, dailyWorkoutLevel), coachNotes: dailyWorkoutNotes })}
                     className="px-4 py-2.5 rounded-lg bg-white border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-100"
                   >
                     Print
@@ -19958,16 +20265,32 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
               <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
                 <h3 className="font-bold text-slate-900 text-sm">Test history</h3>
-                <select
-                  value={testFilterSwimmerId}
-                  onChange={(e) => setTestFilterSwimmerId(e.target.value)}
-                  className="border border-slate-200 rounded-lg py-1.5 px-2.5 text-xs outline-none focus:border-sky-900 bg-white"
-                >
-                  <option value="">All swimmers</option>
-                  {squadSwimmers.map((s) => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
-                </select>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={testFilterSwimmerId}
+                    onChange={(e) => setTestFilterSwimmerId(e.target.value)}
+                    className="border border-slate-200 rounded-lg py-1.5 px-2.5 text-xs outline-none focus:border-sky-900 bg-white"
+                  >
+                    <option value="">All swimmers</option>
+                    {squadSwimmers.map((s) => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                  {testSets.length > 0 && (
+                    <button
+                      onClick={() => {
+                        const swimmer = squadSwimmers.find((s) => s.id === testFilterSwimmerId);
+                        const rows = testSets
+                          .filter((t) => !testFilterSwimmerId || t.swimmerId === testFilterSwimmerId)
+                          .sort((a, b) => b.date.localeCompare(a.date));
+                        printTestReport({ swimmerName: swimmer?.name || "", level: swimmer?.level || "", rows });
+                      }}
+                      className="text-xs text-sky-800 hover:text-sky-900 font-medium flex items-center gap-1 shrink-0"
+                    >
+                      <FileDown className="w-3.5 h-3.5" /> Print
+                    </button>
+                  )}
+                </div>
               </div>
 
               {testFilterSwimmerId && (() => {
@@ -19981,11 +20304,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     <div className="grid sm:grid-cols-3 gap-2">
                       {eventsWithResults.map((ev) => {
                         const pb = bestTestResult(testSets, testFilterSwimmerId, ev.id);
+                        const history = testSets
+                          .filter((t) => t.swimmerId === testFilterSwimmerId && t.event === ev.id)
+                          .sort((a, b) => a.date.localeCompare(b.date));
                         return (
                           <div key={ev.id} className="bg-slate-50 rounded-lg p-2.5">
                             <div className="text-xs text-slate-400">{ev.label}</div>
                             <div className="text-sm font-bold text-slate-800">{formatSeconds(pb.seconds)}</div>
-                            <div className="text-[10px] text-slate-400">{new Date(pb.date).toLocaleDateString("en-GB")}</div>
+                            <div className="text-[10px] text-slate-400 mb-1">{new Date(pb.date).toLocaleDateString("en-GB")}</div>
+                            {history.length > 1 && <ProgressSparkline points={history} />}
                           </div>
                         );
                       })}
@@ -22959,6 +23286,7 @@ function CoachView({ onExit, preAuthedCoach = null }) {
   const [workoutDate, setWorkoutDate] = useState(todayISO());
   const [myLevelWorkouts, setMyLevelWorkouts] = useState([]); // every daily workout matching a level this coach currently teaches
   const [reviewOpenId, setReviewOpenId] = useState(null); // workout id whose post-session review form is open, if any
+  const [myWeeklyVolumes, setMyWeeklyVolumes] = useState([]); // season-builder weeks for this coach's levels, for individual-adjustment lookups
 
   useEffect(() => {
     if (!authedCoach) return;
@@ -23032,9 +23360,27 @@ function CoachView({ onExit, preAuthedCoach = null }) {
       // the moment this feature ships.
       const relevant = all.filter((w) => myLevels.has(w.level) && w.date === date && (w.status || "published") === "published");
       setMyLevelWorkouts(relevant);
+      const allWeeks = await loadCollection(STORE_KEYS.weeklyVolumes);
+      setMyWeeklyVolumes(allWeeks.filter((w) => myLevels.has(w.level)));
     },
     [authedCoach, swimmers]
   );
+
+  // Which swimmers (from this coach's own roster) have an individual
+  // adjustment noted for the week containing this workout's date.
+  const individualAdjustmentsFor = (workout) => {
+    const week = myWeeklyVolumes.find((wk) => {
+      if (wk.level !== workout.level || !wk.startDate) return false;
+      const start = new Date(wk.startDate);
+      const end = new Date(start.getTime() + 6 * 86400000);
+      const d = new Date(workout.date);
+      return d >= start && d <= end;
+    });
+    if (!week?.individualAdjustments) return [];
+    return Object.entries(week.individualAdjustments)
+      .filter(([, note]) => note && note.trim())
+      .map(([swimmerId, note]) => ({ swimmerName: swimmers.find((s) => s.id === swimmerId)?.name || "Swimmer", note }));
+  };
 
   // Marks THIS specific workout as run — a per-workout flag the
   // technical director can also see, not something that changes what
@@ -23427,7 +23773,7 @@ function CoachView({ onExit, preAuthedCoach = null }) {
                       <span className="text-xs font-semibold text-slate-500">{Number(w.totalDistance).toLocaleString()}m total</span>
                     )}
                     <button
-                      onClick={() => printWorkout({ level: w.level, date: w.date, ...w })}
+                      onClick={() => printWorkout({ coachName: w.updatedBy, level: w.level, date: w.date, ...w })}
                       className="text-xs text-slate-500 hover:text-sky-900 font-medium"
                     >
                       Print
@@ -23456,6 +23802,16 @@ function CoachView({ onExit, preAuthedCoach = null }) {
                   <div className="mt-2.5 pt-2.5 border-t border-slate-100">
                     <div className="text-[10px] font-semibold text-amber-600 uppercase tracking-wide mb-0.5">Coach notes</div>
                     <div className="text-sm text-slate-700 whitespace-pre-wrap">{w.coachNotes}</div>
+                  </div>
+                )}
+                {individualAdjustmentsFor(w).length > 0 && (
+                  <div className="mt-2.5 pt-2.5 border-t border-slate-100">
+                    <div className="text-[10px] font-semibold text-purple-600 uppercase tracking-wide mb-1">Individual adjustments this week</div>
+                    <div className="space-y-0.5">
+                      {individualAdjustmentsFor(w).map((a, i) => (
+                        <div key={i} className="text-sm text-slate-700"><b>{a.swimmerName}:</b> {a.note}</div>
+                      ))}
+                    </div>
                   </div>
                 )}
                 {(w.equipment || []).length > 0 && (
