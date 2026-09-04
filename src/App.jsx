@@ -2727,6 +2727,26 @@ async function getSwimmersSyncAlert() {
   }
 }
 
+// On/off switch for the "Reconcile schedule" tool (Schedule tab), settable
+// from Settings → Backup. Defaults to ON (missing key = enabled) so
+// nothing changes for anyone who's never touched this setting; an admin
+// who wants it out of reach after the sync-direction incident can turn it
+// off here, which hides the button entirely rather than just disabling it.
+const RECONCILE_TOOL_KEY = "reconcile-tool-enabled";
+
+async function getReconcileToolEnabled() {
+  try {
+    const res = await window.storage.get(RECONCILE_TOOL_KEY);
+    return res?.value !== "false";
+  } catch {
+    return true;
+  }
+}
+
+async function setReconcileToolEnabled(enabled) {
+  return storageSet(RECONCILE_TOOL_KEY, enabled ? "true" : "false");
+}
+
 // Retries the mirror sync a couple of times (transient network hiccups are
 // the common case) before giving up and recording the stuck flag above —
 // so a single blip doesn't leave the "swimmers" table silently stale, and
@@ -7747,6 +7767,58 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   // whoever hasn't been touched since.
   const [reconcileRunning, setReconcileRunning] = useState(false);
   const [reconcileMessage, setReconcileMessage] = useState("");
+  // Whether the Reconcile tool is even shown — off by default is not
+  // possible to infer from here (Settings owns the toggle), so this loads
+  // whatever's currently saved and defaults to shown until that resolves.
+  const [reconcileToolEnabled, setReconcileToolEnabledState] = useState(true);
+  useEffect(() => {
+    getReconcileToolEnabled().then(setReconcileToolEnabledState);
+  }, []);
+  // Finds swimmers whose CURRENT recorded day doesn't match the weekday
+  // of dates they were actually marked present on recently — the best
+  // available signal for "possibly reverted by the old reconcile bug",
+  // since that bug overwrote the correct monthlySchedules entry with the
+  // swimmer's stale top-level day/time without leaving any record of what
+  // it replaced. Not proof on its own (a one-off makeup session would also
+  // show up here) — meant as a shortlist to check by hand, not an
+  // automatic fix.
+  const [scheduleMismatchRunning, setScheduleMismatchRunning] = useState(false);
+  const [scheduleMismatchResults, setScheduleMismatchResults] = useState(null);
+  const findScheduleMismatches = async () => {
+    setScheduleMismatchRunning(true);
+    setScheduleMismatchResults(null);
+    try {
+      const all = await fetchAllSwimmers();
+      const thisMonthPrefix = monthKey();
+      const results = [];
+      all.forEach((s) => {
+        const attendanceDates = Object.keys(s.attendance || {}).filter((d) => d.startsWith(thisMonthPrefix) && s.attendance[d] === "present");
+        if (attendanceDates.length === 0) return;
+        const attendedGroups = new Set();
+        attendanceDates.forEach((d) => {
+          const weekday = new Date(`${d}T12:00:00`).getDay();
+          Object.entries(DAY_GROUP_WEEKDAYS_LOOKUP).forEach(([groupId, weekdays]) => {
+            if (weekdays.includes(weekday)) attendedGroups.add(groupId);
+          });
+        });
+        const recordedGroups = new Set([s.day, s.day2].filter(Boolean));
+        const mismatchGroups = [...attendedGroups].filter((g) => !recordedGroups.has(g));
+        if (mismatchGroups.length > 0) {
+          results.push({
+            id: s.id,
+            name: s.name,
+            recorded: [...recordedGroups].map((g) => DAY_GROUPS.find((d) => d.id === g)?.label || g).join(", ") || "—",
+            attended: mismatchGroups.map((g) => DAY_GROUPS.find((d) => d.id === g)?.label || g).join(", "),
+          });
+        }
+      });
+      setScheduleMismatchResults(results);
+    } catch (e) {
+      setScheduleMismatchResults({ error: e?.message || "Could not check — please try again." });
+    } finally {
+      setScheduleMismatchRunning(false);
+    }
+  };
   const reconcileScheduleData = async () => {
     setReconcileRunning(true);
     setReconcileMessage("");
@@ -7775,15 +7847,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             scheduleMonth: thisMonth,
           };
           const existingEntry = next.monthlySchedules?.[thisMonth];
-          const outOfSync =
-            !existingEntry ||
-            existingEntry.day !== liveEntry.day ||
-            existingEntry.time !== liveEntry.time ||
-            existingEntry.coachId !== liveEntry.coachId ||
-            existingEntry.coachId2 !== liveEntry.coachId2 ||
-            existingEntry.sessionType !== liveEntry.sessionType ||
-            existingEntry.sessionType2 !== liveEntry.sessionType2;
-          if (outOfSync) {
+          // An existing monthlySchedules[thisMonth] entry is that swimmer's
+          // genuine override for this specific month (e.g. moved to a new
+          // day/coach mid-month) — getMonthlySchedule() and every screen
+          // that reads it treat this entry as the authority OVER the
+          // top-level fields, on purpose. Only seed a MISSING entry from
+          // the live top-level fields here; never overwrite one that
+          // already exists just because it differs from them — that
+          // difference is the override doing exactly its job, not drift.
+          // (An earlier version of this check treated any difference as
+          // staleness and overwrote the override with the older top-level
+          // values, which silently reverted swimmers back off a day/time
+          // they'd genuinely been moved to.)
+          if (!existingEntry) {
             next = { ...next, monthlySchedules: { ...(next.monthlySchedules || {}), [thisMonth]: liveEntry } };
             changed = true;
             monthlyEntryResynced++;
@@ -15102,7 +15178,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                 title="Which month's attendance to include in the PDF"
               />
-              {canEditContent && (
+              {canEditContent && reconcileToolEnabled && (
                 <button
                   onClick={reconcileScheduleData}
                   disabled={reconcileRunning}
@@ -19340,6 +19416,58 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <RefreshCw className={`w-4 h-4 ${indexRebuilding ? "animate-spin" : ""}`} /> {indexRebuilding ? "Rebuilding..." : "Rebuild now"}
               </button>
               {indexRebuildResult && <p className="text-xs text-slate-400 mt-2">{indexRebuildResult}</p>}
+            </div>
+
+            <h3 className="font-bold text-slate-900 mb-1 mt-6">Reconcile schedule tool</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              The "Reconcile schedule" button on the Schedule tab cleans up leftover future-booking data. Turn it off here if you'd rather it not be available for now.
+            </p>
+            <div className="bg-slate-50 rounded-2xl p-5">
+              <label className="flex items-center gap-2.5 text-sm text-slate-700 select-none cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={reconcileToolEnabled}
+                  onChange={async (e) => {
+                    const next = e.target.checked;
+                    setReconcileToolEnabledState(next);
+                    await setReconcileToolEnabled(next);
+                  }}
+                  className="w-4 h-4 accent-sky-900"
+                />
+                Show "Reconcile schedule" button on the Schedule tab
+              </label>
+            </div>
+
+            <h3 className="font-bold text-slate-900 mb-1 mt-6">Find possible schedule mismatches</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              Lists swimmers whose recorded day doesn't match the weekday of dates they were actually marked present on this month — a shortlist to check by hand, not an automatic fix. A one-off makeup session can also show up here, so use judgment.
+            </p>
+            <div className="bg-slate-50 rounded-2xl p-5">
+              <button
+                onClick={findScheduleMismatches}
+                disabled={scheduleMismatchRunning}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-700 disabled:opacity-60"
+              >
+                <Search className={`w-4 h-4 ${scheduleMismatchRunning ? "animate-spin" : ""}`} /> {scheduleMismatchRunning ? "Checking..." : "Check now"}
+              </button>
+              {scheduleMismatchResults && scheduleMismatchResults.error && (
+                <p className="text-xs text-red-500 mt-2">{scheduleMismatchResults.error}</p>
+              )}
+              {scheduleMismatchResults && !scheduleMismatchResults.error && (
+                scheduleMismatchResults.length === 0 ? (
+                  <p className="text-xs text-slate-400 mt-2">No mismatches found.</p>
+                ) : (
+                  <div className="mt-3 space-y-1.5">
+                    {scheduleMismatchResults.map((r) => (
+                      <div key={r.id} className="text-sm bg-white border border-slate-200 rounded-lg px-3 py-2">
+                        <span className="font-semibold text-slate-800">{r.name}</span>
+                        <span className="text-slate-400"> — currently recorded: {r.recorded}, attended this month on: </span>
+                        <span className="text-amber-700 font-medium">{r.attended}</span>
+                      </div>
+                    ))}
+                  </div>
+                )
+              )}
             </div>
           </div>
           )}
