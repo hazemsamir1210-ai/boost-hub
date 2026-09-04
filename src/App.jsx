@@ -2646,6 +2646,8 @@ async function saveCollection(storeKey, list) {
 // Fire-and-forget from saveCollection's point of view — a sync failure
 // here shouldn't block the actual save the user was waiting on, but it
 // does mean search/rosters can lag behind until the next successful save.
+const SWIMMERS_SYNC_CHUNK = 200;
+
 async function syncSwimmersTable(list) {
   if (!window.__academy) return;
   const academyId = window.__academy.id;
@@ -2657,18 +2659,39 @@ async function syncSwimmersTable(list) {
     level: s.level || null,
     data: s,
   }));
-  if (rows.length > 0) {
-    const { error } = await supabase.from("swimmers").upsert(rows, { onConflict: "id" });
+  // Upserted in chunks — a large roster's full payload is fine in one
+  // request body, but chunking keeps each request modest and means one
+  // bad row's error points at a small batch instead of the whole roster.
+  for (let i = 0; i < rows.length; i += SWIMMERS_SYNC_CHUNK) {
+    const { error } = await supabase.from("swimmers").upsert(rows.slice(i, i + SWIMMERS_SYNC_CHUNK), { onConflict: "id" });
     if (error) throw error;
   }
-  const currentIds = list.map((s) => s.id);
-  let delQuery = supabase.from("swimmers").delete().eq("academy_id", academyId);
-  delQuery = currentIds.length > 0
-    ? delQuery.not("id", "in", `(${currentIds.map((id) => `"${id}"`).join(",")})`)
-    : delQuery; // empty list (e.g. "reset all") — delete every row for this academy
-  const { error: delError } = await delQuery;
-  if (delError) throw delError;
+  // Removing anyone no longer in the roster: fetch this academy's existing
+  // row ids and diff against the current list in JS, rather than a single
+  // "not.in.(id1,id2,...,idN)" filter built from EVERY current id — that
+  // filter lives in the request's query string, so for a roster with more
+  // than a couple hundred swimmers it can exceed the URL length a request
+  // is allowed to carry, failing the whole delete with a bare "Bad
+  // Request" and no useful error message. The leftover set to actually
+  // delete is normally tiny (just this save's removals), so diffing and
+  // deleting that in small chunks avoids the oversized-URL case entirely.
+  const { data: existingRows, error: fetchError } = await supabase
+    .from("swimmers")
+    .select("id")
+    .eq("academy_id", academyId);
+  if (fetchError) throw fetchError;
+  const currentIds = new Set(list.map((s) => s.id));
+  const idsToDelete = (existingRows || []).map((r) => r.id).filter((id) => !currentIds.has(id));
+  for (let i = 0; i < idsToDelete.length; i += SWIMMERS_SYNC_CHUNK) {
+    const { error: delError } = await supabase
+      .from("swimmers")
+      .delete()
+      .eq("academy_id", academyId)
+      .in("id", idsToDelete.slice(i, i + SWIMMERS_SYNC_CHUNK));
+    if (delError) throw delError;
+  }
 }
+
 
 // A stuck flag for when the mirror sync above fails outright — persisted
 // (not just an in-memory console.warn) so it survives a page reload and
