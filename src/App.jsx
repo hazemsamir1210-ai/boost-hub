@@ -2629,9 +2629,13 @@ async function saveCollection(storeKey, list) {
   // Nothing else writes to it, so every save through here has to mirror
   // into it too, or that table just silently goes stale and every read
   // that depends on it (search, coach/staff rosters, capacity checks)
-  // starts returning nothing.
+  // starts returning nothing. Still fire-and-forget from the caller's
+  // point of view (the swimmer save itself shouldn't wait on this), but
+  // syncSwimmersTableWithRetry below makes sure a failure here is
+  // retried and, if it still fails, actually recorded somewhere an admin
+  // will see it — instead of only ever reaching a console.warn no one reads.
   if (storeKey === STORE_KEYS.swimmers) {
-    syncSwimmersTable(list).catch((e) => console.warn("swimmers table sync failed", e));
+    syncSwimmersTableWithRetry(list);
   }
   return res;
 }
@@ -2664,6 +2668,58 @@ async function syncSwimmersTable(list) {
     : delQuery; // empty list (e.g. "reset all") — delete every row for this academy
   const { error: delError } = await delQuery;
   if (delError) throw delError;
+}
+
+// A stuck flag for when the mirror sync above fails outright — persisted
+// (not just an in-memory console.warn) so it survives a page reload and
+// an admin actually sees it, instead of the "swimmers" table silently
+// drifting from the real data until the next unrelated save happens to
+// fix it. Cleared automatically the next time a sync succeeds, whether
+// that's a normal save or the manual "Rebuild search index" button.
+const SWIMMERS_SYNC_ALERT_KEY = "swimmers-sync-needs-attention";
+
+async function markSwimmersSyncNeedsAttention(message) {
+  try {
+    await window.storage.set(SWIMMERS_SYNC_ALERT_KEY, JSON.stringify({ at: new Date().toISOString(), message: message || "" }), true);
+  } catch {
+    // Best-effort — if even this fails, the console.warn from the retry
+    // loop below is still the fallback trail.
+  }
+}
+
+async function clearSwimmersSyncAlert() {
+  try {
+    await window.storage.delete(SWIMMERS_SYNC_ALERT_KEY, true);
+  } catch {
+    // Nothing to clean up, or storage hiccuped — not worth surfacing.
+  }
+}
+
+async function getSwimmersSyncAlert() {
+  try {
+    const res = await window.storage.get(SWIMMERS_SYNC_ALERT_KEY, true);
+    return res?.value ? JSON.parse(res.value) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Retries the mirror sync a couple of times (transient network hiccups are
+// the common case) before giving up and recording the stuck flag above —
+// so a single blip doesn't leave the "swimmers" table silently stale, and
+// a real, lasting failure doesn't stay invisible either.
+async function syncSwimmersTableWithRetry(list, attemptsLeft = 3) {
+  try {
+    await syncSwimmersTable(list);
+    clearSwimmersSyncAlert();
+  } catch (e) {
+    if (attemptsLeft > 1) {
+      setTimeout(() => syncSwimmersTableWithRetry(list, attemptsLeft - 1), 1500);
+    } else {
+      console.warn("swimmers table sync failed after retries", e);
+      markSwimmersSyncNeedsAttention(e?.message || "Sync failed");
+    }
+  }
 }
 
 /* Payment screenshots are the one thing here that's genuinely heavy (each is
@@ -9275,12 +9331,23 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   const [indexRebuilding, setIndexRebuilding] = useState(false);
   const [indexRebuildResult, setIndexRebuildResult] = useState("");
+  // Surfaces the persisted flag from markSwimmersSyncNeedsAttention — set
+  // when the automatic background mirror sync (saveCollection ->
+  // syncSwimmersTableWithRetry) has failed outright after retrying, so an
+  // admin sees it here instead of the failure only ever reaching a
+  // console.warn nobody reads.
+  const [swimmersSyncAlert, setSwimmersSyncAlert] = useState(null);
+  useEffect(() => {
+    if (tab === "settings") getSwimmersSyncAlert().then(setSwimmersSyncAlert);
+  }, [tab]);
   const rebuildSwimmersIndex = async () => {
     setIndexRebuilding(true);
     setIndexRebuildResult("");
     try {
       const all = await fetchAllSwimmers();
       await syncSwimmersTable(all);
+      await clearSwimmersSyncAlert();
+      setSwimmersSyncAlert(null);
       setIndexRebuildResult(`Done — ${all.length} swimmer${all.length === 1 ? "" : "s"} re-indexed.`);
       logActivity(accountName, role, "Rebuilt swimmers search index", `${all.length} swimmers`);
     } catch (e) {
@@ -19226,6 +19293,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <p className="text-sm text-slate-500 mb-4">
               Search, session rosters, and the paginated swimmers list read from a separate fast lookup table. It updates automatically on every save going forward — run this once if it's ever out of sync (e.g. after importing swimmers a different way).
             </p>
+            {swimmersSyncAlert && (
+              <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-4 mb-3">
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                <div className="text-sm">
+                  <div className="font-semibold">The search index may be out of date</div>
+                  <div className="text-amber-700 mt-0.5">
+                    A background update to it failed{swimmersSyncAlert.at ? ` on ${new Date(swimmersSyncAlert.at).toLocaleString("en-GB")}` : ""} and couldn't recover on its own —
+                    some recently added or edited swimmers might not show up yet in search, session rosters, or the Technical view. Rebuilding now will fix it.
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="bg-slate-50 rounded-2xl p-5">
               <button
                 onClick={rebuildSwimmersIndex}
