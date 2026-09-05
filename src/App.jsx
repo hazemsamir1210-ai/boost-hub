@@ -10636,6 +10636,108 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
   };
 
+  // A flat roster of every swimmer in the level(s) currently selected in
+  // the "All levels" / "X only" dropdown above — every day and time they
+  // train, all in one list, not scoped to a single session slot like the
+  // "Preview & Export" button. Reuses the same preview/download pipeline
+  // as the session roster export above, just with a different swimmer
+  // selection and a simpler table (no per-date attendance columns).
+  const [exportingLevelRoster, setExportingLevelRoster] = useState(false);
+  const exportLevelRoster = async () => {
+    setExportingLevelRoster(true);
+    try {
+      const all = await fetchAllSwimmers();
+      const thisMonth = monthKey();
+      const levelsToInclude = scheduleLevelFilter === "all" ? LEVELS : [scheduleLevelFilter];
+      const rows = all
+        .filter((s) => levelsToInclude.includes(s.level))
+        .map((s) => {
+          const ms = getMonthlySchedule(s, thisMonth);
+          const dayLabel = ms?.day ? DAY_GROUPS.find((d) => d.id === ms.day)?.label || ms.day : "—";
+          const coachName = ms?.coachId ? coaches.find((c) => c.id === ms.coachId)?.name || "—" : "—";
+          return { swimmer: s, dayLabel, time: ms?.time || "—", coachName };
+        });
+
+      const byLevel = {};
+      rows.forEach((r) => {
+        if (!byLevel[r.swimmer.level]) byLevel[r.swimmer.level] = [];
+        byLevel[r.swimmer.level].push(r);
+      });
+
+      const levelSections = levelsToInclude.filter((lv) => byLevel[lv]?.length).map((lv) => {
+        const group = byLevel[lv].sort((a, b) => a.swimmer.name.localeCompare(b.swimmer.name));
+        const bodyRows = group
+          .map(
+            (r) =>
+              `<tr><td>${escapeHtml(r.swimmer.name)}</td><td style="text-align:center">${displayAge(r.swimmer.age)}</td><td>${escapeHtml(r.dayLabel)}</td><td>${escapeHtml(r.time)}</td><td>${escapeHtml(r.coachName)}</td><td>${escapeHtml(r.swimmer.phone || "—")}</td></tr>`
+          )
+          .join("");
+        return `
+          <div class="plan-header">${escapeHtml(lv)} <span class="plan-count">(${group.length})</span></div>
+          <table>
+            <tr><th>Name</th><th>Age</th><th>Day</th><th>Time</th><th>Coach</th><th>Phone</th></tr>
+            ${bodyRows}
+          </table>`;
+      }).join("");
+
+      const scopeLabel = scheduleLevelFilter === "all" ? "All levels" : scheduleLevelFilter;
+      const headerHtml = `
+        <div class="header" dir="ltr">
+          <img src="${CONFIG.logoDataUri}" />
+          <div>
+            <h1>${escapeHtml(CONFIG.academyName)}</h1>
+            <div class="sub">Full-week roster — ${escapeHtml(scopeLabel)} · ${escapeHtml(monthLabel(thisMonth))} (${rows.length} swimmer${rows.length === 1 ? "" : "s"})</div>
+          </div>
+        </div>
+      `;
+      const gridHtml = `<div class="roster-grid">${levelSections || "<p>No swimmers found for this level.</p>"}</div>`;
+      setRosterFontSize(13);
+      setRosterAlign("left");
+      setRosterHeaderAlign("left");
+      setRosterPreview({ headerHtml, gridHtml, filename: `full-week-roster-${scheduleLevelFilter === "all" ? "all-levels" : scheduleLevelFilter.replace(/\s+/g, "-")}-${thisMonth}` });
+    } catch (e) {
+      console.warn("Export level roster failed", e);
+    } finally {
+      setExportingLevelRoster(false);
+    }
+  };
+
+  // Same swimmer selection as the printable roster above (level filter,
+  // full week, no session-slot restriction), as a real spreadsheet — one
+  // row per swimmer — using the same XLSX pattern as the other exports.
+  const [exportingLevelRosterXLSX, setExportingLevelRosterXLSX] = useState(false);
+  const exportLevelRosterExcel = async () => {
+    setExportingLevelRosterXLSX(true);
+    try {
+      const all = await fetchAllSwimmers();
+      const thisMonth = monthKey();
+      const levelsToInclude = scheduleLevelFilter === "all" ? LEVELS : [scheduleLevelFilter];
+      const rows = all
+        .filter((s) => levelsToInclude.includes(s.level))
+        .map((s) => {
+          const ms = getMonthlySchedule(s, thisMonth);
+          const dayLabel = ms?.day ? DAY_GROUPS.find((d) => d.id === ms.day)?.label || ms.day : "";
+          const coachName = ms?.coachId ? coaches.find((c) => c.id === ms.coachId)?.name || "" : "";
+          return [s.name, displayAge(s.age), s.level, dayLabel, ms?.time || "", coachName, s.phone || ""];
+        })
+        .sort((a, b) => (a[2] === b[2] ? a[0].localeCompare(b[0]) : a[2].localeCompare(b[2])));
+
+      const XLSX = await loadXLSX();
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(
+        wb,
+        XLSX.utils.aoa_to_sheet([["Name", "Age", "Level", "Day", "Time", "Coach", "Phone"], ...rows]),
+        "Roster"
+      );
+      const scopeSlug = scheduleLevelFilter === "all" ? "all-levels" : scheduleLevelFilter.replace(/\s+/g, "-");
+      XLSX.writeFile(wb, `full-week-roster-${scopeSlug}-${thisMonth}.xlsx`);
+    } catch (e) {
+      console.warn("Export level roster (Excel) failed", e);
+    } finally {
+      setExportingLevelRosterXLSX(false);
+    }
+  };
+
   // Turns "left"/"center"/"right" into the CSS values needed for the
   // header's flex row — plain text-align doesn't affect flex items, so
   // this needs justify-content (item position) and text-align (text
@@ -15205,6 +15307,24 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               >
                 {exportingRoster ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
                 {exportingRoster ? "Loading..." : "Preview & Export"}
+              </button>
+              <button
+                onClick={exportLevelRoster}
+                disabled={exportingLevelRoster}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-amber-600 text-white text-sm font-semibold hover:bg-amber-700 disabled:opacity-60"
+                title="Every swimmer in the level selected above (or every level, if set to 'All levels'), across all days/times — not just this one session"
+              >
+                {exportingLevelRoster ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
+                {exportingLevelRoster ? "Loading..." : `Full-week roster${scheduleLevelFilter !== "all" ? ` (${scheduleLevelFilter})` : ""}`}
+              </button>
+              <button
+                onClick={exportLevelRosterExcel}
+                disabled={exportingLevelRosterXLSX}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-green-700 text-white text-sm font-semibold hover:bg-green-800 disabled:opacity-60"
+                title="Same full-week roster as an Excel file (.xlsx)"
+              >
+                {exportingLevelRosterXLSX ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
+                {exportingLevelRosterXLSX ? "Loading..." : "Excel"}
               </button>
               {canEditContent && (
                 <button
