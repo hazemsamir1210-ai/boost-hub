@@ -590,6 +590,21 @@ function classIdForSchedule({ branch, level, day, time, sessionType, month }) {
   return [month, branch || "", level || "", sessionType || "", day || "", time || ""].join("|");
 }
 
+// A swimmer's "second session" (day2/time2) is only a genuine SECOND
+// commitment if it's actually a different day+time from their primary
+// one. A data-entry slip (or an old bug) can leave day2/time2 set
+// identical to day/time — every place that unconditionally treated any
+// non-empty day2/time2 as a real second booking then counted that one
+// swimmer twice for what is really the same single slot: once under
+// their primary session, once again under their "second" one that isn't
+// actually different. Returns the second-session fields only when they
+// describe a genuinely distinct slot, otherwise null.
+function getDistinctSecondSession(ms) {
+  if (!ms?.day2 || !ms?.time2) return null;
+  if (ms.day2 === ms.day && ms.time2 === ms.time) return null;
+  return { day: ms.day2, time: ms.time2, coachId: ms.coachId2, sessionType: ms.sessionType2, classId: ms.classId };
+}
+
 let LEVELS = [
   "Baby", "Exp", "Exp 2", "Exp 3",
   "Level 1", "Level 2", "Level 3", "Level 4",
@@ -10513,7 +10528,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           if (s.day === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time === scheduleTimeFilter)) {
             inSessionAll.push({ swimmer: s, time: s.time, coachId: s.coachId, sessionType: s.sessionType });
           }
-          if (s.day2 === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time2 === scheduleTimeFilter)) {
+          if (s.day2 === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time2 === scheduleTimeFilter) && !(s.day2 === s.day && s.time2 === s.time)) {
             inSessionAll.push({ swimmer: s, time: s.time2, coachId: s.coachId2, sessionType: s.sessionType2 });
           }
         }
@@ -10521,7 +10536,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         if (ms && ms.day === scheduleDayFilter && (scheduleTimeFilter === "all" || ms.time === scheduleTimeFilter)) {
           inSessionAll.push({ swimmer: s, time: ms.time, coachId: ms.coachId, sessionType: ms.sessionType, classId: ms.classId, substituteCoachId: ms.substituteCoachId, substituteDate: ms.substituteDate });
         }
-        if (ms && ms.day2 === scheduleDayFilter && (scheduleTimeFilter === "all" || ms.time2 === scheduleTimeFilter)) {
+        if (ms && ms.day2 === scheduleDayFilter && (scheduleTimeFilter === "all" || ms.time2 === scheduleTimeFilter) && !(ms.day2 === ms.day && ms.time2 === ms.time)) {
           inSessionAll.push({ swimmer: s, time: ms.time2, coachId: ms.coachId2, sessionType: ms.sessionType2, classId: ms.classId, substituteCoachId: ms.substituteCoachId, substituteDate: ms.substituteDate });
         }
       });
@@ -10636,48 +10651,68 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
   };
 
-  // A flat roster of every swimmer in the level(s) currently selected in
-  // the "All levels" / "X only" dropdown above — every day and time they
-  // train, all in one list, not scoped to a single session slot like the
-  // "Preview & Export" button. Reuses the same preview/download pipeline
-  // as the session roster export above, just with a different swimmer
-  // selection and a simpler table (no per-date attendance columns).
+  // A full-week attendance roster for the level(s) currently selected in
+  // the "All levels" / "X only" dropdown — every day-group a swimmer
+  // trains in, each with its own present/absent columns for that
+  // day-group's actual dates in the selected month (reusing the same
+  // attendance-sheet look as "Preview & Export" above), instead of being
+  // scoped to a single session slot.
   const [exportingLevelRoster, setExportingLevelRoster] = useState(false);
   const exportLevelRoster = async () => {
     setExportingLevelRoster(true);
     try {
       const all = await fetchAllSwimmers();
-      const thisMonth = monthKey();
       const levelsToInclude = scheduleLevelFilter === "all" ? LEVELS : [scheduleLevelFilter];
-      const rows = all
-        .filter((s) => levelsToInclude.includes(s.level))
-        .map((s) => {
-          const ms = getMonthlySchedule(s, thisMonth);
-          const dayLabel = ms?.day ? DAY_GROUPS.find((d) => d.id === ms.day)?.label || ms.day : "—";
-          const coachName = ms?.coachId ? coaches.find((c) => c.id === ms.coachId)?.name || "—" : "—";
-          return { swimmer: s, dayLabel, time: ms?.time || "—", coachName };
-        });
+
+      // Every (swimmer, day-group, time) session this month, across ALL
+      // day groups — not just one selected day, and including a
+      // swimmer's second weekly session if they have one.
+      const entries = [];
+      all.forEach((s) => {
+        if (!levelsToInclude.includes(s.level)) return;
+        const ms = getMonthlySchedule(s, scheduleMonth);
+        if (!ms) return;
+        if (ms.day && ms.time) entries.push({ swimmer: s, day: ms.day, time: ms.time });
+        const second = getDistinctSecondSession(ms);
+        if (second) entries.push({ swimmer: s, day: second.day, time: second.time });
+      });
 
       const byLevel = {};
-      rows.forEach((r) => {
-        if (!byLevel[r.swimmer.level]) byLevel[r.swimmer.level] = [];
-        byLevel[r.swimmer.level].push(r);
+      entries.forEach((e) => {
+        if (!byLevel[e.swimmer.level]) byLevel[e.swimmer.level] = [];
+        byLevel[e.swimmer.level].push(e);
       });
 
       const levelSections = levelsToInclude.filter((lv) => byLevel[lv]?.length).map((lv) => {
-        const group = byLevel[lv].sort((a, b) => a.swimmer.name.localeCompare(b.swimmer.name));
-        const bodyRows = group
-          .map(
-            (r) =>
-              `<tr><td>${escapeHtml(r.swimmer.name)}</td><td style="text-align:center">${displayAge(r.swimmer.age)}</td><td>${escapeHtml(r.dayLabel)}</td><td>${escapeHtml(r.time)}</td><td>${escapeHtml(r.coachName)}</td><td>${escapeHtml(r.swimmer.phone || "—")}</td></tr>`
-          )
-          .join("");
-        return `
-          <div class="plan-header">${escapeHtml(lv)} <span class="plan-count">(${group.length})</span></div>
-          <table>
-            <tr><th>Name</th><th>Age</th><th>Day</th><th>Time</th><th>Coach</th><th>Phone</th></tr>
-            ${bodyRows}
-          </table>`;
+        const byDay = {};
+        byLevel[lv].forEach((e) => {
+          if (!byDay[e.day]) byDay[e.day] = [];
+          byDay[e.day].push(e);
+        });
+        const dayTables = DAY_GROUPS.filter((d) => byDay[d.id]?.length).map((d) => {
+          const sessionDates = datesForMonthAndDayGroup(scheduleMonth, d.id);
+          const dateHeaderCells = sessionDates.map((dt) => `<th>${dt.slice(8)}</th>`).join("");
+          const group = byDay[d.id].sort((a, b) => a.time.localeCompare(b.time) || a.swimmer.name.localeCompare(b.swimmer.name));
+          const bodyRows = group
+            .map((e) => {
+              const attCells = sessionDates
+                .map((dt) => {
+                  const att = e.swimmer?.attendance?.[dt];
+                  const mark = att === "present" ? '<span class="green">P</span>' : att === "absent" ? '<span class="red">A</span>' : "—";
+                  return `<td style="text-align:center">${mark}</td>`;
+                })
+                .join("");
+              return `<tr><td>${escapeHtml(e.swimmer.name)}</td><td style="text-align:center">${displayAge(e.swimmer.age)}</td><td>${escapeHtml(e.time)}</td>${attCells}</tr>`;
+            })
+            .join("");
+          return `
+            <div class="plan-header">${escapeHtml(d.label)} <span class="plan-count">(${group.length})</span></div>
+            <table>
+              <tr><th>Name</th><th>Age</th><th>Time</th>${dateHeaderCells}</tr>
+              ${bodyRows}
+            </table>`;
+        }).join("");
+        return `<h2 style="margin:20px 0 8px">${escapeHtml(lv)}</h2>${dayTables}`;
       }).join("");
 
       const scopeLabel = scheduleLevelFilter === "all" ? "All levels" : scheduleLevelFilter;
@@ -10686,7 +10721,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <img src="${CONFIG.logoDataUri}" />
           <div>
             <h1>${escapeHtml(CONFIG.academyName)}</h1>
-            <div class="sub">Full-week roster — ${escapeHtml(scopeLabel)} · ${escapeHtml(monthLabel(thisMonth))} (${rows.length} swimmer${rows.length === 1 ? "" : "s"})</div>
+            <div class="sub">Full-week roster & attendance — ${escapeHtml(scopeLabel)} · ${escapeHtml(monthLabel(scheduleMonth))} (${entries.length} session${entries.length === 1 ? "" : "s"})</div>
           </div>
         </div>
       `;
@@ -10694,7 +10729,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       setRosterFontSize(13);
       setRosterAlign("left");
       setRosterHeaderAlign("left");
-      setRosterPreview({ headerHtml, gridHtml, filename: `full-week-roster-${scheduleLevelFilter === "all" ? "all-levels" : scheduleLevelFilter.replace(/\s+/g, "-")}-${thisMonth}` });
+      setRosterPreview({ headerHtml, gridHtml, filename: `full-week-roster-${scheduleLevelFilter === "all" ? "all-levels" : scheduleLevelFilter.replace(/\s+/g, "-")}-${scheduleMonth}` });
     } catch (e) {
       console.warn("Export level roster failed", e);
     } finally {
@@ -10706,6 +10741,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   // full week, no session-slot restriction), as a real spreadsheet — one
   // row per swimmer — using the same XLSX pattern as the other exports.
   const [exportingLevelRosterXLSX, setExportingLevelRosterXLSX] = useState(false);
+  // A swimmer can have a SECOND weekly session (day2/time2) in addition to
+  // their main one — both need to show here, or a roster meant to say
+  // "which days should this swimmer be here" silently omits one of them.
+  const swimmerSessionsLabel = (ms) => {
+    if (!ms) return "—";
+    const sessions = [];
+    if (ms.day && ms.time) sessions.push(`${DAY_GROUPS.find((d) => d.id === ms.day)?.label || ms.day} · ${ms.time}`);
+    const second = getDistinctSecondSession(ms);
+    if (second) sessions.push(`${DAY_GROUPS.find((d) => d.id === second.day)?.label || second.day} · ${second.time}`);
+    return sessions.length ? sessions.join(", ") : "—";
+  };
   const exportLevelRosterExcel = async () => {
     setExportingLevelRosterXLSX(true);
     try {
@@ -10714,19 +10760,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       const levelsToInclude = scheduleLevelFilter === "all" ? LEVELS : [scheduleLevelFilter];
       const rows = all
         .filter((s) => levelsToInclude.includes(s.level))
-        .map((s) => {
-          const ms = getMonthlySchedule(s, thisMonth);
-          const dayLabel = ms?.day ? DAY_GROUPS.find((d) => d.id === ms.day)?.label || ms.day : "";
-          const coachName = ms?.coachId ? coaches.find((c) => c.id === ms.coachId)?.name || "" : "";
-          return [s.name, displayAge(s.age), s.level, dayLabel, ms?.time || "", coachName, s.phone || ""];
-        })
-        .sort((a, b) => (a[2] === b[2] ? a[0].localeCompare(b[0]) : a[2].localeCompare(b[2])));
+        .map((s) => [s.name, s.level, displayAge(s.age), swimmerSessionsLabel(getMonthlySchedule(s, thisMonth))])
+        .sort((a, b) => (a[1] === b[1] ? a[0].localeCompare(b[0]) : a[1].localeCompare(b[1])));
 
       const XLSX = await loadXLSX();
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(
         wb,
-        XLSX.utils.aoa_to_sheet([["Name", "Age", "Level", "Day", "Time", "Coach", "Phone"], ...rows]),
+        XLSX.utils.aoa_to_sheet([["Name", "Level", "Age", "Days"], ...rows]),
         "Roster"
       );
       const scopeSlug = scheduleLevelFilter === "all" ? "all-levels" : scheduleLevelFilter.replace(/\s+/g, "-");
@@ -12363,7 +12404,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       addBooking(ms.coachId, ms.day, ms.time, ms.sessionType, s.level, s.age, s.name, s.id);
       // A swimmer with a second weekly session (different coach or slot)
       // shows up under that booking too — same swimmer, two commitments.
-      if (ms.day2 && ms.time2) addBooking(ms.coachId2, ms.day2, ms.time2, ms.sessionType2, s.level, s.age, s.name, s.id);
+      // Same day+time as the primary session isn't a real second
+      // commitment — it's counted once already above.
+      const second = getDistinctSecondSession(ms);
+      if (second) addBooking(second.coachId, second.day, second.time, second.sessionType, s.level, s.age, s.name, s.id);
     });
     const bookingsById = {};
     Object.keys(bookingsMapById).forEach((coachId) => {
@@ -28267,9 +28311,10 @@ function getScheduleOccupancy(swimmers = [], month) {
   swimmers.forEach((s) => {
     const ms = getMonthlySchedule(s, month);
     if (!ms) return;
+    const second = getDistinctSecondSession(ms);
     const entries = [
       { day: ms.day, time: ms.time, coachId: ms.coachId, sessionType: ms.sessionType || s.sessionType || "group", classId: ms.classId || null },
-      { day: ms.day2, time: ms.time2, coachId: ms.coachId2, sessionType: ms.sessionType2 || "group", classId: ms.classId || null },
+      ...(second ? [{ day: second.day, time: second.time, coachId: second.coachId, sessionType: second.sessionType || "group", classId: ms.classId || null }] : []),
     ];
     entries.forEach((e) => {
       if (!e.day || !e.time) return;
