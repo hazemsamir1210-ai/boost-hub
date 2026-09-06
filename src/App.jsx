@@ -10315,7 +10315,29 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   const [scheduleDayFilter, setScheduleDayFilter] = useState(dayGroupForToday() || DAY_GROUPS[0].id);
   const [scheduleTimeFilter, setScheduleTimeFilter] = useState("all"); // "all" or one specific time
-  const [scheduleLevelFilter, setScheduleLevelFilter] = useState("all"); // "all" or a specific level (e.g. "Baby")
+  // An array of selected levels, or ["all"] meaning every level — was a
+  // single string, now multi-select so e.g. "Star 3 + Star 4 + Team" can
+  // be viewed/exported together instead of one level at a time.
+  const [scheduleLevelFilter, setScheduleLevelFilter] = useState(["all"]);
+  const scheduleLevelIsAll = scheduleLevelFilter.includes("all");
+  // Baby uses a completely different time-slot system (30-minute slots)
+  // from every other level, so mixing it into a multi-level selection
+  // would need two different grids on screen at once. Baby-specific
+  // behavior only activates when Baby is the ONLY level selected —
+  // selecting Baby alongside anything else just treats it as a normal
+  // level with the regular hourly time slots.
+  const scheduleLevelIsBabyOnly = scheduleLevelFilter.length === 1 && scheduleLevelFilter[0] === "Baby";
+  const matchesScheduleLevelFilter = (level) => scheduleLevelIsAll || scheduleLevelFilter.includes(level);
+  const scheduleLevelFilterLabel = () =>
+    scheduleLevelIsAll ? "All levels" : scheduleLevelFilter.length === 1 ? scheduleLevelFilter[0] : `${scheduleLevelFilter.length} levels`;
+  const toggleScheduleLevelFilter = (level) => {
+    setScheduleLevelFilter((prev) => {
+      if (level === "all") return ["all"];
+      const withoutAll = prev.filter((l) => l !== "all");
+      const next = withoutAll.includes(level) ? withoutAll.filter((l) => l !== level) : [...withoutAll, level];
+      return next.length === 0 ? ["all"] : next;
+    });
+  };
   const [scheduleMonth, setScheduleMonth] = useState(monthKey()); // "YYYY-MM" — which month's sessions to report on
   const [upcomingMakeups, setUpcomingMakeups] = useState([]); // [{ swimmer, session }] — today and later, whole academy
 
@@ -10427,16 +10449,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       const daySections = DAY_GROUPS.map((dayGroup) => {
         // Same half-hour expansion as the on-screen grid when the
         // export is generated while "Baby only" is selected.
-        const times = getTimeOptions(BRANCHES[0].id, dayGroup.id, scheduleLevelFilter === "Baby" ? "Baby" : null)
+        const times = getTimeOptions(BRANCHES[0].id, dayGroup.id, scheduleLevelIsBabyOnly ? "Baby" : null)
           .slice()
           .sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
         if (times.length === 0) return "";
         const activeCoaches = coaches
           .filter((c) => !(c.offDays || []).includes(dayGroup.id))
           .filter((c) => {
-            if (scheduleLevelFilter === "all") return true;
+            if (scheduleLevelIsAll) return true;
             return Object.values(coachBookingsById[c.id] || {}).some(
-              (b) => b.day === dayGroup.id && b.names.some((n) => n.level === scheduleLevelFilter)
+              (b) => b.day === dayGroup.id && b.names.some((n) => matchesScheduleLevelFilter(n.level))
             );
           });
         if (activeCoaches.length === 0) return "";
@@ -10451,12 +10473,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 }
                 const rawBooking = (coachBookingsById[c.id] || []).find((b) => b.day === dayGroup.id && b.time === t);
                 const booking =
-                  !rawBooking || scheduleLevelFilter === "all"
+                  !rawBooking || scheduleLevelIsAll
                     ? rawBooking
                     : (() => {
-                        const filteredNames = rawBooking.names.filter((n) => n.level === scheduleLevelFilter);
+                        const filteredNames = rawBooking.names.filter((n) => matchesScheduleLevelFilter(n.level));
                         if (filteredNames.length === 0) return null;
-                        return { ...rawBooking, names: filteredNames, count: filteredNames.length, levels: [scheduleLevelFilter] };
+                        return { ...rawBooking, names: filteredNames, count: filteredNames.length, levels: [...new Set(filteredNames.map((n) => n.level))] };
                       })();
                 if (!booking) return `<td class="open">—</td>`;
                 const specialLevel = booking.levels.find((lv) => ["Exp", "Exp 2", "Exp 3", ...TEAM_SQUAD_LEVELS].includes(lv));
@@ -10466,7 +10488,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 // by definition, so showing the level here is redundant —
                 // their names are the actually useful thing to see.
                 const secondLine =
-                  scheduleLevelFilter === "Baby"
+                  scheduleLevelIsBabyOnly
                     ? booking.names.map((n) => n.name).join(", ")
                     : [...booking.levels].join(", ");
                 return `<td class="${full ? "full" : "hasroom"}">${booking.count}/${capacity}<br><span class="lvl">${escapeHtml(secondLine)}</span></td>`;
@@ -10543,7 +10565,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       // Respects the same "All levels" / "Baby only" / etc. filter as the
       // on-screen grid and the coach overview PDF, so this export always
       // matches whatever's currently selected there.
-      const inSession = scheduleLevelFilter === "all" ? inSessionAll : inSessionAll.filter((e) => e.swimmer.level === scheduleLevelFilter);
+      const inSession = scheduleLevelIsAll ? inSessionAll : inSessionAll.filter((e) => matchesScheduleLevelFilter(e.swimmer.level));
       const byCoach = {};
       inSession.forEach((entry) => {
         const key = entry.coachId || "unassigned";
@@ -10627,7 +10649,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <img src="${CONFIG.logoDataUri}" />
           <div>
             <h1>${escapeHtml(CONFIG.academyName)}</h1>
-            <div class="sub">Session roster & attendance — ${escapeHtml(dayLabel)}${scheduleTimeFilter !== "all" ? ` · ${escapeHtml(scheduleTimeFilter)}` : ""}${scheduleLevelFilter !== "all" ? ` · ${escapeHtml(scheduleLevelFilter)} only` : ""} · ${escapeHtml(monthLabel(scheduleMonth))}</div>
+            <div class="sub">Session roster & attendance — ${escapeHtml(dayLabel)}${scheduleTimeFilter !== "all" ? ` · ${escapeHtml(scheduleTimeFilter)}` : ""}${!scheduleLevelIsAll ? ` · ${escapeHtml(scheduleLevelFilterLabel())} only` : ""} · ${escapeHtml(monthLabel(scheduleMonth))}</div>
           </div>
         </div>
       `;
@@ -10662,7 +10684,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     setExportingLevelRoster(true);
     try {
       const all = await fetchAllSwimmers();
-      const levelsToInclude = scheduleLevelFilter === "all" ? LEVELS : [scheduleLevelFilter];
+      const levelsToInclude = scheduleLevelIsAll ? LEVELS : scheduleLevelFilter;
 
       // Every (swimmer, day-group, time) session this month, across ALL
       // day groups — not just one selected day, and including a
@@ -10715,7 +10737,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         return `<h2 style="margin:20px 0 8px">${escapeHtml(lv)}</h2>${dayTables}`;
       }).join("");
 
-      const scopeLabel = scheduleLevelFilter === "all" ? "All levels" : scheduleLevelFilter;
+      const scopeLabel = scheduleLevelFilterLabel();
       const headerHtml = `
         <div class="header" dir="ltr">
           <img src="${CONFIG.logoDataUri}" />
@@ -10729,7 +10751,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       setRosterFontSize(13);
       setRosterAlign("left");
       setRosterHeaderAlign("left");
-      setRosterPreview({ headerHtml, gridHtml, filename: `full-week-roster-${scheduleLevelFilter === "all" ? "all-levels" : scheduleLevelFilter.replace(/\s+/g, "-")}-${scheduleMonth}` });
+      const scopeSlug = scheduleLevelIsAll ? "all-levels" : scheduleLevelFilter.join("-").replace(/\s+/g, "-");
+      setRosterPreview({ headerHtml, gridHtml, filename: `full-week-roster-${scopeSlug}-${scheduleMonth}` });
     } catch (e) {
       console.warn("Export level roster failed", e);
     } finally {
@@ -10757,7 +10780,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     try {
       const all = await fetchAllSwimmers();
       const thisMonth = monthKey();
-      const levelsToInclude = scheduleLevelFilter === "all" ? LEVELS : [scheduleLevelFilter];
+      const levelsToInclude = scheduleLevelIsAll ? LEVELS : scheduleLevelFilter;
       const rows = all
         .filter((s) => levelsToInclude.includes(s.level))
         .map((s) => [s.name, s.level, displayAge(s.age), swimmerSessionsLabel(getMonthlySchedule(s, thisMonth))])
@@ -10770,7 +10793,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         XLSX.utils.aoa_to_sheet([["Name", "Level", "Age", "Days"], ...rows]),
         "Roster"
       );
-      const scopeSlug = scheduleLevelFilter === "all" ? "all-levels" : scheduleLevelFilter.replace(/\s+/g, "-");
+      const scopeSlug = scheduleLevelIsAll ? "all-levels" : scheduleLevelFilter.join("-").replace(/\s+/g, "-");
       XLSX.writeFile(wb, `full-week-roster-${scopeSlug}-${thisMonth}.xlsx`);
     } catch (e) {
       console.warn("Export level roster (Excel) failed", e);
@@ -15291,6 +15314,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 onChange={(e) => { setScheduleDayFilter(e.target.value); setScheduleTimeFilter("all"); }}
                 className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
               >
+                <option value="full-week">Full week (all days)</option>
                 {DAY_GROUPS.map((d) => (
                   <option key={d.id} value={d.id}>{d.label}</option>
                 ))}
@@ -15307,16 +15331,36 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <option key={t} value={t}>{t}</option>
                 ))}
               </select>
-              <select
-                value={scheduleLevelFilter}
-                onChange={(e) => setScheduleLevelFilter(e.target.value)}
-                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
-              >
-                <option value="all">All levels</option>
-                {LEVELS.map((lv) => (
-                  <option key={lv} value={lv}>{lv} only</option>
-                ))}
-              </select>
+              <details className="relative">
+                <summary
+                  className="list-none cursor-pointer border border-slate-200 rounded-lg py-2 px-3 text-sm bg-white hover:bg-slate-50 select-none"
+                >
+                  {scheduleLevelFilterLabel()}
+                </summary>
+                <div className="absolute z-20 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg py-2 w-44 max-h-64 overflow-y-auto">
+                  <label className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-slate-50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={scheduleLevelIsAll}
+                      onChange={() => toggleScheduleLevelFilter("all")}
+                      className="w-4 h-4 accent-sky-900"
+                    />
+                    All levels
+                  </label>
+                  <div className="border-t border-slate-100 my-1" />
+                  {LEVELS.map((lv) => (
+                    <label key={lv} className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-slate-50 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!scheduleLevelIsAll && scheduleLevelFilter.includes(lv)}
+                        onChange={() => toggleScheduleLevelFilter(lv)}
+                        className="w-4 h-4 accent-sky-900"
+                      />
+                      {lv}
+                    </label>
+                  ))}
+                </div>
+              </details>
               <input
                 type="month"
                 value={scheduleMonth}
@@ -15345,31 +15389,25 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 {exportingCoachGrid ? "Loading..." : "Export coach overview"}
               </button>
               <button
-                onClick={exportSessionRoster}
-                disabled={exportingRoster}
+                onClick={() => (scheduleDayFilter === "full-week" ? exportLevelRoster() : exportSessionRoster())}
+                disabled={exportingRoster || exportingLevelRoster}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
+                title={scheduleDayFilter === "full-week" ? "Every swimmer in the level selected above, across all days/times — not just one session" : undefined}
               >
-                {exportingRoster ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
-                {exportingRoster ? "Loading..." : "Preview & Export"}
+                {exportingRoster || exportingLevelRoster ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
+                {exportingRoster || exportingLevelRoster ? "Loading..." : "Preview & Export"}
               </button>
-              <button
-                onClick={exportLevelRoster}
-                disabled={exportingLevelRoster}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-amber-600 text-white text-sm font-semibold hover:bg-amber-700 disabled:opacity-60"
-                title="Every swimmer in the level selected above (or every level, if set to 'All levels'), across all days/times — not just this one session"
-              >
-                {exportingLevelRoster ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
-                {exportingLevelRoster ? "Loading..." : `Full-week roster${scheduleLevelFilter !== "all" ? ` (${scheduleLevelFilter})` : ""}`}
-              </button>
-              <button
-                onClick={exportLevelRosterExcel}
-                disabled={exportingLevelRosterXLSX}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-green-700 text-white text-sm font-semibold hover:bg-green-800 disabled:opacity-60"
-                title="Same full-week roster as an Excel file (.xlsx)"
-              >
-                {exportingLevelRosterXLSX ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
-                {exportingLevelRosterXLSX ? "Loading..." : "Excel"}
-              </button>
+              {scheduleDayFilter === "full-week" && (
+                <button
+                  onClick={exportLevelRosterExcel}
+                  disabled={exportingLevelRosterXLSX}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-green-700 text-white text-sm font-semibold hover:bg-green-800 disabled:opacity-60"
+                  title="The full-week roster as an Excel file (.xlsx)"
+                >
+                  {exportingLevelRosterXLSX ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
+                  {exportingLevelRosterXLSX ? "Loading..." : "Excel"}
+                </button>
+              )}
               {canEditContent && (
                 <button
                   onClick={() => setTrainingWindowOpen((v) => !v)}
@@ -15451,14 +15489,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           {coaches.length === 0 ? (
             <div className="text-center text-slate-400 py-16">No coaches added yet</div>
           ) : (
-            DAY_GROUPS.filter((d) => d.id === scheduleDayFilter).map((dayGroup) => {
+            (scheduleDayFilter === "full-week" ? DAY_GROUPS : DAY_GROUPS.filter((d) => d.id === scheduleDayFilter)).map((dayGroup) => {
               // Baby sessions run 30 minutes, half the length of a normal
               // slot, so the "Baby only" view needs a column for every
               // half-hour (getTimeOptions is the exact same expansion the
               // registration form already uses to offer those extra
               // half-hour times) — every other level keeps the plain
               // hourly columns.
-              const times = getTimeOptions(BRANCHES[0].id, dayGroup.id, scheduleLevelFilter === "Baby" ? "Baby" : null)
+              const times = getTimeOptions(BRANCHES[0].id, dayGroup.id, scheduleLevelIsBabyOnly ? "Baby" : null)
                 .slice()
                 .sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
               if (times.length === 0) return null;
@@ -15482,14 +15520,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         {coaches
                           .filter((c) => !(c.offDays || []).includes(dayGroup.id))
                           .filter((c) => {
-                            if (scheduleLevelFilter === "all") return true;
+                            if (scheduleLevelIsAll) return true;
                             // Only show a coach row at all if they have at
                             // least one booking that day matching the
-                            // selected level — otherwise a "Baby only"
+                            // selected level(s) — otherwise a "Baby only"
                             // view would still list every coach with
                             // entirely empty rows.
                             return Object.values(coachBookingsById[c.id] || {}).some(
-                              (b) => b.day === dayGroup.id && b.names.some((n) => n.level === scheduleLevelFilter)
+                              (b) => b.day === dayGroup.id && b.names.some((n) => matchesScheduleLevelFilter(n.level))
                             );
                           })
                           .map((c) => (
@@ -15516,12 +15554,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               // counts/levels mixed in from other swimmers
                               // sharing the same coach/time slot.
                               const booking =
-                                !rawBooking || scheduleLevelFilter === "all"
+                                !rawBooking || scheduleLevelIsAll
                                   ? rawBooking
                                   : (() => {
-                                      const filteredNames = rawBooking.names.filter((n) => n.level === scheduleLevelFilter);
+                                      const filteredNames = rawBooking.names.filter((n) => matchesScheduleLevelFilter(n.level));
                                       if (filteredNames.length === 0) return null;
-                                      return { ...rawBooking, names: filteredNames, count: filteredNames.length, levels: [scheduleLevelFilter] };
+                                      return { ...rawBooking, names: filteredNames, count: filteredNames.length, levels: [...new Set(filteredNames.map((n) => n.level))] };
                                     })();
                               const cellMakeups = upcomingMakeups.filter(
                                 (um) =>
@@ -15564,7 +15602,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                   >
                                     <div>{booking.count}/{capacity}</div>
                                     <div>
-                                      {scheduleLevelFilter === "Baby"
+                                      {scheduleLevelIsBabyOnly
                                         ? booking.names.map((n) => n.name).join(", ")
                                         : booking.levels.join(", ")}
                                     </div>
@@ -16090,6 +16128,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   onChange={(e) => { setScheduleDayFilter(e.target.value); setScheduleTimeFilter("all"); }}
                   className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                 >
+                  <option value="full-week">Full week (all days)</option>
                   {DAY_GROUPS.map((d) => (
                     <option key={d.id} value={d.id}>{d.label}</option>
                   ))}
@@ -16113,12 +16152,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                 />
                 <button
-                  onClick={exportSessionRoster}
-                  disabled={exportingRoster}
+                  onClick={() => (scheduleDayFilter === "full-week" ? exportLevelRoster() : exportSessionRoster())}
+                  disabled={exportingRoster || exportingLevelRoster}
                   className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
                 >
-                  {exportingRoster ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
-                  {exportingRoster ? "Loading..." : "Preview & Export"}
+                  {exportingRoster || exportingLevelRoster ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
+                  {exportingRoster || exportingLevelRoster ? "Loading..." : "Preview & Export"}
                 </button>
               </div>
             </div>
