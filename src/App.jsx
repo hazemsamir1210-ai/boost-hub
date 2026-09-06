@@ -22813,7 +22813,15 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   useEffect(() => {
     if (!authed) return;
     loadSwimmers();
-    const t = setInterval(loadSwimmers, 15000);
+    // Was every 15s — each poll re-fetches and re-filters the WHOLE
+    // roster (every swimmer's full attendance/skills/notes history), so
+    // that frequency meant a large recurring load on the device the
+    // whole time this screen stays open. Marking attendance, adding a
+    // note, etc. already update the screen instantly on their own
+    // (see markAttendance/saveNote/setSkillRating/levelUp below) — this
+    // poll's only job is picking up a DIFFERENT coach's concurrent
+    // change to the same slot, which 45s still catches soon enough.
+    const t = setInterval(loadSwimmers, 45000);
     return () => clearInterval(t);
   }, [authed, loadSwimmers]);
 
