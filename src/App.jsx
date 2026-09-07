@@ -2638,6 +2638,12 @@ async function loadCollection(storeKey) {
 
 async function saveCollection(storeKey, list, opts = {}) {
   const res = await storageSet(storeKey, JSON.stringify(list), true);
+  if (storeKey === STORE_KEYS.swimmers) {
+    // Keep fetchAllSwimmers' short-lived cache pointed at the exact data
+    // we just wrote, so the very next read (e.g. the next attendance tap
+    // in the same burst) doesn't have to re-fetch it from the network.
+    setSwimmersCache(list);
+  }
   // The "swimmers" table is a SEPARATE, denormalized copy of this same
   // data — kept only so search/pagination/session-roster queries can hit
   // Supabase directly instead of pulling the whole roster into memory.
@@ -3023,10 +3029,34 @@ function isDueForRenewal(swimmer) {
    README) is the fast, searchable/paginated source for what gets
    DISPLAYED; these two helpers are for the few actions (payments,
    freezing, editing, importing...) that still need to safely read/update
-   one swimmer within the FULL roster stored in Supabase — they fetch it
-   fresh each time rather than keeping it sitting in memory. */
+   one swimmer within the FULL roster stored in Supabase.
+
+   fetchAllSwimmers keeps a SHORT-lived cache of the last fetch (a few
+   seconds) rather than always hitting the network — updateSwimmerById is
+   the hot path behind every attendance tap, note, skill rating, and
+   level-up on the Technical screen, and marking a run of swimmers one
+   after another was paying a full fetch-and-parse of the ENTIRE roster
+   for each individual tap. saveCollection refreshes this cache with the
+   exact list it just wrote, so anything read through THIS same flow
+   during the cache window is always current; the window only matters for
+   catching a change made from a DIFFERENT device in the meantime, and 6
+   seconds is a small enough gap for that to stay rare. */
+let swimmersCache = null;
+let swimmersCacheAt = 0;
+const SWIMMERS_CACHE_TTL_MS = 6000;
+
+function setSwimmersCache(list) {
+  swimmersCache = list;
+  swimmersCacheAt = Date.now();
+}
+
 async function fetchAllSwimmers() {
-  return await loadCollection(STORE_KEYS.swimmers);
+  if (swimmersCache && Date.now() - swimmersCacheAt < SWIMMERS_CACHE_TTL_MS) {
+    return swimmersCache;
+  }
+  const list = await loadCollection(STORE_KEYS.swimmers);
+  setSwimmersCache(list);
+  return list;
 }
 
 // Edits queue up and run one at a time, in the order they were made —
