@@ -12292,7 +12292,6 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         // not just a starting filter they could change.
         if (branchRestriction) query = query.eq("branch", branchRestriction);
         else if (branchFilter !== "all") query = query.eq("branch", branchFilter);
-        if (levelFilter !== "all") query = query.eq("level", levelFilter);
         // Program/level scope is a hard data boundary for staff accounts.
         if (role !== "admin" && (programAccess.length || levelAccess.length)) {
           const scopedLevels = [...new Set([
@@ -12311,19 +12310,22 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         }
         const q = search.trim();
         if (q) query = query.or(`name.ilike.%${q}%,phone.ilike.%${q}%`);
-        // Day, time, session type, and coach can each be overridden for a
-        // specific month inside monthlySchedules without touching the
-        // swimmer's top-level fields. Filtering any of these at the
-        // database level (data->>day, data->>time, data->>sessionType)
-        // only ever matched the top-level values, so a swimmer who moved
-        // days/times/coach for the month being viewed (via a
-        // monthlySchedules override) was silently dropped from these
-        // filtered results even though getMonthlySchedule() would
-        // correctly place them in that slot. All four are matched
-        // client-side instead, against getMonthlySchedule(), which keeps
-        // this filter's answer consistent with getMonthlySchedule() and
-        // with what Schedule/the coach grid show for the same slot.
-        if (dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || coachFilterValue !== "all") {
+        // Day, time, session type, coach, AND level are all matched
+        // client-side instead of at the database level. Day/time/
+        // sessionType/coach can each be overridden per-month inside
+        // monthlySchedules without touching the swimmer's top-level
+        // fields, so filtering the raw top-level columns missed anyone
+        // moved via a monthly override. Level has a DIFFERENT staleness
+        // risk: the mirror table's "level" column is a denormalized copy
+        // kept in sync by a background write that can fail outright (the
+        // RLS policy blocking it was exactly this, fixed earlier) — a
+        // swimmer whose level changed while that sync was broken would
+        // still show their OLD level here, even though their real record
+        // (and the "Swimmers" screen elsewhere) already has the new one.
+        // Matching level against the swimmer's actual data.level, same as
+        // the others, keeps this filter's answer correct regardless of
+        // whether the mirror ever fell behind.
+        if (dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || coachFilterValue !== "all" || levelFilter !== "all") {
           query = query.order("name", { ascending: true });
           const { data, error } = await query;
           if (error) throw error;
@@ -12335,6 +12337,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               const effTime = ms ? ms.time : s.time;
               const effSessionType = ms ? ms.sessionType : s.sessionType;
               const effCoachId = ms ? ms.coachId : s.coachId;
+              if (levelFilter !== "all" && s.level !== levelFilter) return false;
               if (dayFilter !== "all" && effDay !== dayFilter) return false;
               if (timeFilter !== "all" && effTime !== timeFilter) return false;
               if (sessionTypeFilter !== "all" && effSessionType !== sessionTypeFilter) return false;
@@ -15815,10 +15818,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         const revenueTrendMax = Math.max(...revenueTrend.map((m) => m.total), 1);
 
         // Retention — of the swimmers who were active (had a set day/time)
-        // last month, what fraction are still active this month. Gives an
-        // early signal for swimmers quietly drifting away.
+        // the month BEFORE this report's period, what fraction are still
+        // active in this period's own month. Anchored on the period being
+        // viewed (endISO), not always today's real month — otherwise
+        // browsing a past period here still compared against today,
+        // making the number meaningless for anything but the current
+        // month. Reused below as the "current period month" for the
+        // per-coach section too, for the same reason.
+        const coachPerfMonthKey = endISO.slice(0, 7);
         const prevMonthKeyForRetention = (() => {
-          const d = new Date();
+          const [y, m] = coachPerfMonthKey.split("-").map(Number);
+          const d = new Date(y, m - 1, 1);
           d.setMonth(d.getMonth() - 1);
           return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
         })();
@@ -15826,7 +15836,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           const sched = (s.scheduleHistory || []).find((h) => (h.date || "").slice(0, 7) === prevMonthKeyForRetention);
           return !!sched || (!!getMonthlySchedule(s, prevMonthKeyForRetention) && (s.createdAt || "").slice(0, 7) <= prevMonthKeyForRetention);
         });
-        const stillActiveThisMonth = activeLastMonth.filter((s) => !!getMonthlySchedule(s, monthKey()));
+        const stillActiveThisMonth = activeLastMonth.filter((s) => !!getMonthlySchedule(s, coachPerfMonthKey));
         const retentionRate = activeLastMonth.length ? Math.round((stillActiveThisMonth.length / activeLastMonth.length) * 100) : null;
 
         const prevRangeForCoaches = periodRange(reportType, previousAnchor(reportType, reportAnchor));
@@ -15840,6 +15850,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         // sizes than a raw count would), and retention — of THEIR swimmers
         // active last month, how many are still with them (not just still
         // at the academy under a different coach) this month.
+        // The month this report's coach performance section resolves
+        // each swimmer's assignment against — the END of whatever period
+        // is currently selected (this week/month/quarter/a past one),
+        // not always today's real month. Using monthKey() unconditionally
+        // here meant picking a past period in this report still showed
+        // TODAY's active-swimmer assignments, throwing off active count,
+        // skills coverage, and retention for anything but the current
+        // month — the same issue already fixed on the dedicated Coach
+        // Performance tab, just a separate occurrence of it here.
+        // (coachPerfMonthKey is already defined above, next to Retention.)
         const coachPerformance = coaches.map((c) => {
           // Same month-aware resolver used everywhere else — a swimmer's
           // CURRENT coach for the period being viewed can live in
@@ -15848,10 +15868,21 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           // checking only the raw top-level fields under- or
           // mis-attributed swimmers to the wrong coach here.
           const myActiveSwimmers = swimmers.filter((s) => {
-            const ms = getMonthlySchedule(s, monthKey());
+            const ms = getMonthlySchedule(s, coachPerfMonthKey);
             return ms && (ms.coachId === c.id || ms.coachId2 === c.id);
           });
-          const mySwimmers = swimmers.filter((s) => s.coachId === c.id || s.coachId2 === c.id || myActiveSwimmers.includes(s));
+          // Deliberately NOT OR'd with a raw top-level coachId/coachId2
+          // match — getMonthlySchedule() already falls back to those
+          // fields itself when there's no monthly override, so
+          // myActiveSwimmers is already complete on its own. OR'ing in the
+          // raw fields on top of that meant a swimmer reassigned to a
+          // DIFFERENT coach (the coach-grid "reassign" action only writes
+          // monthlySchedules[month].coachId, leaving the old top-level
+          // coachId in place) kept counting under their OLD coach's
+          // attendance/skills numbers here forever, in addition to
+          // correctly counting under their new one — double-counted
+          // across two coaches at once.
+          const mySwimmers = myActiveSwimmers;
 
           const attendanceRateForRange = (rStartISO, rEndISO) => {
             let presentCount = 0;
@@ -16511,7 +16542,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             const ms = getMonthlySchedule(s, selectedMonthKey);
             return ms && (ms.coachId === c.id || ms.coachId2 === c.id);
           });
-          const mySwimmers = swimmers.filter((s) => s.coachId === c.id || s.coachId2 === c.id || myActiveSwimmers.includes(s));
+          // Deliberately NOT OR'd with a raw top-level coachId/coachId2
+          // match — getMonthlySchedule() already falls back to those
+          // fields itself when there's no monthly override, so
+          // myActiveSwimmers is already complete on its own. OR'ing in the
+          // raw fields on top of that meant a swimmer reassigned to a
+          // DIFFERENT coach (the coach-grid "reassign" action only writes
+          // monthlySchedules[month].coachId, leaving the old top-level
+          // coachId in place) kept counting under their OLD coach's
+          // attendance/skills numbers here forever, in addition to
+          // correctly counting under their new one — double-counted
+          // across two coaches at once.
+          const mySwimmers = myActiveSwimmers;
 
           const attendanceRateForRange = (rStartISO, rEndISO) => {
             let presentCount = 0;
@@ -24094,14 +24136,31 @@ function CoachView({ onExit, preAuthedCoach = null }) {
     );
   }
 
-  const mySwimmers = swimmers.filter((s) => s.coachId === authedCoach.id);
+  // Every (swimmer, day, time) session belonging to this coach this
+  // month — resolved via getMonthlySchedule rather than the swimmer's raw
+  // top-level day/coachId, so a swimmer moved this month via a
+  // monthlySchedules override, booked ahead and not yet promoted, or
+  // assigned to this coach only as their SECOND session (coachId2) all
+  // show up correctly, instead of being invisible or listed under the
+  // wrong day.
+  const thisMonthForCoachView = monthKey();
+  const mySessions = [];
+  swimmers.forEach((s) => {
+    const ms = getMonthlySchedule(s, thisMonthForCoachView);
+    if (!ms) return;
+    if (ms.day && ms.time && ms.coachId === authedCoach.id) mySessions.push({ swimmer: s, day: ms.day, time: ms.time });
+    const second = getDistinctSecondSession(ms);
+    if (second && second.coachId === authedCoach.id) mySessions.push({ swimmer: s, day: second.day, time: second.time });
+  });
+  const mySwimmers = [...new Set(mySessions.map((e) => e.swimmer))];
   const todaysGroup = dayGroupForToday();
 
   const byDay = DAY_GROUPS.map((d) => ({
     ...d,
     isToday: d.id === todaysGroup,
-    sessions: mySwimmers
-      .filter((s) => s.day === d.id)
+    sessions: mySessions
+      .filter((e) => e.day === d.id)
+      .map((e) => ({ ...e.swimmer, time: e.time }))
       .sort((a, b) => timeToMinutes(a.time) - timeToMinutes(b.time)),
   }));
 
