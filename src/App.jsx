@@ -2636,7 +2636,7 @@ async function loadCollection(storeKey) {
   }
 }
 
-async function saveCollection(storeKey, list) {
+async function saveCollection(storeKey, list, opts = {}) {
   const res = await storageSet(storeKey, JSON.stringify(list), true);
   // The "swimmers" table is a SEPARATE, denormalized copy of this same
   // data — kept only so search/pagination/session-roster queries can hit
@@ -2649,10 +2649,50 @@ async function saveCollection(storeKey, list) {
   // syncSwimmersTableWithRetry below makes sure a failure here is
   // retried and, if it still fails, actually recorded somewhere an admin
   // will see it — instead of only ever reaching a console.warn no one reads.
-  if (storeKey === STORE_KEYS.swimmers) {
+  // skipSwimmersSync: set by updateSwimmerById, which already knows
+  // exactly which ONE swimmer changed and syncs just that row itself —
+  // re-upserting the entire roster here on top of that would mean every
+  // single attendance tap re-sends every swimmer in the academy to
+  // Supabase, for a change that only ever touches one of them.
+  if (storeKey === STORE_KEYS.swimmers && !opts.skipSwimmersSync) {
     syncSwimmersTableWithRetry(list);
   }
   return res;
+}
+
+// Upserts exactly one swimmer row — the lightweight counterpart to
+// syncSwimmersTable's full-roster resync, for the extremely common case
+// (updateSwimmerById: attendance, notes, skills, level-ups, freezes...)
+// where only a single swimmer actually changed and re-sending the whole
+// roster would be pure waste.
+async function syncSingleSwimmerToTable(swimmer) {
+  if (!window.__academy) return;
+  const { error } = await supabase.from("swimmers").upsert(
+    [{
+      id: swimmer.id,
+      academy_id: window.__academy.id,
+      name: swimmer.name || "",
+      branch: swimmer.branch || null,
+      level: swimmer.level || null,
+      data: swimmer,
+    }],
+    { onConflict: "id" }
+  );
+  if (error) throw error;
+}
+
+async function syncSingleSwimmerToTableWithRetry(swimmer, attemptsLeft = 3) {
+  try {
+    await syncSingleSwimmerToTable(swimmer);
+    clearSwimmersSyncAlert();
+  } catch (e) {
+    if (attemptsLeft > 1) {
+      setTimeout(() => syncSingleSwimmerToTableWithRetry(swimmer, attemptsLeft - 1), 1500);
+    } else {
+      console.warn("single swimmer sync failed after retries", e);
+      markSwimmersSyncNeedsAttention(e?.message || "Sync failed");
+    }
+  }
 }
 
 // Mirrors the full swimmers array into the dedicated "swimmers" table:
@@ -3013,8 +3053,16 @@ async function updateSwimmerById(id, updateFn) {
     const updated = updateFn(all[idx]);
     const next = [...all];
     next[idx] = updated;
-    const res = await saveCollection(STORE_KEYS.swimmers, next);
+    // Only ONE swimmer actually changed here, so the mirror-table sync
+    // only needs to touch that one row — skip saveCollection's generic
+    // full-roster resync (which would re-upsert every swimmer in the
+    // academy for this single change) and sync just this one instead.
+    // This is the hot path behind every attendance tap, note, skill
+    // rating, and level-up on the Technical screen, so this is where a
+    // large roster's full-resync cost was actually being paid every time.
+    const res = await saveCollection(STORE_KEYS.swimmers, next, { skipSwimmersSync: true });
     if (!res) throw new Error("Could not save, please try again");
+    syncSingleSwimmerToTableWithRetry(updated);
     return updated;
   };
   // Chain onto the queue regardless of whether the previous entry
