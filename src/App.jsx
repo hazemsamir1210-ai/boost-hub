@@ -10690,6 +10690,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   // level with the regular hourly time slots.
   const scheduleLevelIsBabyOnly = scheduleLevelFilter.length === 1 && scheduleLevelFilter[0] === "Baby";
   const matchesScheduleLevelFilter = (level) => scheduleLevelIsAll || scheduleLevelFilter.includes(level);
+  // New Programs structure, additive alongside the level filter above —
+  // only matches swimmers already migrated (program set). A swimmer with
+  // no program (not yet migrated) simply never matches a specific
+  // program filter, same as not matching a level they don't have.
+  const [scheduleProgramFilter, setScheduleProgramFilter] = useState("all");
+  const matchesScheduleProgramFilter = (program) => scheduleProgramFilter === "all" || program === scheduleProgramFilter;
   const scheduleLevelFilterLabel = () =>
     scheduleLevelIsAll ? "All levels" : scheduleLevelFilter.length === 1 ? scheduleLevelFilter[0] : `${scheduleLevelFilter.length} levels`;
   const toggleScheduleLevelFilter = (level) => {
@@ -10820,7 +10826,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           .filter((c) => {
             if (scheduleLevelIsAll) return true;
             return Object.values(coachBookingsById[c.id] || {}).some(
-              (b) => b.day === dayGroup.id && b.names.some((n) => matchesScheduleLevelFilter(n.level))
+              (b) => b.day === dayGroup.id && b.names.some((n) => matchesScheduleLevelFilter(n.level) && matchesScheduleProgramFilter(n.program))
             );
           });
         if (activeCoaches.length === 0) return "";
@@ -10838,7 +10844,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   !rawBooking || scheduleLevelIsAll
                     ? rawBooking
                     : (() => {
-                        const filteredNames = rawBooking.names.filter((n) => matchesScheduleLevelFilter(n.level));
+                        const filteredNames = rawBooking.names.filter((n) => matchesScheduleLevelFilter(n.level) && matchesScheduleProgramFilter(n.program));
                         if (filteredNames.length === 0) return null;
                         return { ...rawBooking, names: filteredNames, count: filteredNames.length, levels: [...new Set(filteredNames.map((n) => n.level))] };
                       })();
@@ -10927,7 +10933,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       // Respects the same "All levels" / "Baby only" / etc. filter as the
       // on-screen grid and the coach overview PDF, so this export always
       // matches whatever's currently selected there.
-      const inSession = scheduleLevelIsAll ? inSessionAll : inSessionAll.filter((e) => matchesScheduleLevelFilter(e.swimmer.level));
+      const inSession = inSessionAll.filter((e) => matchesScheduleLevelFilter(e.swimmer.level) && matchesScheduleProgramFilter(e.swimmer.program));
       const byCoach = {};
       inSession.forEach((entry) => {
         const key = entry.coachId || "unassigned";
@@ -11070,6 +11076,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       const entries = [];
       all.forEach((s) => {
         if (!levelsToInclude.includes(s.level)) return;
+        if (!matchesScheduleProgramFilter(s.program)) return;
         const ms = getMonthlySchedule(s, scheduleMonth);
         if (!ms) return;
         if (ms.day && ms.time) entries.push({ swimmer: s, day: ms.day, time: ms.time });
@@ -11115,7 +11122,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         return `<h2 style="margin:20px 0 8px">${escapeHtml(lv)}</h2>${dayTables}`;
       }).join("");
 
-      const scopeLabel = scheduleLevelFilterLabel();
+      const scopeLabel = scheduleLevelFilterLabel() + (scheduleProgramFilter !== "all" ? ` · ${SWIM_PROGRAMS.find((p) => p.id === scheduleProgramFilter)?.name || scheduleProgramFilter}` : "");
       const headerHtml = `
         <div class="header" dir="ltr">
           <img src="${CONFIG.logoDataUri}" />
@@ -11160,7 +11167,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       const thisMonth = monthKey();
       const levelsToInclude = scheduleLevelIsAll ? LEVELS : scheduleLevelFilter;
       const rows = all
-        .filter((s) => levelsToInclude.includes(s.level))
+        .filter((s) => levelsToInclude.includes(s.level) && matchesScheduleProgramFilter(s.program))
         .map((s) => [s.name, s.level, displayAge(s.age), swimmerSessionsLabel(getMonthlySchedule(s, thisMonth))])
         .sort((a, b) => (a[1] === b[1] ? a[0].localeCompare(b[0]) : a[1].localeCompare(b[1])));
 
@@ -12790,7 +12797,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const { coachLoadById, coachBookingsById } = React.useMemo(() => {
     const loadById = {};
     const bookingsMapById = {};
-    const addBooking = (coachId, day, time, sessionType, level, age, swimmerName, swimmerId) => {
+    const addBooking = (coachId, day, time, sessionType, level, age, swimmerName, swimmerId, program) => {
       if (!coachId || !day || !time) return;
       loadById[coachId] = (loadById[coachId] || 0) + 1;
       if (!bookingsMapById[coachId]) bookingsMapById[coachId] = {};
@@ -12800,7 +12807,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       bucket[key].count += 1;
       if (level) bucket[key].levels.add(level);
       if (age != null && age !== "") bucket[key].ages.push(Number(age));
-      bucket[key].names.push({ name: swimmerName, id: swimmerId, level });
+      bucket[key].names.push({ name: swimmerName, id: swimmerId, level, program });
     };
     // Uses the exact same month resolver as the PDF export (getMonthlySchedule)
     // instead of separately checking top-level fields AND nextSchedule as if
@@ -12810,13 +12817,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     swimmers.forEach((s) => {
       const ms = getMonthlySchedule(s, scheduleMonth);
       if (!ms) return;
-      addBooking(ms.coachId, ms.day, ms.time, ms.sessionType, s.level, s.age, s.name, s.id);
+      addBooking(ms.coachId, ms.day, ms.time, ms.sessionType, s.level, s.age, s.name, s.id, s.program);
       // A swimmer with a second weekly session (different coach or slot)
       // shows up under that booking too — same swimmer, two commitments.
       // Same day+time as the primary session isn't a real second
       // commitment — it's counted once already above.
       const second = getDistinctSecondSession(ms);
-      if (second) addBooking(second.coachId, second.day, second.time, second.sessionType, s.level, s.age, s.name, s.id);
+      if (second) addBooking(second.coachId, second.day, second.time, second.sessionType, s.level, s.age, s.name, s.id, s.program);
     });
     const bookingsById = {};
     Object.keys(bookingsMapById).forEach((coachId) => {
@@ -15767,6 +15774,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   ))}
                 </div>
               </details>
+              <select
+                value={scheduleProgramFilter}
+                onChange={(e) => setScheduleProgramFilter(e.target.value)}
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                title="New Programs structure — only matches already-migrated swimmers"
+              >
+                <option value="all">All programs</option>
+                {SWIM_PROGRAMS.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
               <input
                 type="month"
                 value={scheduleMonth}
@@ -15933,7 +15951,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                             // view would still list every coach with
                             // entirely empty rows.
                             return Object.values(coachBookingsById[c.id] || {}).some(
-                              (b) => b.day === dayGroup.id && b.names.some((n) => matchesScheduleLevelFilter(n.level))
+                              (b) => b.day === dayGroup.id && b.names.some((n) => matchesScheduleLevelFilter(n.level) && matchesScheduleProgramFilter(n.program))
                             );
                           })
                           .map((c) => (
@@ -15963,7 +15981,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                 !rawBooking || scheduleLevelIsAll
                                   ? rawBooking
                                   : (() => {
-                                      const filteredNames = rawBooking.names.filter((n) => matchesScheduleLevelFilter(n.level));
+                                      const filteredNames = rawBooking.names.filter((n) => matchesScheduleLevelFilter(n.level) && matchesScheduleProgramFilter(n.program));
                                       if (filteredNames.length === 0) return null;
                                       return { ...rawBooking, names: filteredNames, count: filteredNames.length, levels: [...new Set(filteredNames.map((n) => n.level))] };
                                     })();
@@ -16241,6 +16259,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         });
         const stillActiveThisMonth = activeLastMonth.filter((s) => !!getMonthlySchedule(s, coachPerfMonthKey));
         const retentionRate = activeLastMonth.length ? Math.round((stillActiveThisMonth.length / activeLastMonth.length) * 100) : null;
+
+        // Swimmers by program — new Programs structure, additive. Only
+        // counts swimmers already migrated (program set); swimmers not
+        // yet migrated simply don't show up in any program's count here.
+        const swimmersByProgram = SWIM_PROGRAMS.map((p) => ({
+          program: p,
+          count: swimmers.filter((s) => s.program === p.id).length,
+        })).filter((row) => row.count > 0);
 
         const prevRangeForCoaches = periodRange(reportType, previousAnchor(reportType, reportAnchor));
 
@@ -16655,6 +16681,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     )}
                   </div>
                 </div>
+                {swimmersByProgram.length > 0 && (
+                  <div className="bg-white rounded-xl border border-slate-200 p-3 mb-4">
+                    <div className="text-xs text-slate-400 mb-2">Swimmers by program (new structure — migrated swimmers only)</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {swimmersByProgram.map((row) => (
+                        <span key={row.program.id} className="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700">
+                          {row.program.name}: {row.count}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {levelUpRows.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 mb-4">
                     {levelUpRows.slice(0, 12).map((h, i) => (
