@@ -2671,17 +2671,24 @@ async function saveCollection(storeKey, list, opts = {}) {
 // (updateSwimmerById: attendance, notes, skills, level-ups, freezes...)
 // where only a single swimmer actually changed and re-sending the whole
 // roster would be pure waste.
-async function syncSingleSwimmerToTable(swimmer) {
+// Upserts one or more swimmer rows in a single request — the lightweight
+// counterpart to syncSwimmersTable's full-roster resync, for the
+// extremely common case (updateSwimmerById: attendance, notes, skills,
+// level-ups, freezes...) where only a handful of swimmers actually
+// changed and re-sending the whole roster would be pure waste.
+async function syncSingleSwimmerToTable(swimmers) {
   if (!window.__academy) return;
+  const list = Array.isArray(swimmers) ? swimmers : [swimmers];
+  if (list.length === 0) return;
   const { error } = await supabase.from("swimmers").upsert(
-    [{
+    list.map((swimmer) => ({
       id: swimmer.id,
       academy_id: window.__academy.id,
       name: swimmer.name || "",
       branch: swimmer.branch || null,
       level: swimmer.level || null,
       data: swimmer,
-    }],
+    })),
     { onConflict: "id" }
   );
   if (error) throw error;
@@ -2696,6 +2703,22 @@ async function syncSingleSwimmerToTableWithRetry(swimmer, attemptsLeft = 3) {
       setTimeout(() => syncSingleSwimmerToTableWithRetry(swimmer, attemptsLeft - 1), 1500);
     } else {
       console.warn("single swimmer sync failed after retries", e);
+      markSwimmersSyncNeedsAttention(e?.message || "Sync failed");
+    }
+  }
+}
+
+// Same retry wrapper, for a small batch from queueSwimmerEditBatched —
+// one request for the whole batch instead of one per swimmer.
+async function syncSwimmerBatchToTableWithRetry(swimmers, attemptsLeft = 3) {
+  try {
+    await syncSingleSwimmerToTable(swimmers);
+    clearSwimmersSyncAlert();
+  } catch (e) {
+    if (attemptsLeft > 1) {
+      setTimeout(() => syncSwimmerBatchToTableWithRetry(swimmers, attemptsLeft - 1), 1500);
+    } else {
+      console.warn("swimmer batch sync failed after retries", e);
       markSwimmersSyncNeedsAttention(e?.message || "Sync failed");
     }
   }
@@ -3067,151 +3090,140 @@ async function fetchAllSwimmers() {
 // "fetch everyone, change one, save everyone" cycle could read the list
 // BEFORE the first save had finished writing, then write that stale copy
 // back over it — quietly erasing whichever edit lost the race.
-/*
- * HOT-PATH SWIMMER WRITES
- *
- * Attendance, skills, notes and level-up actions all used to enter one
- * serial queue where every click did:
- *   fetch whole roster -> modify one -> stringify whole roster -> write
- *
- * That is safe but very expensive on a large roster. The UI now updates the
- * in-memory roster immediately and rapid writes are coalesced into one
- * roster save. Supabase mirror rows are also upserted in one batch.
- *
- * Important: we keep the queue for the ACTUAL persistence operation. This
- * prevents concurrent saves from racing while allowing many UI clicks to
- * share the same write.
- */
 let swimmerUpdateQueue = Promise.resolve();
-let swimmerBatchPending = new Map();
-let swimmerBatchTimer = null;
-let swimmerBatchInit = null;
-const SWIMMER_WRITE_DEBOUNCE_MS = 300;
-
-function makeDeferred() {
-  let resolve;
-  let reject;
-  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
-  return { promise, resolve, reject };
-}
-
-function scheduleSwimmerBatchFlush() {
-  if (swimmerBatchTimer) clearTimeout(swimmerBatchTimer);
-  swimmerBatchTimer = setTimeout(() => {
-    swimmerBatchTimer = null;
-    flushSwimmerBatch();
-  }, SWIMMER_WRITE_DEBOUNCE_MS);
-}
-
-async function ensureSwimmersWriteCache() {
-  if (swimmersCache) return swimmersCache;
-  if (!swimmerBatchInit) {
-    swimmerBatchInit = fetchAllSwimmers().finally(() => {
-      swimmerBatchInit = null;
-    });
-  }
-  return swimmerBatchInit;
-}
-
-async function flushSwimmerBatch() {
-  if (!swimmerBatchPending.size) return;
-
-  // Swap the pending map first. New clicks that happen while the network
-  // request is running go into a NEW batch and cannot be lost.
-  const batch = swimmerBatchPending;
-  swimmerBatchPending = new Map();
-
-  const run = async () => {
-    const current = swimmersCache || await ensureSwimmersWriteCache();
-    const snapshot = Array.isArray(current) ? current.slice() : [];
-
-    // saveCollection writes the authoritative roster store exactly once
-    // for the whole burst, instead of once per click.
-    const res = await saveCollection(STORE_KEYS.swimmers, snapshot, { skipSwimmersSync: true });
-    if (!res) throw new Error("Could not save, please try again");
-
-    // Mirror only the swimmers that actually changed, in ONE Supabase call.
-    const changed = [];
-    for (const entry of batch.values()) {
-      const idx = snapshot.findIndex((s) => s.id === entry.id);
-      if (idx !== -1) changed.push(snapshot[idx]);
-    }
-    if (changed.length && window.__academy) {
-      try {
-        const rows = changed.map((swimmer) => ({
-          id: swimmer.id,
-          academy_id: window.__academy.id,
-          name: swimmer.name || "",
-          branch: swimmer.branch || null,
-          level: swimmer.level || null,
-          data: swimmer,
-        }));
-        const { error } = await supabase.from("swimmers").upsert(rows, { onConflict: "id" });
-        if (error) throw error;
-        clearSwimmersSyncAlert();
-      } catch (e) {
-        // Do not make the already-successful primary save look like it
-        // failed. The existing retry/alert mechanism handles the mirror.
-        for (const swimmer of changed) syncSingleSwimmerToTableWithRetry(swimmer);
-      }
-    }
-
-    for (const entry of batch.values()) entry.deferred.resolve(entry.updated);
-  };
-
-  const result = swimmerUpdateQueue.catch(() => {}).then(run);
-  swimmerUpdateQueue = result.catch(() => {});
-
-  try {
-    await result;
-  } catch (e) {
-    for (const entry of batch.values()) entry.deferred.reject(e);
-  }
-
-  // If more clicks arrived while this batch was saving, flush them too.
-  if (swimmerBatchPending.size) scheduleSwimmerBatchFlush();
-}
-
-async function updateSwimmerById(id, updateFn) {
-  await ensureSwimmersWriteCache();
-
-  const all = swimmersCache;
-  if (!Array.isArray(all)) throw new Error("Swimmer roster unavailable — try refreshing the list");
-
-  const idx = all.findIndex((s) => s.id === id);
-  if (idx === -1) throw new Error("Swimmer not found — try refreshing the list");
-
-  let updated;
-  try {
-    updated = updateFn(all[idx]);
-  } catch (e) {
-    throw e;
-  }
-
-  // Update cache immediately. React callers receive the updated object
-  // after the small debounce + persistence, but the next click in the
-  // same burst already sees this newest value without another fetch.
-  const next = all.slice();
-  next[idx] = updated;
-  setSwimmersCache(next);
-
-  let entry = swimmerBatchPending.get(id);
-  if (!entry) {
-    entry = { id, deferred: makeDeferred(), updated };
-    swimmerBatchPending.set(id, entry);
-  } else {
-    entry.updated = updated;
-  }
-
-  scheduleSwimmerBatchFlush();
-  return entry.deferred.promise;
-}
 
 // Same protection, for the coach list — a coach save/delete fetches the
 // list fresh (never the local React state, which could be stale if
 // another edit landed since it was last loaded) and queues behind
 // whichever coach edit is already in flight.
 let coachUpdateQueue = Promise.resolve();
+
+async function updateSwimmerById(id, updateFn) {
+  const run = async () => {
+    const all = await fetchAllSwimmers();
+    const idx = all.findIndex((s) => s.id === id);
+    if (idx === -1) throw new Error("Swimmer not found — try refreshing the list");
+    const updated = updateFn(all[idx]);
+    const next = [...all];
+    next[idx] = updated;
+    // Only ONE swimmer actually changed here, so the mirror-table sync
+    // only needs to touch that one row — skip saveCollection's generic
+    // full-roster resync (which would re-upsert every swimmer in the
+    // academy for this single change) and sync just this one instead.
+    // This is the hot path behind every attendance tap, note, skill
+    // rating, and level-up on the Technical screen, so this is where a
+    // large roster's full-resync cost was actually being paid every time.
+    const res = await saveCollection(STORE_KEYS.swimmers, next, { skipSwimmersSync: true });
+    if (!res) throw new Error("Could not save, please try again");
+    syncSingleSwimmerToTableWithRetry(updated);
+    return updated;
+  };
+  // Chain onto the queue regardless of whether the previous entry
+  // succeeded or failed, so one failed save never permanently blocks
+  // every edit after it — but still WAIT for our own turn before running.
+  const result = swimmerUpdateQueue.catch(() => {}).then(run);
+  swimmerUpdateQueue = result.catch(() => {});
+  return result;
+}
+
+// For rapid, high-frequency single-field edits — attendance taps and
+// skill ratings on the Technical screen, where a coach marking a run of
+// swimmers one after another used to pay updateSwimmerById's full
+// fetch-modify-save cycle on EVERY tap, each one waiting for the last to
+// finish. Edits arriving within BATCH_EDIT_WINDOW_MS of each other are
+// coalesced into a single roster fetch+save and a single batch upsert to
+// the mirror table, instead of one full round trip per tap. Still queued
+// through the exact same swimmerUpdateQueue as updateSwimmerById, so a
+// batch flush is just as safely serialized against every other swimmer
+// write in the app (admin edits, coach reassignment, etc.) as before —
+// this only changes how many ROUND TRIPS a burst of taps costs, not the
+// safety guarantee that edits never race each other.
+//
+// If the save itself fails (e.g. the connection drops for a moment right
+// as a coach taps), this retries automatically a few times with a short
+// pause between attempts, rather than giving up on the first failure —
+// the tap already changed what's showing on screen, and reverting that
+// silently the moment one attempt fails would mean a coach sees
+// "present" on screen while the real record quietly goes back to
+// unmarked, with nothing telling them it happened.
+const BATCH_EDIT_WINDOW_MS = 700;
+const BATCH_EDIT_MAX_ATTEMPTS = 5;
+const BATCH_EDIT_RETRY_DELAY_MS = 3000;
+let pendingBatchedEdits = new Map(); // id -> { updateFn, resolve, reject }
+let batchFlushTimer = null;
+let swimmerSyncPendingCount = 0; // > 0 while any batch is in flight or retrying
+
+function queueSwimmerEditBatched(id, updateFn) {
+  return new Promise((resolve, reject) => {
+    // If this swimmer already has a pending edit in the same window
+    // (e.g. two quick taps on the same skill), the newer updateFn simply
+    // replaces the older one — each updateFn reads the swimmer fresh at
+    // flush time, so only the latest intent matters.
+    pendingBatchedEdits.set(id, { updateFn, resolve, reject });
+    if (batchFlushTimer) clearTimeout(batchFlushTimer);
+    batchFlushTimer = setTimeout(() => {
+      batchFlushTimer = null;
+      flushBatchedSwimmerEdits(BATCH_EDIT_MAX_ATTEMPTS);
+    }, BATCH_EDIT_WINDOW_MS);
+  });
+}
+
+function flushBatchedSwimmerEdits(attemptsLeft) {
+  const batch = pendingBatchedEdits;
+  pendingBatchedEdits = new Map();
+  if (batch.size === 0) return;
+  swimmerSyncPendingCount++;
+  const run = async () => {
+    const all = await fetchAllSwimmers();
+    const next = [...all];
+    const toResolve = []; // resolved only once the save below actually succeeds
+    batch.forEach(({ updateFn: fn, reject: rej }, swimmerId) => {
+      const idx = next.findIndex((s) => s.id === swimmerId);
+      if (idx === -1) {
+        rej(new Error("Swimmer not found — try refreshing the list"));
+        batch.delete(swimmerId);
+        return;
+      }
+      const updated = fn(next[idx]);
+      next[idx] = updated;
+      toResolve.push({ id: swimmerId, updated });
+    });
+    if (toResolve.length === 0) return;
+    const saveRes = await saveCollection(STORE_KEYS.swimmers, next, { skipSwimmersSync: true });
+    if (!saveRes) throw new Error("Could not save, please try again");
+    syncSwimmerBatchToTableWithRetry(toResolve.map((e) => e.updated));
+    // Only NOW that the save has actually succeeded do the callers'
+    // promises resolve — resolving earlier (e.g. right after computing
+    // `updated`) would report success even if the save below then failed.
+    toResolve.forEach(({ id: swimmerId, updated }) => batch.get(swimmerId)?.resolve(updated));
+  };
+  const result = swimmerUpdateQueue.catch(() => {}).then(run);
+  swimmerUpdateQueue = result.catch(() => {});
+  result
+    .catch((e) => {
+      if (attemptsLeft > 1) {
+        // Put this batch's still-unresolved entries back, merged with
+        // whatever newer edits arrived in the meantime (a newer edit for
+        // the same swimmer wins), and try again shortly — the screen
+        // keeps showing what the coach tapped the whole time.
+        batch.forEach((entry, swimmerId) => {
+          if (!pendingBatchedEdits.has(swimmerId)) pendingBatchedEdits.set(swimmerId, entry);
+        });
+        setTimeout(() => flushBatchedSwimmerEdits(attemptsLeft - 1), BATCH_EDIT_RETRY_DELAY_MS);
+      } else {
+        batch.forEach(({ reject: rej }) => rej(e));
+      }
+    })
+    .finally(() => {
+      swimmerSyncPendingCount--;
+    });
+}
+
+// Lets a screen show a small "still saving" indicator instead of nothing
+// while a batch is in flight or retrying after a hiccup.
+function isSwimmerSyncPending() {
+  return swimmerSyncPendingCount > 0;
+}
 
 const HISTORY_CLEANUP_KEY = "history-cleanup-settings";
 
@@ -10770,6 +10782,22 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           })
           .join("");
       const emptyAttCells = sessionDates.map(() => `<td>&nbsp;</td>`).join("");
+      // The Note column used to always print blank (just room to
+      // handwrite something on the paper) — this instead shows whatever
+      // the coach already typed into that swimmer's notes on the
+      // Technical screen for the dates in this export, so it doesn't
+      // have to be re-written by hand. Multiple dates with a note are
+      // joined together, each labeled with its day-of-month to match the
+      // date columns; a date with no note contributes nothing.
+      const notesCellFor = (s) => {
+        const parts = sessionDates
+          .map((d) => {
+            const note = s?.sessionNotes?.[d];
+            return note ? `${d.slice(8)}: ${note}` : null;
+          })
+          .filter(Boolean);
+        return parts.length ? escapeHtml(parts.join(" · ")) : "&nbsp;";
+      };
 
       const coachSections = Object.keys(byCoach)
         .sort((a, b) => {
@@ -10802,7 +10830,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               const filledRows = group
                 .map(
                   ({ swimmer: s }) =>
-                    `<tr><td>${escapeHtml(s.name)}</td><td style="text-align:center">${displayAge(s.age)}</td><td>${escapeHtml(s.level)}</td>${attCellsFor(s)}<td class="notes-cell">&nbsp;</td></tr>`
+                    `<tr><td>${escapeHtml(s.name)}</td><td style="text-align:center">${displayAge(s.age)}</td><td>${escapeHtml(s.level)}</td>${attCellsFor(s)}<td class="notes-cell">${notesCellFor(s)}</td></tr>`
                 )
                 .join("");
               // A few blank rows leave room to handwrite a late addition
@@ -22886,6 +22914,17 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
 
   const [swimmers, setSwimmers] = useState([]);
   const [loading, setLoading] = useState(false);
+  // Reflects isSwimmerSyncPending() — checked on a short interval rather
+  // than wired as a proper event, since queueSwimmerEditBatched lives
+  // outside React state entirely (deliberately, so it keeps working the
+  // same regardless of which screen is mounted). This only drives a
+  // small "still saving" cue, so a brief lag before it appears/clears is
+  // fine.
+  const [syncPending, setSyncPending] = useState(false);
+  useEffect(() => {
+    const t = setInterval(() => setSyncPending(isSwimmerSyncPending()), 400);
+    return () => clearInterval(t);
+  }, []);
   const [coaches, setCoaches] = useState([]);
   const [branch, setBranch] = useState(branchRestriction || BRANCHES[0].id);
   const [dayGroup, setDayGroup] = useState(dayGroupForToday() || DAY_GROUPS[0].id);
@@ -23098,17 +23137,24 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   const today = todayISO();
   const todaysGroup = dayGroupForToday();
 
-  const markAttendance = async (swimmer, status) => {
-    try {
-      const updated = await updateSwimmerById(swimmer.id, (s) => {
-        const withAttendance = applyAttendanceStatus(s, today, status);
-        const trainingDates = Array.from(new Set([...(s.trainingDates || []), today])).sort();
-        return { ...withAttendance, trainingDates };
-      });
-      setSwimmers((prev) => prev.map((s) => (s.id === swimmer.id ? updated : s)));
-    } catch (e) {
+  const markAttendance = (swimmer, status) => {
+    const applyEdit = (s) => {
+      const withAttendance = applyAttendanceStatus(s, today, status);
+      const trainingDates = Array.from(new Set([...(s.trainingDates || []), today])).sort();
+      return { ...withAttendance, trainingDates };
+    };
+    // Update the screen immediately from the swimmer as currently shown
+    // here — no network round trip in the way at all — then persist in
+    // the background via the batched queue, which retries automatically
+    // on its own for a temporary connection hiccup. Only once it truly
+    // gives up (after several attempts) does this reload from the real
+    // data and say so plainly — a coach should never be left thinking
+    // something saved when it silently didn't.
+    setSwimmers((prev) => prev.map((s) => (s.id === swimmer.id ? applyEdit(s) : s)));
+    queueSwimmerEditBatched(swimmer.id, applyEdit).catch(() => {
+      alert(`Couldn't save ${swimmer.name}'s attendance — check the connection and try again.`);
       loadSwimmers();
-    }
+    });
   };
 
   const saveNote = async (swimmer) => {
@@ -23130,18 +23176,22 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
     }
   };
 
-  const setSkillRating = async (swimmer, skill, rating) => {
-    try {
-      const updated = await updateSwimmerById(swimmer.id, (s) => {
-        const level = s.level;
-        const levelSkills = { ...(s.skills?.[level] || {}) };
-        levelSkills[skill] = rating;
-        return { ...s, skills: { ...(s.skills || {}), [level]: levelSkills } };
-      });
-      setSwimmers((prev) => prev.map((s) => (s.id === swimmer.id ? updated : s)));
-    } catch (e) {
+  const setSkillRating = (swimmer, skill, rating) => {
+    const applyEdit = (s) => {
+      const level = s.level;
+      const levelSkills = { ...(s.skills?.[level] || {}) };
+      levelSkills[skill] = rating;
+      return { ...s, skills: { ...(s.skills || {}), [level]: levelSkills } };
+    };
+    // Same instant-then-batched approach as markAttendance above — rating
+    // several skills across several swimmers in a row shouldn't make each
+    // tap wait for the last one's save to finish. Same retry-then-alert
+    // behavior on a genuine, lasting failure too.
+    setSwimmers((prev) => prev.map((s) => (s.id === swimmer.id ? applyEdit(s) : s)));
+    queueSwimmerEditBatched(swimmer.id, applyEdit).catch(() => {
+      alert(`Couldn't save ${swimmer.name}'s skill rating — check the connection and try again.`);
       loadSwimmers();
-    }
+    });
   };
 
   const levelUp = async (swimmer) => {
@@ -23334,7 +23384,14 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
       </div>
 
       <div className="flex items-center justify-between mb-3">
-        <div className="text-sm text-slate-500">{sessionSwimmers.length} swimmer{sessionSwimmers.length === 1 ? "" : "s"} in this session</div>
+        <div className="text-sm text-slate-500 flex items-center gap-2">
+          {sessionSwimmers.length} swimmer{sessionSwimmers.length === 1 ? "" : "s"} in this session
+          {syncPending && (
+            <span className="inline-flex items-center gap-1 text-xs text-amber-600">
+              <RefreshCw className="w-3 h-3 animate-spin" /> Saving...
+            </span>
+          )}
+        </div>
         <button onClick={loadSwimmers} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
           <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
         </button>
