@@ -612,6 +612,77 @@ let LEVELS = [
   "Star 1", "Star 2", "Star 3", "Star 4", "Team",
 ];
 
+/* ---------- New curriculum structure: Programs -> Levels ----------
+   Agreed with the academy on 2026-09-09. Kept deliberately SEPARATE
+   from two similarly-named things already in this file:
+   - PROGRAMS (below, unrelated) is homepage/marketing content —
+     titles, photos, descriptions for the public site.
+   - PROGRAM_LEVEL_SCOPE is an older, coarser grouping used only for
+     staff permission scoping (which levels a limited account can see).
+     It has overlaps the new structure was specifically designed to
+     avoid (e.g. Star 1-4 appears under both "STAR" and "Development
+     Swim" there) — left untouched for now since permissions code
+     depends on it; migrating it is a later, separate step.
+
+   This is purely additive: swimmer.level (the old flat field) keeps
+   working exactly as it always has, everywhere in the app. Nothing
+   reads swimmer.program yet except the migration preview tool in
+   Settings — the rest of the rollout plan builds on this later. */
+let SWIM_PROGRAMS = [
+  { id: "baby", name: "Baby", levels: ["Level 1", "Level 2", "Level 3"] },
+  { id: "learn-to-swim", name: "Learn to swim", levels: ["Exp", "Exp 2", "Exp 3", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5", "Level 6"] },
+  { id: "development-team", name: "Development team", levels: ["Level 7", "Level 8", "Star 1", "Star 2", "Star 3", "Star 4"] },
+  { id: "pre-team", name: "Pre team", levels: ["Team A"] },
+  { id: "ladies", name: "Ladies", levels: [] },
+  { id: "adults", name: "Adults", levels: [] },
+];
+const DEFAULT_SWIM_PROGRAMS = JSON.parse(JSON.stringify(SWIM_PROGRAMS));
+const SWIM_PROGRAMS_KEY = "swim-programs-custom";
+
+async function loadCustomSwimPrograms() {
+  const res = await window.storage.get(SWIM_PROGRAMS_KEY);
+  if (!res) return null;
+  try {
+    const parsed = JSON.parse(res.value);
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+async function saveCustomSwimPrograms(programs) {
+  return storageSet(SWIM_PROGRAMS_KEY, JSON.stringify(programs));
+}
+
+// The agreed old-level -> {program, level} mapping table, exactly as
+// reviewed with the academy. Two old levels can't be mapped with full
+// confidence automatically (old "Baby" was one flat level, but the new
+// Baby program has three; old "Team" was one flat level, but Pre team
+// uses named teams) — those get a default placement AND needsReview:
+// true, so they can be surfaced for a human to actually decide, rather
+// than silently guessed and left that way.
+function defaultProgramLevelForOldLevel(oldLevel) {
+  const map = {
+    "Baby": { program: "baby", level: "Level 1", needsReview: true },
+    "Exp": { program: "learn-to-swim", level: "Exp", needsReview: false },
+    "Exp 2": { program: "learn-to-swim", level: "Exp 2", needsReview: false },
+    "Exp 3": { program: "learn-to-swim", level: "Exp 3", needsReview: false },
+    "Level 1": { program: "learn-to-swim", level: "Level 1", needsReview: false },
+    "Level 2": { program: "learn-to-swim", level: "Level 2", needsReview: false },
+    "Level 3": { program: "learn-to-swim", level: "Level 3", needsReview: false },
+    "Level 4": { program: "learn-to-swim", level: "Level 4", needsReview: false },
+    "Level 5": { program: "learn-to-swim", level: "Level 5", needsReview: false },
+    "Level 6": { program: "learn-to-swim", level: "Level 6", needsReview: false },
+    "Level 7": { program: "development-team", level: "Level 7", needsReview: false },
+    "Level 8": { program: "development-team", level: "Level 8", needsReview: false },
+    "Star 1": { program: "development-team", level: "Star 1", needsReview: false },
+    "Star 2": { program: "development-team", level: "Star 2", needsReview: false },
+    "Star 3": { program: "development-team", level: "Star 3", needsReview: false },
+    "Star 4": { program: "development-team", level: "Star 4", needsReview: false },
+    "Team": { program: "pre-team", level: "Team A", needsReview: true },
+  };
+  return map[oldLevel] || null;
+}
+
 /* Skills checklist per level — shown on each swimmer's profile so coaches
    can rate what they've mastered (0-5 stars each). Exp / Exp 2 / Exp 3,
    Level 4 and Level 5 are the academy's real curriculum; the rest are a
@@ -8034,6 +8105,45 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       setScheduleMismatchRunning(false);
     }
   };
+
+  // Read-only dry run for the Programs -> Levels migration: groups every
+  // CURRENT swimmer by their existing level, shows how many there are and
+  // what they'd become under the new structure, and flags the levels that
+  // can't be placed with full confidence automatically (old "Baby" and
+  // old "Team" — see defaultProgramLevelForOldLevel). This never writes
+  // anything; it's step 1 of the plan ("test on a copy before touching
+  // anything real") made concrete as an actual report to review.
+  const [programMigrationRunning, setProgramMigrationRunning] = useState(false);
+  const [programMigrationPreview, setProgramMigrationPreview] = useState(null);
+  const previewProgramMigration = async () => {
+    setProgramMigrationRunning(true);
+    setProgramMigrationPreview(null);
+    try {
+      const all = await fetchAllSwimmers();
+      const byOldLevel = {};
+      all.forEach((s) => {
+        const key = s.level || "(no level set)";
+        if (!byOldLevel[key]) byOldLevel[key] = 0;
+        byOldLevel[key]++;
+      });
+      const rows = Object.entries(byOldLevel).map(([oldLevel, count]) => {
+        const mapping = defaultProgramLevelForOldLevel(oldLevel);
+        return {
+          oldLevel,
+          count,
+          newProgram: mapping ? SWIM_PROGRAMS.find((p) => p.id === mapping.program)?.name || mapping.program : null,
+          newLevel: mapping ? mapping.level : null,
+          needsReview: mapping ? mapping.needsReview : true, // unmapped old level also needs a human decision
+        };
+      });
+      setProgramMigrationPreview(rows.sort((a, b) => a.oldLevel.localeCompare(b.oldLevel)));
+    } catch (e) {
+      setProgramMigrationPreview({ error: e?.message || "Could not check — please try again." });
+    } finally {
+      setProgramMigrationRunning(false);
+    }
+  };
+
   const reconcileScheduleData = async () => {
     setReconcileRunning(true);
     setReconcileMessage("");
@@ -19945,6 +20055,43 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     ))}
                   </div>
                 )
+              )}
+            </div>
+
+            <h3 className="font-bold text-slate-900 mb-1 mt-6">Programs → Levels migration (preview only)</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              Read-only check — shows how every swimmer's current level would map to the new Program/Level structure, without changing anything. Levels marked "needs review" can't be placed automatically with full confidence.
+            </p>
+            <div className="bg-slate-50 rounded-2xl p-5">
+              <button
+                onClick={previewProgramMigration}
+                disabled={programMigrationRunning}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-700 disabled:opacity-60"
+              >
+                <Search className={`w-4 h-4 ${programMigrationRunning ? "animate-spin" : ""}`} /> {programMigrationRunning ? "Checking..." : "Preview migration"}
+              </button>
+              {programMigrationPreview && programMigrationPreview.error && (
+                <p className="text-xs text-red-500 mt-2">{programMigrationPreview.error}</p>
+              )}
+              {programMigrationPreview && !programMigrationPreview.error && (
+                <div className="mt-3 space-y-1.5">
+                  {programMigrationPreview.map((r) => (
+                    <div key={r.oldLevel} className="text-sm bg-white border border-slate-200 rounded-lg px-3 py-2 flex items-center justify-between gap-3">
+                      <div>
+                        <span className="font-semibold text-slate-800">{r.oldLevel}</span>
+                        <span className="text-slate-400"> ({r.count} swimmer{r.count === 1 ? "" : "s"}) → </span>
+                        {r.newProgram ? (
+                          <span className="text-sky-900 font-medium">{r.newProgram} / {r.newLevel}</span>
+                        ) : (
+                          <span className="text-red-500 font-medium">no mapping found</span>
+                        )}
+                      </div>
+                      {r.needsReview && (
+                        <span className="shrink-0 text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded-full font-medium">Needs review</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </div>
