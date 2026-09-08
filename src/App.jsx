@@ -16677,6 +16677,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
           return {
             coach: c,
+            // Based on DAYS only — a coach who's open every day but has
+            // one closed hour somewhere is still full-time; part-time
+            // specifically means a whole day they're not in at all.
+            isFullTime: (c.offDays || []).length === 0,
             activeCount: myActiveSwimmers.length,
             attendanceRate,
             attendanceTrend,
@@ -16688,6 +16692,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         });
 
         const filteredStats = coachPerfCoachFilter === "all" ? allCoachStats : allCoachStats.filter((r) => r.coach.id === coachPerfCoachFilter);
+        const fullTimeStats = filteredStats.filter((r) => r.isFullTime).sort((a, b) => b.activeCount - a.activeCount);
+        const partTimeStats = filteredStats.filter((r) => !r.isFullTime).sort((a, b) => b.activeCount - a.activeCount);
         const topThree = allCoachStats
           .filter((r) => r.overallScore !== null)
           .sort((a, b) => b.overallScore - a.overallScore)
@@ -16702,9 +16708,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           const XLSX = await loadXLSX();
           const wb = XLSX.utils.book_new();
           XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-            ["Coach", "Active swimmers", "Attendance rate %", "Attendance trend", "Own class attendance %", "Skills coverage %", "Retention %", "Overall score"],
+            ["Coach", "Full-time / Part-time", "Active swimmers", "Attendance rate %", "Attendance trend", "Own class attendance %", "Skills coverage %", "Retention %", "Overall score"],
             ...allCoachStats.map((c) => [
               c.coach.name,
+              c.isFullTime ? "Full-time" : "Part-time",
               c.activeCount,
               c.attendanceRate ?? "",
               c.attendanceTrend ?? "",
@@ -16716,6 +16723,86 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           ]), "Coach performance");
           XLSX.writeFile(wb, `coach-performance-${selectedMonthKey}.xlsx`);
         };
+
+        // Same table markup, reused for the full-time and part-time
+        // sections below — only the rows (and the heading) differ.
+        const renderCoachTable = (stats, title) => (
+          <div className="bg-slate-50 rounded-2xl p-4 mb-6">
+            <h3 className="font-bold text-slate-900 mb-3">{title} <span className="text-slate-400 font-normal text-sm">({stats.length})</span></h3>
+            {stats.length === 0 ? (
+              <div className="text-sm text-slate-400 text-center py-6">{t("notEnoughData")}</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
+                      <th className="pb-2 pr-3">{t("coach")}</th>
+                      <th className="pb-2 pr-3">{t("swimmersCol")}</th>
+                      <th className="pb-2 pr-3">{t("attendanceCol")}</th>
+                      <th className="pb-2 pr-3">{t("ownAttendanceCol")}</th>
+                      <th className="pb-2 pr-3">{t("skillsCoverageCol")}</th>
+                      <th className="pb-2">{t("retentionCol")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.map((row) => (
+                      <tr key={row.coach.id} className="border-b border-slate-50 last:border-0">
+                        <td className="py-2 pr-3 font-medium text-slate-700">{row.coach.name}</td>
+                        <td className="py-2 pr-3 text-slate-600">{row.activeCount}</td>
+                        <td className="py-2 pr-3">
+                          {row.attendanceRate === null ? (
+                            <span className="text-slate-300">—</span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1">
+                              <span className={row.attendanceRate >= 80 ? "text-green-600" : row.attendanceRate >= 60 ? "text-amber-600" : "text-red-500"}>
+                                {row.attendanceRate}%
+                              </span>
+                              {row.attendanceTrend !== null && row.attendanceTrend !== 0 && (
+                                <span
+                                  className={`text-xs ${row.attendanceTrend > 0 ? "text-green-500" : "text-red-400"}`}
+                                  title={`${row.attendanceTrend > 0 ? "+" : ""}${row.attendanceTrend}%`}
+                                >
+                                  {row.attendanceTrend > 0 ? "↑" : "↓"}
+                                </span>
+                              )}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2 pr-3">
+                          {row.ownAttendanceRate === null ? (
+                            <span className="text-slate-300">—</span>
+                          ) : (
+                            <span className={row.ownAttendanceRate >= 90 ? "text-green-600" : row.ownAttendanceRate >= 75 ? "text-amber-600" : "text-red-500"}>
+                              {row.ownAttendanceRate}%
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2 pr-3">
+                          {row.skillsCoverage === null ? (
+                            <span className="text-slate-300">—</span>
+                          ) : (
+                            <span className={row.skillsCoverage >= 80 ? "text-green-600" : row.skillsCoverage >= 50 ? "text-amber-600" : "text-red-500"}>
+                              {row.skillsCoverage}%
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2">
+                          {row.retention === null ? (
+                            <span className="text-slate-300">—</span>
+                          ) : (
+                            <span className={row.retention >= 80 ? "text-green-600" : row.retention >= 60 ? "text-amber-600" : "text-red-500"}>
+                              {row.retention}%
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
 
         return (
           <div>
@@ -16783,78 +16870,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </div>
             )}
 
-            <div className="bg-slate-50 rounded-2xl p-4">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-xs text-slate-400 border-b border-slate-100">
-                      <th className="pb-2 pr-3">{t("coach")}</th>
-                      <th className="pb-2 pr-3">{t("swimmersCol")}</th>
-                      <th className="pb-2 pr-3">{t("attendanceCol")}</th>
-                      <th className="pb-2 pr-3">{t("ownAttendanceCol")}</th>
-                      <th className="pb-2 pr-3">{t("skillsCoverageCol")}</th>
-                      <th className="pb-2">{t("retentionCol")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredStats
-                      .sort((a, b) => b.activeCount - a.activeCount)
-                      .map((row) => (
-                        <tr key={row.coach.id} className="border-b border-slate-50 last:border-0">
-                          <td className="py-2 pr-3 font-medium text-slate-700">{row.coach.name}</td>
-                          <td className="py-2 pr-3 text-slate-600">{row.activeCount}</td>
-                          <td className="py-2 pr-3">
-                            {row.attendanceRate === null ? (
-                              <span className="text-slate-300">—</span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1">
-                                <span className={row.attendanceRate >= 80 ? "text-green-600" : row.attendanceRate >= 60 ? "text-amber-600" : "text-red-500"}>
-                                  {row.attendanceRate}%
-                                </span>
-                                {row.attendanceTrend !== null && row.attendanceTrend !== 0 && (
-                                  <span
-                                    className={`text-xs ${row.attendanceTrend > 0 ? "text-green-500" : "text-red-400"}`}
-                                    title={`${row.attendanceTrend > 0 ? "+" : ""}${row.attendanceTrend}%`}
-                                  >
-                                    {row.attendanceTrend > 0 ? "↑" : "↓"}
-                                  </span>
-                                )}
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-2 pr-3">
-                            {row.ownAttendanceRate === null ? (
-                              <span className="text-slate-300">—</span>
-                            ) : (
-                              <span className={row.ownAttendanceRate >= 90 ? "text-green-600" : row.ownAttendanceRate >= 75 ? "text-amber-600" : "text-red-500"}>
-                                {row.ownAttendanceRate}%
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-2 pr-3">
-                            {row.skillsCoverage === null ? (
-                              <span className="text-slate-300">—</span>
-                            ) : (
-                              <span className={row.skillsCoverage >= 80 ? "text-green-600" : row.skillsCoverage >= 50 ? "text-amber-600" : "text-red-500"}>
-                                {row.skillsCoverage}%
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-2">
-                            {row.retention === null ? (
-                              <span className="text-slate-300">—</span>
-                            ) : (
-                              <span className={row.retention >= 80 ? "text-green-600" : row.retention >= 60 ? "text-amber-600" : "text-red-500"}>
-                                {row.retention}%
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+        {renderCoachTable(fullTimeStats, "Full-time coaches")}
+        {renderCoachTable(partTimeStats, "Part-time coaches")}
           </div>
         );
       })()}
