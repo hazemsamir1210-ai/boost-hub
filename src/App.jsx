@@ -633,8 +633,8 @@ let SWIM_PROGRAMS = [
   { id: "learn-to-swim", name: "Learn to swim", levels: ["Exp", "Exp 2", "Exp 3", "Level 1", "Level 2", "Level 3", "Level 4", "Level 5", "Level 6"] },
   { id: "development-team", name: "Development team", levels: ["Level 7", "Level 8", "Star 1", "Star 2", "Star 3", "Star 4"] },
   { id: "pre-team", name: "Pre team", levels: ["Team A"] },
-  { id: "ladies", name: "Ladies", levels: [] },
-  { id: "adults", name: "Adults", levels: [] },
+  { id: "ladies", name: "Ladies", levels: ["Beginner", "Intermediate", "Advanced"] },
+  { id: "adults", name: "Adults", levels: ["Beginner", "Intermediate", "Advanced"] },
 ];
 const DEFAULT_SWIM_PROGRAMS = JSON.parse(JSON.stringify(SWIM_PROGRAMS));
 const SWIM_PROGRAMS_KEY = "swim-programs-custom";
@@ -679,6 +679,7 @@ function defaultProgramLevelForOldLevel(oldLevel) {
     "Star 3": { program: "development-team", level: "Star 3", needsReview: false },
     "Star 4": { program: "development-team", level: "Star 4", needsReview: false },
     "Team": { program: "pre-team", level: "Team A", needsReview: true },
+    "Ladies": { program: "ladies", level: "Beginner", needsReview: true },
   };
   return map[oldLevel] || null;
 }
@@ -8141,6 +8142,52 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       setProgramMigrationPreview({ error: e?.message || "Could not check — please try again." });
     } finally {
       setProgramMigrationRunning(false);
+    }
+  };
+
+  // The actual write — additive and idempotent:
+  // - Only touches swimmer.program / swimmer.programLevel / 
+  //   swimmer.programNeedsReview (new fields). swimmer.level is left
+  //   completely untouched, so every existing screen, report, and export
+  //   keeps working exactly as it does today.
+  // - Skips any swimmer that already has swimmer.program set, so running
+  //   this again later (e.g. for newly-registered swimmers) never
+  //   re-touches someone already migrated.
+  // - Skips swimmers with no level at all (the legacy/inactive ones with
+  //   no current booking) — nothing to migrate for them.
+  const [applyMigrationRunning, setApplyMigrationRunning] = useState(false);
+  const [applyMigrationResult, setApplyMigrationResult] = useState(null);
+  const applyProgramMigration = async () => {
+    if (!window.confirm(
+      "This adds new Program/Level fields to every active swimmer's record (nothing existing is removed or changed). Swimmers flagged 'needs review' in the preview will need manual follow-up afterward. Continue?"
+    )) return;
+    setApplyMigrationRunning(true);
+    setApplyMigrationResult(null);
+    try {
+      const all = await fetchAllSwimmers();
+      let migratedCount = 0;
+      const needsReviewList = [];
+      const next = all.map((s) => {
+        if (s.program) return s; // already migrated — leave as-is
+        if (!s.level) return s; // legacy/inactive, nothing to migrate
+        const mapping = defaultProgramLevelForOldLevel(s.level);
+        if (!mapping) return s; // unrecognized old level — leave for manual handling
+        migratedCount++;
+        if (mapping.needsReview) needsReviewList.push({ id: s.id, name: s.name, oldLevel: s.level });
+        return { ...s, program: mapping.program, programLevel: mapping.level, programNeedsReview: mapping.needsReview };
+      });
+      if (migratedCount === 0) {
+        setApplyMigrationResult({ migratedCount: 0, needsReviewList: [] });
+        return;
+      }
+      const res = await saveCollection(STORE_KEYS.swimmers, next);
+      if (!res) throw new Error("Could not save — please try again");
+      logActivity(accountName, role, "Applied Programs → Levels migration", `${migratedCount} swimmers migrated, ${needsReviewList.length} need review`);
+      setApplyMigrationResult({ migratedCount, needsReviewList });
+    } catch (e) {
+      setApplyMigrationResult({ error: e?.message || "Could not apply — please try again." });
+    } finally {
+      setApplyMigrationRunning(false);
     }
   };
 
@@ -20091,6 +20138,47 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       )}
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+
+            <h3 className="font-bold text-slate-900 mb-1 mt-6">Apply migration</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              Writes the mapping above to every active swimmer — adds new Program/Level fields only, never touches or removes the existing Level field. Safe to run more than once (already-migrated swimmers are skipped).
+            </p>
+            <div className="bg-slate-50 rounded-2xl p-5">
+              <button
+                onClick={applyProgramMigration}
+                disabled={applyMigrationRunning}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-amber-600 text-white text-sm font-semibold hover:bg-amber-700 disabled:opacity-60"
+              >
+                <RefreshCw className={`w-4 h-4 ${applyMigrationRunning ? "animate-spin" : ""}`} /> {applyMigrationRunning ? "Applying..." : "Apply migration"}
+              </button>
+              {applyMigrationResult && applyMigrationResult.error && (
+                <p className="text-xs text-red-500 mt-2">{applyMigrationResult.error}</p>
+              )}
+              {applyMigrationResult && !applyMigrationResult.error && (
+                <div className="mt-3">
+                  <p className="text-sm text-slate-700 font-medium">
+                    {applyMigrationResult.migratedCount === 0
+                      ? "Nothing to migrate — either already done, or no swimmers matched."
+                      : `Done — ${applyMigrationResult.migratedCount} swimmer${applyMigrationResult.migratedCount === 1 ? "" : "s"} migrated.`}
+                  </p>
+                  {applyMigrationResult.needsReviewList.length > 0 && (
+                    <>
+                      <p className="text-xs text-amber-700 font-medium mt-3 mb-1.5">
+                        {applyMigrationResult.needsReviewList.length} need manual review (defaulted to a starting level):
+                      </p>
+                      <div className="space-y-1.5">
+                        {applyMigrationResult.needsReviewList.map((r) => (
+                          <div key={r.id} className="text-sm bg-white border border-slate-200 rounded-lg px-3 py-2">
+                            <span className="font-semibold text-slate-800">{r.name}</span>
+                            <span className="text-slate-400"> — was "{r.oldLevel}"</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
