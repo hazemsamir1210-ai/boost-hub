@@ -3067,41 +3067,151 @@ async function fetchAllSwimmers() {
 // "fetch everyone, change one, save everyone" cycle could read the list
 // BEFORE the first save had finished writing, then write that stale copy
 // back over it — quietly erasing whichever edit lost the race.
+/*
+ * HOT-PATH SWIMMER WRITES
+ *
+ * Attendance, skills, notes and level-up actions all used to enter one
+ * serial queue where every click did:
+ *   fetch whole roster -> modify one -> stringify whole roster -> write
+ *
+ * That is safe but very expensive on a large roster. The UI now updates the
+ * in-memory roster immediately and rapid writes are coalesced into one
+ * roster save. Supabase mirror rows are also upserted in one batch.
+ *
+ * Important: we keep the queue for the ACTUAL persistence operation. This
+ * prevents concurrent saves from racing while allowing many UI clicks to
+ * share the same write.
+ */
 let swimmerUpdateQueue = Promise.resolve();
+let swimmerBatchPending = new Map();
+let swimmerBatchTimer = null;
+let swimmerBatchInit = null;
+const SWIMMER_WRITE_DEBOUNCE_MS = 300;
+
+function makeDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+function scheduleSwimmerBatchFlush() {
+  if (swimmerBatchTimer) clearTimeout(swimmerBatchTimer);
+  swimmerBatchTimer = setTimeout(() => {
+    swimmerBatchTimer = null;
+    flushSwimmerBatch();
+  }, SWIMMER_WRITE_DEBOUNCE_MS);
+}
+
+async function ensureSwimmersWriteCache() {
+  if (swimmersCache) return swimmersCache;
+  if (!swimmerBatchInit) {
+    swimmerBatchInit = fetchAllSwimmers().finally(() => {
+      swimmerBatchInit = null;
+    });
+  }
+  return swimmerBatchInit;
+}
+
+async function flushSwimmerBatch() {
+  if (!swimmerBatchPending.size) return;
+
+  // Swap the pending map first. New clicks that happen while the network
+  // request is running go into a NEW batch and cannot be lost.
+  const batch = swimmerBatchPending;
+  swimmerBatchPending = new Map();
+
+  const run = async () => {
+    const current = swimmersCache || await ensureSwimmersWriteCache();
+    const snapshot = Array.isArray(current) ? current.slice() : [];
+
+    // saveCollection writes the authoritative roster store exactly once
+    // for the whole burst, instead of once per click.
+    const res = await saveCollection(STORE_KEYS.swimmers, snapshot, { skipSwimmersSync: true });
+    if (!res) throw new Error("Could not save, please try again");
+
+    // Mirror only the swimmers that actually changed, in ONE Supabase call.
+    const changed = [];
+    for (const entry of batch.values()) {
+      const idx = snapshot.findIndex((s) => s.id === entry.id);
+      if (idx !== -1) changed.push(snapshot[idx]);
+    }
+    if (changed.length && window.__academy) {
+      try {
+        const rows = changed.map((swimmer) => ({
+          id: swimmer.id,
+          academy_id: window.__academy.id,
+          name: swimmer.name || "",
+          branch: swimmer.branch || null,
+          level: swimmer.level || null,
+          data: swimmer,
+        }));
+        const { error } = await supabase.from("swimmers").upsert(rows, { onConflict: "id" });
+        if (error) throw error;
+        clearSwimmersSyncAlert();
+      } catch (e) {
+        // Do not make the already-successful primary save look like it
+        // failed. The existing retry/alert mechanism handles the mirror.
+        for (const swimmer of changed) syncSingleSwimmerToTableWithRetry(swimmer);
+      }
+    }
+
+    for (const entry of batch.values()) entry.deferred.resolve(entry.updated);
+  };
+
+  const result = swimmerUpdateQueue.catch(() => {}).then(run);
+  swimmerUpdateQueue = result.catch(() => {});
+
+  try {
+    await result;
+  } catch (e) {
+    for (const entry of batch.values()) entry.deferred.reject(e);
+  }
+
+  // If more clicks arrived while this batch was saving, flush them too.
+  if (swimmerBatchPending.size) scheduleSwimmerBatchFlush();
+}
+
+async function updateSwimmerById(id, updateFn) {
+  await ensureSwimmersWriteCache();
+
+  const all = swimmersCache;
+  if (!Array.isArray(all)) throw new Error("Swimmer roster unavailable — try refreshing the list");
+
+  const idx = all.findIndex((s) => s.id === id);
+  if (idx === -1) throw new Error("Swimmer not found — try refreshing the list");
+
+  let updated;
+  try {
+    updated = updateFn(all[idx]);
+  } catch (e) {
+    throw e;
+  }
+
+  // Update cache immediately. React callers receive the updated object
+  // after the small debounce + persistence, but the next click in the
+  // same burst already sees this newest value without another fetch.
+  const next = all.slice();
+  next[idx] = updated;
+  setSwimmersCache(next);
+
+  let entry = swimmerBatchPending.get(id);
+  if (!entry) {
+    entry = { id, deferred: makeDeferred(), updated };
+    swimmerBatchPending.set(id, entry);
+  } else {
+    entry.updated = updated;
+  }
+
+  scheduleSwimmerBatchFlush();
+  return entry.deferred.promise;
+}
 
 // Same protection, for the coach list — a coach save/delete fetches the
 // list fresh (never the local React state, which could be stale if
 // another edit landed since it was last loaded) and queues behind
 // whichever coach edit is already in flight.
 let coachUpdateQueue = Promise.resolve();
-
-async function updateSwimmerById(id, updateFn) {
-  const run = async () => {
-    const all = await fetchAllSwimmers();
-    const idx = all.findIndex((s) => s.id === id);
-    if (idx === -1) throw new Error("Swimmer not found — try refreshing the list");
-    const updated = updateFn(all[idx]);
-    const next = [...all];
-    next[idx] = updated;
-    // Only ONE swimmer actually changed here, so the mirror-table sync
-    // only needs to touch that one row — skip saveCollection's generic
-    // full-roster resync (which would re-upsert every swimmer in the
-    // academy for this single change) and sync just this one instead.
-    // This is the hot path behind every attendance tap, note, skill
-    // rating, and level-up on the Technical screen, so this is where a
-    // large roster's full-resync cost was actually being paid every time.
-    const res = await saveCollection(STORE_KEYS.swimmers, next, { skipSwimmersSync: true });
-    if (!res) throw new Error("Could not save, please try again");
-    syncSingleSwimmerToTableWithRetry(updated);
-    return updated;
-  };
-  // Chain onto the queue regardless of whether the previous entry
-  // succeeded or failed, so one failed save never permanently blocks
-  // every edit after it — but still WAIT for our own turn before running.
-  const result = swimmerUpdateQueue.catch(() => {}).then(run);
-  swimmerUpdateQueue = result.catch(() => {});
-  return result;
-}
 
 const HISTORY_CLEANUP_KEY = "history-cleanup-settings";
 
