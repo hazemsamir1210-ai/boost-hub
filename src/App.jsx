@@ -10630,6 +10630,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [swimmersPageError, setSwimmersPageError] = useState("");
   const [branchFilter, setBranchFilter] = useState("all");
   const [levelFilter, setLevelFilter] = useState("all");
+  // New Programs -> Levels structure, additive alongside levelFilter —
+  // filters on swimmer.program (only set for swimmers already migrated),
+  // entirely separate from the level-based filtering everything else
+  // still uses.
+  const [programFilter, setProgramFilter] = useState("all");
   const [dayFilter, setDayFilter] = useState("all");
   const [timeFilter, setTimeFilter] = useState("all");
   const [paymentMonthFilter, setPaymentMonthFilter] = useState(monthKey());
@@ -12698,7 +12703,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         // Matching level against the swimmer's actual data.level, same as
         // the others, keeps this filter's answer correct regardless of
         // whether the mirror ever fell behind.
-        if (dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || coachFilterValue !== "all" || levelFilter !== "all") {
+        if (dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || coachFilterValue !== "all" || levelFilter !== "all" || programFilter !== "all") {
           query = query.order("name", { ascending: true });
           const { data, error } = await query;
           if (error) throw error;
@@ -12711,6 +12716,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               const effSessionType = ms ? ms.sessionType : s.sessionType;
               const effCoachId = ms ? ms.coachId : s.coachId;
               if (levelFilter !== "all" && s.level !== levelFilter) return false;
+              // Only matches swimmers already migrated to the new
+              // structure (s.program set) — unmigrated swimmers simply
+              // never match any specific program filter, same as they'd
+              // never match a level they don't have.
+              if (programFilter !== "all" && s.program !== programFilter) return false;
               if (dayFilter !== "all" && effDay !== dayFilter) return false;
               if (timeFilter !== "all" && effTime !== timeFilter) return false;
               if (sessionTypeFilter !== "all" && effSessionType !== sessionTypeFilter) return false;
@@ -12736,7 +12746,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         setSwimmersPageLoading(false);
       }
     },
-    [branchFilter, levelFilter, dayFilter, timeFilter, sessionTypeFilter, paymentStatusFilter, paymentMonthFilter, search, showUnscheduled, coachFilterValue, branchRestriction, role, programAccess, levelAccess, myAccount]
+    [branchFilter, levelFilter, programFilter, dayFilter, timeFilter, sessionTypeFilter, paymentStatusFilter, paymentMonthFilter, search, showUnscheduled, coachFilterValue, branchRestriction, role, programAccess, levelAccess, myAccount]
   );
 
   useEffect(() => {
@@ -13970,11 +13980,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             >
               {showMoreFilters ? "Fewer filters ▲" : "More filters ▼"}
             </button>
-            {(branchFilter !== "all" || levelFilter !== "all" || dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || paymentStatusFilter !== "paid" || showUnscheduled || coachFilterValue !== "all" || search) && (
+            {(branchFilter !== "all" || levelFilter !== "all" || programFilter !== "all" || dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || paymentStatusFilter !== "paid" || showUnscheduled || coachFilterValue !== "all" || search) && (
               <button
                 onClick={() => {
                   setBranchFilter("all");
                   setLevelFilter("all");
+                  setProgramFilter("all");
                   setDayFilter("all");
                   setTimeFilter("all");
                   setSessionTypeFilter("all");
@@ -14008,6 +14019,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <option value="all">All levels</option>
                 {LEVELS.map((lvl) => (
                   <option key={lvl} value={lvl}>{lvl}</option>
+                ))}
+              </select>
+              <select
+                value={programFilter}
+                onChange={(e) => setProgramFilter(e.target.value)}
+                className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                title="New Programs structure — only set for already-migrated swimmers"
+              >
+                <option value="all">All programs</option>
+                {SWIM_PROGRAMS.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select>
               <select
@@ -14295,6 +14317,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <span>{BRANCHES.find((b) => b.id === s.branch)?.name.split(" (")[0] || "No branch"}</span>
                   <span className="text-slate-300">·</span>
                   <span>{rowView.level}</span>
+                  {rowView.program && (
+                    <>
+                      <span className="text-slate-300">·</span>
+                      <span className="text-indigo-600" title="New Programs structure">
+                        {SWIM_PROGRAMS.find((p) => p.id === rowView.program)?.name || rowView.program} / {rowView.programLevel}
+                      </span>
+                    </>
+                  )}
                   <span className="text-slate-300">·</span>
                   <span className="flex items-center gap-1">
                     <CalendarDays className="w-3 h-3 text-slate-400" />
