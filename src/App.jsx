@@ -17197,6 +17197,47 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </button>
             </div>
 
+            {(() => {
+              // Per-coach breakdown by the new Programs structure — kept
+              // completely separate from allCoachStats above (which
+              // drives the actual performance numbers) so this is purely
+              // an additional read-only view, with zero risk of affecting
+              // any of those calculations.
+              const coachProgramRows = coaches
+                .map((c) => {
+                  const counts = {};
+                  swimmers.forEach((s) => {
+                    if (!s.program) return;
+                    const ms = getMonthlySchedule(s, selectedMonthKey);
+                    if (!ms || (ms.coachId !== c.id && ms.coachId2 !== c.id)) return;
+                    counts[s.program] = (counts[s.program] || 0) + 1;
+                  });
+                  return { coach: c, counts, total: Object.values(counts).reduce((a, b) => a + b, 0) };
+                })
+                .filter((row) => row.total > 0);
+              if (coachProgramRows.length === 0) return null;
+              return (
+                <div className="bg-slate-50 rounded-2xl p-5 mb-6">
+                  <h3 className="font-bold text-slate-900 mb-1">Swimmers by program, per coach</h3>
+                  <p className="text-xs text-slate-400 mb-4">New Programs structure — only counts already-migrated swimmers.</p>
+                  <div className="space-y-2">
+                    {coachProgramRows.map((row) => (
+                      <div key={row.coach.id} className="text-sm bg-white border border-slate-200 rounded-lg px-3 py-2">
+                        <span className="font-semibold text-slate-800">{row.coach.name}</span>
+                        <span className="text-slate-400"> — </span>
+                        {Object.entries(row.counts).map(([programId, count], i) => (
+                          <span key={programId} className="text-indigo-600">
+                            {i > 0 && ", "}
+                            {SWIM_PROGRAMS.find((p) => p.id === programId)?.name || programId}: {count}
+                          </span>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
             {coachPerfCoachFilter === "all" && (
               <div className="bg-slate-50 rounded-2xl p-5 mb-6">
                 <h3 className="font-bold text-slate-900 mb-1">{t("topCoachesTitle")}</h3>
@@ -23770,6 +23811,9 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
                   <div className="font-semibold text-slate-900">{s.name}</div>
                   <div className="text-xs text-slate-400">
                     {s.level} · {s.age} yrs
+                    {s.program && (
+                      <span className="text-indigo-500"> · {SWIM_PROGRAMS.find((p) => p.id === s.program)?.name || s.program} / {s.programLevel}</span>
+                    )}
                     {s.coachId && ` · Coach: ${coaches.find((c) => c.id === s.coachId)?.name || "—"}`}
                   </div>
                 </div>
