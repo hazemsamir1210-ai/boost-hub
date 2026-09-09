@@ -17217,9 +17217,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 .filter((row) => row.total > 0);
               if (coachProgramRows.length === 0) return null;
               return (
-                <div className="bg-slate-50 rounded-2xl p-5 mb-6">
-                  <h3 className="font-bold text-slate-900 mb-1">Swimmers by program, per coach</h3>
-                  <p className="text-xs text-slate-400 mb-4">New Programs structure — only counts already-migrated swimmers.</p>
+                <details className="bg-slate-50 rounded-2xl p-5 mb-6">
+                  <summary className="font-bold text-slate-900 cursor-pointer select-none list-none flex items-center gap-2">
+                    <span>▶</span> Swimmers by program, per coach
+                  </summary>
+                  <p className="text-xs text-slate-400 mb-4 mt-1">New Programs structure — only counts already-migrated swimmers.</p>
                   <div className="space-y-2">
                     {coachProgramRows.map((row) => (
                       <div key={row.coach.id} className="text-sm bg-white border border-slate-200 rounded-lg px-3 py-2">
@@ -17234,7 +17236,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       </div>
                     ))}
                   </div>
-                </div>
+                </details>
               );
             })()}
 
@@ -23466,7 +23468,20 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   const coachAvailability = coaches
     .filter((c) => c.branch === branch && !isCoachClosedAt(c, dayGroup, time))
     .map((c) => {
-      const inSlot = swimmers.filter((s) => s.coachId === c.id);
+      // Same resolution used to build `swimmers` itself (getMonthlySchedule
+      // matched against this exact day+time) — grouping by the raw
+      // top-level coachId instead meant a swimmer moved to a different
+      // coach this month (via a monthlySchedules override) still counted
+      // toward their OLD coach here, showing that coach as full/free
+      // incorrectly while under-counting the coach actually teaching them.
+      const inSlot = swimmers.filter((s) => {
+        const ms = getMonthlySchedule(s, monthKey());
+        if (!ms) return false;
+        if (ms.day === dayGroup && ms.time === time) return ms.coachId === c.id;
+        const second = getDistinctSecondSession(ms);
+        if (second && second.day === dayGroup && second.time === time) return second.coachId === c.id;
+        return false;
+      });
       if (inSlot.length === 0) return { coach: c, free: true, label: "Free — no bookings" };
       const type = inSlot[0].sessionType;
       const capacity = effectiveSlotCapacity(type, inSlot[0].level, c.id, dayGroup, time);
