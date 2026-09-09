@@ -653,6 +653,10 @@ async function saveCustomSwimPrograms(programs) {
   return storageSet(SWIM_PROGRAMS_KEY, JSON.stringify(programs));
 }
 
+function applyCustomSwimPrograms(list) {
+  SWIM_PROGRAMS = list && list.length > 0 ? list : [...DEFAULT_SWIM_PROGRAMS];
+}
+
 // The agreed old-level -> {program, level} mapping table, exactly as
 // reviewed with the academy. Two old levels can't be mapped with full
 // confidence automatically (old "Baby" was one flat level, but the new
@@ -6644,20 +6648,18 @@ function suggestClassOptimizations(classes, enrollments) {
 // roster (spreads new swimmers out rather than always suggesting
 // whoever's already busiest). Always a suggestion to accept or override
 // from the picker — never assigns anything by itself.
-function suggestBestCoach(candidateCoaches, swimmer, allSwimmers) {
+// Takes a pre-built coachId -> roster map (see buildCoachRosterMap) instead
+// of scanning the full swimmer list itself — this used to filter
+// `allSwimmers` fresh for every candidate coach, for every swimmer
+// needing a coach, which made the Coach Assignment tab redo a full
+// roster scan (with a getMonthlySchedule call per swimmer) potentially
+// hundreds of times on a single render. Building the roster map once
+// per render and reusing it here turns that into one scan total.
+function suggestBestCoach(candidateCoaches, swimmer, rosterByCoachId) {
   if (candidateCoaches.length === 0) return null;
 
   const scored = candidateCoaches.map((c) => {
-    // Same month-aware resolver used everywhere else, so a coach's real
-    // current roster (including swimmers whose coach for this month
-    // lives in monthlySchedules rather than the top-level coachId) is
-    // what actually drives the suggestion.
-    const myRoster = allSwimmers.filter((s) => {
-      const ms = getMonthlySchedule(s, monthKey());
-      const coachIdNow = ms ? ms.coachId : s.coachId;
-      const coachId2Now = ms ? ms.coachId2 : s.coachId2;
-      return coachIdNow === c.id || coachId2Now === c.id;
-    });
+    const myRoster = rosterByCoachId.get(c.id) || [];
     const myLoad = myRoster.length;
     const myLevelExperience = myRoster.filter((s) => s.level === swimmer.level).length;
     // Experience matters most; a lighter overall load breaks ties between
@@ -6675,6 +6677,28 @@ function suggestBestCoach(candidateCoaches, swimmer, allSwimmers) {
       : `Lightest current roster (${top.myLoad} swimmers) among available coaches`;
 
   return { coach: top.coach, reason };
+}
+
+// Builds the coachId -> roster map suggestBestCoach needs, in a single
+// pass over the swimmer list — same month-aware resolution as before
+// (a coach's real current roster can live in monthlySchedules rather
+// than the top-level coachId), just computed once instead of once per
+// candidate coach.
+function buildCoachRosterMap(allSwimmers) {
+  const map = new Map();
+  const addTo = (coachId, s) => {
+    if (!coachId) return;
+    if (!map.has(coachId)) map.set(coachId, []);
+    map.get(coachId).push(s);
+  };
+  allSwimmers.forEach((s) => {
+    const ms = getMonthlySchedule(s, monthKey());
+    const coachIdNow = ms ? ms.coachId : s.coachId;
+    const coachId2Now = ms ? ms.coachId2 : s.coachId2;
+    addTo(coachIdNow, s);
+    if (coachId2Now && coachId2Now !== coachIdNow) addTo(coachId2Now, s);
+  });
+  return map;
 }
 
 const CORE_KEYS = {
@@ -8916,6 +8940,95 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     } finally {
       setLevelsSaving(false);
     }
+  };
+
+  // Editing for the new Programs -> Levels structure — same immediate-save
+  // pattern as the Levels editing above, kept in its own separate state
+  // since programs and levels are edited independently of each other.
+  const [swimProgramsSaving, setSwimProgramsSaving] = useState(false);
+  const [swimProgramsError, setSwimProgramsError] = useState("");
+  const [newProgramName, setNewProgramName] = useState("");
+  const [newLevelNameByProgram, setNewLevelNameByProgram] = useState({}); // programId -> draft text
+
+  const saveAndApplyPrograms = async (next) => {
+    setSwimProgramsSaving(true);
+    setSwimProgramsError("");
+    try {
+      const res = await saveCustomSwimPrograms(next);
+      if (!res) throw new Error("Could not save — please try again");
+      applyCustomSwimPrograms(next);
+      setSkillsRefreshKey((k) => k + 1);
+      return true;
+    } catch (e) {
+      setSwimProgramsError(e?.message || "Could not save — please try again");
+      return false;
+    } finally {
+      setSwimProgramsSaving(false);
+    }
+  };
+
+  const addProgram = async () => {
+    const name = newProgramName.trim();
+    if (!name) return;
+    if (SWIM_PROGRAMS.some((p) => p.name.toLowerCase() === name.toLowerCase())) {
+      setSwimProgramsError("A program with that name already exists");
+      return;
+    }
+    // Slug id from the name — stable and readable in stored swimmer
+    // records (swimmer.program), unlike a random id would be.
+    const id = name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || `program-${Date.now()}`;
+    const next = [...SWIM_PROGRAMS, { id, name, levels: [] }];
+    if (await saveAndApplyPrograms(next)) {
+      setNewProgramName("");
+      logActivity(accountName, role, "Added program", name);
+    }
+  };
+
+  const removeProgram = (program) => {
+    const inUse = swimmers.some((s) => s.program === program.id);
+    setConfirmAction({
+      message: inUse
+        ? `${program.name} still has at least one swimmer assigned — remove it anyway? Their profile will keep showing "${program.name}" until you move them, but it won't be selectable for anyone else.`
+        : `Remove the "${program.name}" program?`,
+      onConfirm: async () => {
+        const next = SWIM_PROGRAMS.filter((p) => p.id !== program.id);
+        if (await saveAndApplyPrograms(next)) logActivity(accountName, role, "Removed program", program.name);
+      },
+    });
+  };
+
+  const renameProgram = async (program, newName) => {
+    const name = newName.trim();
+    if (!name || name === program.name) return;
+    const next = SWIM_PROGRAMS.map((p) => (p.id === program.id ? { ...p, name } : p));
+    await saveAndApplyPrograms(next);
+  };
+
+  const addLevelToProgram = async (program) => {
+    const name = (newLevelNameByProgram[program.id] || "").trim();
+    if (!name) return;
+    if (program.levels.includes(name)) {
+      setSwimProgramsError("That level already exists in this program");
+      return;
+    }
+    const next = SWIM_PROGRAMS.map((p) => (p.id === program.id ? { ...p, levels: [...p.levels, name] } : p));
+    if (await saveAndApplyPrograms(next)) {
+      setNewLevelNameByProgram((prev) => ({ ...prev, [program.id]: "" }));
+      logActivity(accountName, role, "Added program level", `${program.name} / ${name}`);
+    }
+  };
+
+  const removeLevelFromProgram = (program, levelName) => {
+    const inUse = swimmers.some((s) => s.program === program.id && s.programLevel === levelName);
+    setConfirmAction({
+      message: inUse
+        ? `At least one swimmer is at "${levelName}" in ${program.name} — remove this level anyway? Their profile will keep showing it until you change it, but it won't be selectable for anyone else.`
+        : `Remove "${levelName}" from ${program.name}?`,
+      onConfirm: async () => {
+        const next = SWIM_PROGRAMS.map((p) => (p.id === program.id ? { ...p, levels: p.levels.filter((l) => l !== levelName) } : p));
+        if (await saveAndApplyPrograms(next)) logActivity(accountName, role, "Removed program level", `${program.name} / ${levelName}`);
+      },
+    });
   };
 
   const [customPlanPrices, setCustomPlanPrices] = useState({}); // planId -> { name?, price? } override
@@ -13567,6 +13680,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           const ms = getMonthlySchedule(s, monthKey());
           return ms && !!ms.coachId;
         });
+        // Built ONCE per render — see suggestBestCoach/buildCoachRosterMap
+        // for why this used to be the slow part of this tab.
+        const rosterByCoachId = buildCoachRosterMap(swimmers);
 
         const assignCoach = async (swimmer, newCoachId) => {
           try {
@@ -13610,7 +13726,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
         const CoachSuggestion = ({ s }) => {
           const candidates = coaches.filter((c) => c.branch === s.branch && !isCoachClosedAt(c, s.day, s.time));
-          const suggestion = suggestBestCoach(candidates, s, swimmers);
+          const suggestion = suggestBestCoach(candidates, s, rosterByCoachId);
           if (!suggestion) return null;
           return (
             <button
@@ -17719,6 +17835,77 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <p className="text-sm text-slate-500 mb-5">
             These are the skills shown (and starred) on each swimmer's progress card, per level. Add, remove, or reset to the built-in defaults — changes apply everywhere immediately.
           </p>
+
+          <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4 mb-5">
+            <h4 className="font-semibold text-slate-800 text-sm mb-1">Programs & their levels</h4>
+            <p className="text-xs text-slate-400 mb-3">
+              The newer Program → Level structure (Baby, Learn to swim, Development team...). Name your own programs and levels freely — this drives the Program filters and badges across Swimmers, Schedule, Technical, and Reports.
+            </p>
+            {swimProgramsError && <div className="text-xs text-red-500 mb-3">{swimProgramsError}</div>}
+            <div className="space-y-3 mb-3">
+              {SWIM_PROGRAMS.map((program) => (
+                <div key={program.id} className="bg-white rounded-xl border border-slate-200 p-3">
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <input
+                      defaultValue={program.name}
+                      onBlur={(e) => renameProgram(program, e.target.value)}
+                      className="font-semibold text-slate-800 text-sm border-b border-transparent hover:border-slate-200 focus:border-sky-900 outline-none bg-transparent px-0.5 flex-1"
+                    />
+                    <button onClick={() => removeProgram(program)} className="text-slate-300 hover:text-red-500 shrink-0">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {program.levels.length === 0 && <span className="text-xs text-slate-300">No levels yet</span>}
+                    {program.levels.map((lvl) => (
+                      <span key={lvl} className="flex items-center gap-1 text-xs pl-2.5 pr-1 py-1 rounded-full bg-slate-50 border border-slate-200 text-slate-600">
+                        {lvl}
+                        <button onClick={() => removeLevelFromProgram(program, lvl)} className="text-slate-300 hover:text-red-500">
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="flex gap-1.5">
+                    <input
+                      value={newLevelNameByProgram[program.id] || ""}
+                      onChange={(e) => setNewLevelNameByProgram((prev) => ({ ...prev, [program.id]: e.target.value }))}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") addLevelToProgram(program);
+                      }}
+                      placeholder="New level name"
+                      className="flex-1 border border-slate-200 rounded-lg py-1.5 px-2.5 text-xs outline-none focus:border-sky-900 bg-white"
+                    />
+                    <button
+                      onClick={() => addLevelToProgram(program)}
+                      disabled={swimProgramsSaving || !(newLevelNameByProgram[program.id] || "").trim()}
+                      className="px-3 py-1.5 rounded-lg bg-slate-700 text-white text-xs font-semibold hover:bg-slate-600 disabled:opacity-60"
+                    >
+                      Add level
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <input
+                value={newProgramName}
+                onChange={(e) => setNewProgramName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") addProgram();
+                }}
+                placeholder="New program name, e.g. Ladies"
+                className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+              />
+              <button
+                onClick={addProgram}
+                disabled={swimProgramsSaving || !newProgramName.trim()}
+                className="px-4 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
+              >
+                Add program
+              </button>
+            </div>
+          </div>
 
           <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4 mb-5">
             <div className="flex items-center justify-between mb-2">
@@ -29147,6 +29334,7 @@ function App() {
       Promise.all([
         loadCustomLevelSkills().then(applyCustomLevelSkills),
         loadCustomLevels().then(applyCustomLevels),
+        loadCustomSwimPrograms().then(applyCustomSwimPrograms),
         loadCustomTimeSlots().then(applyCustomTimeSlots),
         loadCustomBabyTimeSlots().then(applyCustomBabyTimeSlots),
         loadHomepageContent().then(applyHomepageContent),
