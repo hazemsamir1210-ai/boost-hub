@@ -1011,6 +1011,65 @@ async function saveCustomTeamSquadCapacities(next) {
   return storageSet(TEAM_SQUAD_CAPACITIES_KEY, JSON.stringify(next));
 }
 
+// Capacity numbers for the NEW Programs -> Levels structure (e.g. a
+// specific cap for "Pre team / Team A"), keyed the same way as
+// PROGRAM_LEVEL_SKILLS ("programId::levelName"). IMPORTANT: unlike
+// TEAM_SQUAD_CAPACITIES above, nothing reads this yet to actually block
+// or allow a booking — it's purely a place to record the numbers ahead
+// of time. Wiring it into the live "is this slot full" check (which
+// still runs entirely on the old level field today) is its own future
+// step, done separately and carefully since that check protects real
+// bookings from over-filling a slot.
+const PROGRAM_LEVEL_CAPACITIES_KEY = "program-level-capacities-custom";
+let PROGRAM_LEVEL_CAPACITIES = {}; // { "programId::levelName": number }
+
+async function loadCustomProgramLevelCapacities() {
+  const res = await window.storage.get(PROGRAM_LEVEL_CAPACITIES_KEY);
+  if (!res) return {};
+  try {
+    return JSON.parse(res.value);
+  } catch {
+    return {};
+  }
+}
+
+async function saveCustomProgramLevelCapacities(next) {
+  return storageSet(PROGRAM_LEVEL_CAPACITIES_KEY, JSON.stringify(next));
+}
+
+function applyCustomProgramLevelCapacities(next) {
+  PROGRAM_LEVEL_CAPACITIES = next || {};
+}
+
+// Which Plan (from PLANS/PLAN_PRICES) should be SUGGESTED when a swimmer
+// is set to a given program+level — e.g. "Pre team / Team A" -> the
+// Private plan. Keyed the same way as PROGRAM_LEVEL_SKILLS. Unlike the
+// capacity numbers above, this DOES get read live (by SwimmerForm) — but
+// only to pre-fill the Plan dropdown when the admin picks a program;
+// they can still change it before saving, and it never touches a
+// swimmer's price on its own without them choosing to save that change.
+const PROGRAM_LEVEL_DEFAULT_PLAN_KEY = "program-level-default-plan-custom";
+let PROGRAM_LEVEL_DEFAULT_PLAN = {}; // { "programId::levelName": planId }
+
+async function loadCustomProgramLevelDefaultPlan() {
+  const res = await window.storage.get(PROGRAM_LEVEL_DEFAULT_PLAN_KEY);
+  if (!res) return {};
+  try {
+    return JSON.parse(res.value);
+  } catch {
+    return {};
+  }
+}
+
+async function saveCustomProgramLevelDefaultPlan(next) {
+  return storageSet(PROGRAM_LEVEL_DEFAULT_PLAN_KEY, JSON.stringify(next));
+}
+
+function applyCustomProgramLevelDefaultPlan(next) {
+  PROGRAM_LEVEL_DEFAULT_PLAN = next || {};
+}
+
+
 
 function sessionCapacity(sessionType, level) {
   if (sessionType === "group" && ["Exp", "Exp 2", "Exp 3"].includes(level)) return 2;
@@ -3660,9 +3719,55 @@ function nextLevelOf(level) {
   return LEVELS[i + 1];
 }
 
+// Same idea as nextLevelOf, but within one program's own level list —
+// "next" for Baby's levels has nothing to do with "next" for Learn to
+// swim's levels, even where a level name is shared between programs.
+function nextProgramLevelOf(programId, levelName) {
+  const program = SWIM_PROGRAMS.find((p) => p.id === programId);
+  if (!program) return null;
+  const i = program.levels.indexOf(levelName);
+  if (i === -1 || i === program.levels.length - 1) return null;
+  return program.levels[i + 1];
+}
+
+// What "level up" should suggest for this swimmer: their next PROGRAM
+// level if they've been migrated and one exists, otherwise their next
+// old-style flat level — exactly one of the two, never both, so a
+// migrated swimmer's promotion is judged against the structure they're
+// actually being tracked in now.
+function nextLevelSuggestionFor(swimmer) {
+  if (swimmer?.program && swimmer?.programLevel) {
+    const next = nextProgramLevelOf(swimmer.program, swimmer.programLevel);
+    if (next) return { kind: "program", value: next };
+    return null; // migrated and already at their program's top level
+  }
+  const next = nextLevelOf(swimmer?.level);
+  return next ? { kind: "level", value: next } : null;
+}
+
 function levelUpSwimmer(swimmer) {
-  const to = nextLevelOf(swimmer.level);
-  if (!to) return swimmer; // already at the highest level
+  const suggestion = nextLevelSuggestionFor(swimmer);
+  if (!suggestion) return swimmer; // already at the top, in whichever structure applies to them
+  if (suggestion.kind === "program") {
+    // Promotes the NEW program level only — the old top-level `level`
+    // field (which still drives pricing/capacity/etc. everywhere else
+    // today) is deliberately left untouched here. Bringing those other
+    // areas onto the new structure is its own separate step; until then,
+    // a migrated swimmer's price won't change just from this promotion.
+    const programName = SWIM_PROGRAMS.find((p) => p.id === swimmer.program)?.name || swimmer.program;
+    const completedProgramLevel = swimmer.programLevel; // the level they just finished
+    return {
+      ...swimmer,
+      programLevel: suggestion.value,
+      programLevelHistory: [...(swimmer.programLevelHistory || []), { level: suggestion.value, date: new Date().toISOString() }],
+      // Same certificates array the old-style promotion below writes to
+      // (and the existing Print Certificate button already reads from) —
+      // labeled with the program name so it reads as what it is, not a
+      // plain old-style level.
+      certificates: [...(swimmer.certificates || []), { level: `${programName} — ${completedProgramLevel}`, date: todayISO() }],
+    };
+  }
+  const to = suggestion.value;
   const completedLevel = swimmer.level; // the level they just finished
   return {
     ...swimmer,
@@ -4311,7 +4416,7 @@ function computeCoachPerformance(swimmers = [], coachId, feedback = []) {
       if (status === "present") present++;
       else if (status === "absent") absent++;
     });
-    const levelSkills = LEVEL_SKILLS[s.level] || [];
+    const levelSkills = getSkillsForSwimmer(s);
     if (levelSkills.length > 0) {
       skillsTotal += levelSkills.length;
       masteredTotal += levelSkills.filter((sk) => (s.skills?.[s.level]?.[sk] || 0) >= 5).length;
@@ -4475,7 +4580,7 @@ function calculateChurnRisk(swimmer) {
   // Stalled skill progress — been in the same level a while with no
   // ratings improving, while everything else about them still looks
   // "active" (they're not just new).
-  const levelSkills = LEVEL_SKILLS[swimmer.level] || [];
+  const levelSkills = getSkillsForSwimmer(swimmer);
   if (levelSkills.length > 0) {
     const anyProgress = levelSkills.some((sk) => (swimmer.skills?.[swimmer.level]?.[sk] || 0) > 0);
     const monthsSinceJoined = swimmer.createdAt
@@ -4660,7 +4765,7 @@ function SwimmerProfileModal({ swimmer: s, coaches, onClose, onEditSkill, canEdi
   const [profileTab, setProfileTab] = useState("overview");
   const coachName = coaches.find((c) => c.id === s.coachId)?.name;
   const dayLabel = DAY_GROUPS.find((d) => d.id === s.day)?.label;
-  const skills = LEVEL_SKILLS[s.level] || [];
+  const skills = getSkillsForSwimmer(s);
   const mastered = skills.filter((sk) => (s.skills?.[s.level]?.[sk] || 0) >= 5).length;
 
   const attendanceEntries = Object.entries(s.attendance || {}).sort((a, b) => b[0].localeCompare(a[0]));
@@ -6323,7 +6428,22 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
         {program && (
           <div>
             <label className="text-xs text-slate-500 mb-1 block">Program level</label>
-            <select value={programLevel} onChange={(e) => setProgramLevel(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white">
+            <select
+              value={programLevel}
+              onChange={(e) => {
+                const chosen = e.target.value;
+                setProgramLevel(chosen);
+                // Suggests the Plan configured for this program+level in
+                // Settings (Skills & Levels) — pre-fills the dropdown
+                // below, but the admin can still pick a different plan
+                // before saving; this never changes a price on its own.
+                if (chosen) {
+                  const suggestedPlanId = PROGRAM_LEVEL_DEFAULT_PLAN[programLevelSkillsKey(program, chosen)];
+                  if (suggestedPlanId && PLANS.some((p) => p.id === suggestedPlanId)) setPlanId(suggestedPlanId);
+                }
+              }}
+              className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
+            >
               <option value="">Choose a level</option>
               {(SWIM_PROGRAMS.find((p) => p.id === program)?.levels || []).map((lvl) => (
                 <option key={lvl} value={lvl}>{lvl}</option>
@@ -8990,6 +9110,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   const [customLevelSkills, setCustomLevelSkills] = useState({});
   const [customProgramLevelSkills, setCustomProgramLevelSkills] = useState({}); // "programId::level" -> [skill, ...]
+  const [customProgramLevelCapacities, setCustomProgramLevelCapacities] = useState({}); // "programId::level" -> number
+  const [customProgramLevelDefaultPlan, setCustomProgramLevelDefaultPlan] = useState({}); // "programId::level" -> planId
   const [newProgramSkillText, setNewProgramSkillText] = useState({}); // "programId::level" -> draft text
   const [skillsRefreshKey, setSkillsRefreshKey] = useState(0); // bumped after saving, to force re-render of anything reading LEVEL_SKILLS
   const [newSkillText, setNewSkillText] = useState({}); // level -> draft text for the "add skill" input
@@ -9330,6 +9452,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         applyCustomProgramLevelSkills(custom);
         setSkillsRefreshKey((k) => k + 1);
       });
+      loadCustomProgramLevelCapacities().then((custom) => {
+        setCustomProgramLevelCapacities(custom);
+        applyCustomProgramLevelCapacities(custom);
+        setSkillsRefreshKey((k) => k + 1);
+      });
+      loadCustomProgramLevelDefaultPlan().then((custom) => {
+        setCustomProgramLevelDefaultPlan(custom);
+        applyCustomProgramLevelDefaultPlan(custom);
+        setSkillsRefreshKey((k) => k + 1);
+      });
     }
   }, [tab]);
 
@@ -9346,6 +9478,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     loadCustomProgramLevelSkills().then((custom) => {
       setCustomProgramLevelSkills(custom);
       applyCustomProgramLevelSkills(custom);
+      setSkillsRefreshKey((k) => k + 1);
+    });
+    loadCustomProgramLevelCapacities().then((custom) => {
+      setCustomProgramLevelCapacities(custom);
+      applyCustomProgramLevelCapacities(custom);
+      setSkillsRefreshKey((k) => k + 1);
+    });
+    loadCustomProgramLevelDefaultPlan().then((custom) => {
+      setCustomProgramLevelDefaultPlan(custom);
+      applyCustomProgramLevelDefaultPlan(custom);
       setSkillsRefreshKey((k) => k + 1);
     });
   }, [authed]);
@@ -9390,6 +9532,36 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     const key = programLevelSkillsKey(programId, levelName);
     const current = PROGRAM_LEVEL_SKILLS[key] || [];
     updateProgramLevelSkills(key, current.filter((s) => s !== skill));
+  };
+
+  const updateProgramLevelCapacity = async (programId, levelName, value) => {
+    const key = programLevelSkillsKey(programId, levelName); // same "programId::level" scheme
+    const next = { ...customProgramLevelCapacities };
+    if (value === "" || value == null) delete next[key];
+    else next[key] = Math.max(0, Number(value) || 0);
+    setSkillsSaving(true);
+    try {
+      await saveCustomProgramLevelCapacities(next);
+      setCustomProgramLevelCapacities(next);
+      applyCustomProgramLevelCapacities(next);
+    } finally {
+      setSkillsSaving(false);
+    }
+  };
+
+  const updateProgramLevelDefaultPlan = async (programId, levelName, planId) => {
+    const key = programLevelSkillsKey(programId, levelName);
+    const next = { ...customProgramLevelDefaultPlan };
+    if (!planId) delete next[key];
+    else next[key] = planId;
+    setSkillsSaving(true);
+    try {
+      await saveCustomProgramLevelDefaultPlan(next);
+      setCustomProgramLevelDefaultPlan(next);
+      applyCustomProgramLevelDefaultPlan(next);
+    } finally {
+      setSkillsSaving(false);
+    }
   };
 
   const addSkill = (level) => {
@@ -14701,9 +14873,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     <CalendarDays className="w-3 h-3 text-slate-400" />
                     {scheduleLabel(rowView)}
                   </span>
-                  {(LEVEL_SKILLS[rowView.level] || []).length > 0 && (() => {
-                    const total = LEVEL_SKILLS[rowView.level].length;
-                    const mastered = LEVEL_SKILLS[rowView.level].filter((sk) => (s.skills?.[rowView.level]?.[sk] || 0) >= 5).length;
+                  {getSkillsForSwimmer(rowView).length > 0 && (() => {
+                    const total = getSkillsForSwimmer(rowView).length;
+                    const mastered = getSkillsForSwimmer(rowView).filter((sk) => (s.skills?.[rowView.level]?.[sk] || 0) >= 5).length;
                     return (
                       <>
                         <span className="text-slate-300">·</span>
@@ -15039,18 +15211,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <div className="mt-4 pt-4 border-t border-slate-100">
                     <div className="flex items-center justify-between mb-2">
                       <div className="text-xs font-semibold text-slate-500">Skill progression — {s.level}</div>
-                      {(LEVEL_SKILLS[s.level] || []).length > 0 && (
+                      {getSkillsForSwimmer(s).length > 0 && (
                         <div className="text-xs text-slate-400 flex items-center gap-1">
                           <Star className="w-3 h-3" />
-                          {LEVEL_SKILLS[s.level].filter((sk) => (s.skills?.[s.level]?.[sk] || 0) >= 5).length} / {LEVEL_SKILLS[s.level].length} mastered
+                          {getSkillsForSwimmer(s).filter((sk) => (s.skills?.[s.level]?.[sk] || 0) >= 5).length} / {getSkillsForSwimmer(s).length} mastered
                         </div>
                       )}
                     </div>
-                    {(LEVEL_SKILLS[s.level] || []).length === 0 ? (
+                    {getSkillsForSwimmer(s).length === 0 ? (
                       <div className="text-xs text-slate-400">No skills defined for this level yet</div>
                     ) : (
                       <SkillTreePath
-                        skills={LEVEL_SKILLS[s.level]}
+                        skills={getSkillsForSwimmer(s)}
                         ratings={s.skills?.[s.level] || {}}
                         editable={can("editAssessments") || canEditContent}
                         onRate={(skill, n) => setSkillRating(s, skill, n)}
@@ -16813,6 +16985,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <div class="card"><div class="num">${signupsTarget > 0 ? `${newSwimmers.length} / ${signupsTarget}` : "—"}</div><div class="lbl">Signups vs +20% target${signupsTarget > 0 ? ` (${signupsTargetPct}%)` : " (no prior period)"}</div></div>
             </div>
             ${levelUpRows.length ? `<table><thead><tr><th>Date</th><th>Swimmer</th><th>New level</th></tr></thead><tbody>${levelUpTableRows}</tbody></table>` : ""}
+            ${swimmersByProgram.length ? `<h3>Swimmers by program</h3><div class="cards">${swimmersByProgram.map((row) => `<div class="card"><div class="num">${row.count}</div><div class="lbl">${escapeHtml(row.program.name)}</div></div>`).join("")}</div>` : ""}
             <div class="cards">
               <div class="card"><div class="num green">${incomeTotal.toLocaleString()}</div><div class="lbl">Income (EGP)</div></div>
               <div class="card"><div class="num red">${expenseTotal.toLocaleString()}</div><div class="lbl">Expenses (EGP)</div></div>
@@ -18174,7 +18347,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4 mb-5">
             <h4 className="font-semibold text-slate-800 text-sm mb-1">Skills per program level</h4>
             <p className="text-xs text-slate-400 mb-3">
-              For the new Programs structure — a level like "Level 1" can mean something different under Baby than under Learn to swim, so each program's levels have their own separate skill list here. A migrated swimmer sees these instead of the old level-based skills below, once a program level has at least one skill defined; until then they keep seeing the old list.
+              For the new Programs structure — a level like "Level 1" can mean something different under Baby than under Learn to swim, so each program's levels have their own separate skill list here. A migrated swimmer sees these instead of the old level-based skills below, once a program level has at least one skill defined; until then they keep seeing the old list. The Capacity number is recorded for later — it doesn't limit bookings yet.
             </p>
             <div className="space-y-4">
               {SWIM_PROGRAMS.filter((p) => p.levels.length > 0).map((program) => (
@@ -18186,7 +18359,35 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       const skills = PROGRAM_LEVEL_SKILLS[key] || [];
                       return (
                         <div key={key} className="bg-white rounded-xl border border-slate-200 p-3">
-                          <div className="text-sm font-medium text-slate-700 mb-2">{levelName}</div>
+                          <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+                            <div className="text-sm font-medium text-slate-700">{levelName}</div>
+                            <div className="flex items-center gap-3">
+                              <div className="flex items-center gap-1.5">
+                                <label className="text-xs text-slate-400" title="Which Plan the swimmer form suggests when this program level is chosen — the admin can still pick a different one before saving">Suggests plan</label>
+                                <select
+                                  value={customProgramLevelDefaultPlan[key] || ""}
+                                  onChange={(e) => updateProgramLevelDefaultPlan(program.id, levelName, e.target.value)}
+                                  className="border border-slate-200 rounded-lg py-1 px-1.5 text-xs outline-none focus:border-sky-900 bg-white"
+                                >
+                                  <option value="">None</option>
+                                  {PLANS.map((p) => (
+                                    <option key={p.id} value={p.id}>{p.name} — {p.price} EGP</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <label className="text-xs text-slate-400" title="Recorded for later — not yet used to actually limit bookings">Capacity</label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={customProgramLevelCapacities[key] ?? ""}
+                                  onChange={(e) => updateProgramLevelCapacity(program.id, levelName, e.target.value)}
+                                  placeholder="—"
+                                  className="w-16 border border-slate-200 rounded-lg py-1 px-2 text-xs outline-none focus:border-sky-900"
+                                />
+                              </div>
+                            </div>
+                          </div>
                           <div className="flex flex-wrap gap-1.5 mb-2">
                             {skills.length === 0 && <span className="text-xs text-slate-300">No skills defined yet — using the old level's list for now</span>}
                             {skills.map((skill) => (
@@ -24117,9 +24318,9 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   };
 
   const levelUp = async (swimmer) => {
-    const next = nextLevelOf(swimmer.level);
-    if (!next) return; // already at the top level
-    if (!window.confirm(`Move ${swimmer.name} up to ${next}? This saves right away.`)) return;
+    const suggestion = nextLevelSuggestionFor(swimmer);
+    if (!suggestion) return; // already at the top, in whichever structure applies to them
+    if (!window.confirm(`Move ${swimmer.name} up to ${suggestion.value}? This saves right away.`)) return;
     try {
       const updated = await updateSwimmerById(swimmer.id, levelUpSwimmer);
       setSwimmers((prev) => prev.map((s) => (s.id === swimmer.id ? updated : s)));
@@ -24395,13 +24596,13 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
                     {s.coachId && ` · Coach: ${coaches.find((c) => c.id === s.coachId)?.name || "—"}`}
                   </div>
                 </div>
-                {nextLevelOf(s.level) && (
+                {nextLevelSuggestionFor(s) && (
                   <button
                     onClick={() => levelUp(s)}
                     className="px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 hover:bg-amber-100 whitespace-nowrap"
-                    title={`Move up to ${nextLevelOf(s.level)}`}
+                    title={`Move up to ${nextLevelSuggestionFor(s).value}`}
                   >
-                    ⬆ {nextLevelOf(s.level)}
+                    ⬆ {nextLevelSuggestionFor(s).value}
                   </button>
                 )}
                 {(s.certificates || []).length > 0 && (
@@ -25600,7 +25801,7 @@ function CoachView({ onExit, preAuthedCoach = null }) {
                 {d.sessions.map((s) => {
                   const duration = s.level === "Baby" ? 30 : 60;
                   const end = addMinutesToTime(s.time, duration);
-                  const skillsForLevel = LEVEL_SKILLS[s.level] || [];
+                  const skillsForLevel = getSkillsForSwimmer(s);
                   const noteEntries = Object.entries(s.sessionNotes || {}).sort((a, b) => b[0].localeCompare(a[0]));
                   const isOpen = expandedSwimmerId === s.id;
                   const canExpand = skillsForLevel.length > 0 || noteEntries.length > 0;
@@ -25715,9 +25916,9 @@ function TechnicalView({ accountName, onExit }) {
   };
 
   const levelUp = async (swimmer) => {
-    const next = nextLevelOf(swimmer.level);
-    if (!next) return; // already at the top level
-    if (!window.confirm(`Move ${swimmer.name} up to ${next}? This saves right away.`)) return;
+    const suggestion = nextLevelSuggestionFor(swimmer);
+    if (!suggestion) return; // already at the top, in whichever structure applies to them
+    if (!window.confirm(`Move ${swimmer.name} up to ${suggestion.value}? This saves right away.`)) return;
     const updated = levelUpSwimmer(swimmer);
     const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
     setSwimmers(nextSwimmers);
@@ -25761,23 +25962,26 @@ function TechnicalView({ accountName, onExit }) {
       <div className="space-y-2 mt-4">
         {results.map((s) => {
           const already = (s.attendance || {})[today] === "present" || justCheckedIn[s.id];
-          const nextLvl = nextLevelOf(s.level);
+          const nextSuggestion = nextLevelSuggestionFor(s);
           return (
             <div key={s.id} className="bg-slate-50 rounded-2xl p-4 flex items-center justify-between gap-3">
               <div>
                 <div className="font-semibold text-slate-900">{s.name}</div>
                 <div className="text-xs text-slate-400">
                   {s.level} · {s.age} yrs · {BRANCHES.find((b) => b.id === s.branch)?.name || s.branch}
+                  {s.program && (
+                    <span className="text-indigo-500"> · {SWIM_PROGRAMS.find((p) => p.id === s.program)?.name || s.program} / {s.programLevel}</span>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
-                {nextLvl && (
+                {nextSuggestion && (
                   <button
                     onClick={() => levelUp(s)}
                     className="px-3 py-2 rounded-full text-xs font-semibold whitespace-nowrap bg-amber-50 text-amber-700 hover:bg-amber-100"
-                    title={`Move up to ${nextLvl}`}
+                    title={`Move up to ${nextSuggestion.value}`}
                   >
-                    ⬆ {nextLvl}
+                    ⬆ {nextSuggestion.value}
                   </button>
                 )}
                 <button
@@ -27403,7 +27607,7 @@ function ParentPortalView({ onRenew, onExit }) {
   }
 
   const s = siblings.find((sw) => sw.id === selectedId) || siblings[0];
-  const skills = LEVEL_SKILLS[s.level] || [];
+  const skills = getSkillsForSwimmer(s);
   const mastered = skills.filter((sk) => (s.skills?.[s.level]?.[sk] || 0) >= 5).length;
   const skillPct = skills.length > 0 ? Math.round((mastered / skills.length) * 100) : null;
   const paidMonths = (s.paidMonths || []).slice().sort().reverse();
@@ -29720,6 +29924,8 @@ function App() {
         loadCustomPlanPrices().then(applyCustomPlanPrices),
         loadExtraPlans().then(applyExtraPlans),
         loadCustomTeamSquadCapacities(),
+        loadCustomProgramLevelCapacities().then(applyCustomProgramLevelCapacities),
+        loadCustomProgramLevelDefaultPlan().then(applyCustomProgramLevelDefaultPlan),
         loadSlotCapacityOverrides(),
         loadCustomSignature().then((sig) => {
           if (sig) CONFIG.signatureDataUri = sig;
