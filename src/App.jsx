@@ -490,13 +490,7 @@ const CONFIG = {
   ],
 };
 
-let PLANS = [
-  { id: "baby", name: "Baby", price: 3500, desc: "Monthly baby class subscription.", photo: "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%22200%22%20height%3D%22200%22%3E%3Crect%20width%3D%22200%22%20height%3D%22200%22%20fill%3D%22%230369a1%22/%3E%3Ctext%20x%3D%22100%22%20y%3D%22115%22%20font-family%3D%22sans-serif%22%20font-size%3D%2260%22%20text-anchor%3D%22middle%22%3E%F0%9F%91%B6%3C/text%3E%3C/svg%3E" },
-  { id: "group", name: "Group", price: 1600, desc: "Monthly group subscription." },
-  { id: "exp", name: "Exp", price: 2000, desc: "Monthly experience subscription." },
-  { id: "semi-private", name: "Semi Private", price: 2000, desc: "Monthly semi-private subscription." },
-  { id: "private", name: "Private", price: 4200, desc: "Monthly fully private subscription." },
-];
+let PLANS = [];
 
 /* Swimmer levels — Baby gets a 30-minute schedule automatically */
 let PLAN_PRICES = Object.fromEntries(PLANS.map((p) => [p.id, Number(p.price) || 0]));
@@ -659,12 +653,7 @@ function getDistinctSecondSession(ms) {
   return { day: ms.day2, time: ms.time2, coachId: ms.coachId2, sessionType: ms.sessionType2, classId: ms.classId };
 }
 
-let LEVELS = [
-  "Baby", "Exp", "Exp 2", "Exp 3",
-  "Level 1", "Level 2", "Level 3", "Level 4",
-  "Level 5", "Level 6", "Level 7", "Level 8",
-  "Star 1", "Star 2", "Star 3", "Star 4", "Team",
-];
+let LEVELS = [];
 
 /* ---------- New curriculum structure: Programs -> Levels ----------
    Agreed with the academy on 2026-09-09. Kept deliberately SEPARATE
@@ -4279,8 +4268,8 @@ function parseImportedSwimmerRow(row, coaches) {
 
   const levelRaw = get("level", "المستوى", "مستوى");
   const levelMatch = LEVELS.find((l) => l.toLowerCase() === levelRaw.toLowerCase());
-  if (levelRaw && !levelMatch) warnings.push(`level "${levelRaw}" not recognized — set to ${LEVELS[1]}`);
-  const level = levelMatch || LEVELS[1];
+  if (levelRaw && !levelMatch) warnings.push(`level "${levelRaw}" not recognized — left blank; set the swimmer's Program instead`);
+  const level = levelMatch || "";
 
   // Day/time are only set when the sheet actually specifies them. Rows with
   // no schedule info (the normal case for a fresh import) stay unscheduled —
@@ -5372,7 +5361,7 @@ function SubscribeView({ initialPlanId, initialSwimmer, onSubmitted, onBack }) {
   const isCustom = planId === "custom";
   const plan = isCustom
     ? { id: "custom", name: "Open amount", price: Number(customAmount) || 0 }
-    : PLANS.find((p) => p.id === planId);
+    : PLANS.find((p) => p.id === planId) || { id: planId, name: planId, price: 0 };
 
   // Optional: link straight to an existing swimmer's profile, so a payment
   // still gets matched correctly even if it's sent from a different phone
@@ -6102,9 +6091,10 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
   const [altPhone, setAltPhone] = useState(initial?.altPhone || "");
   const [branch, setBranch] = useState(initial?.branch || BRANCHES[0].id);
   const [level, setLevel] = useState(
-    initial?.level || LEVELS.find((lv) => lv === "Level 1") || LEVELS[0]
-  ); // LEVELS[1] used to be the default — that's "Exp", a niche 2-swimmer-cap
-    // level that's a confusing starting point for an ordinary new registration
+    initial?.level || LEVELS.find((lv) => lv === "Level 1") || ""
+  ); // The old flat Levels list is now empty (Programs replaced it) — a
+    // new swimmer just starts with no old-style level at all, and is
+    // expected to get a Program/Program level instead.
   // New Programs -> Levels structure, additive alongside level/planId
   // above. Optional — "" means not assigned to a program (the swimmer
   // still works exactly as before, driven entirely by level/planId).
