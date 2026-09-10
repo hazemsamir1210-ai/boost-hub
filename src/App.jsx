@@ -5972,6 +5972,11 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
     initial?.level || LEVELS.find((lv) => lv === "Level 1") || LEVELS[0]
   ); // LEVELS[1] used to be the default — that's "Exp", a niche 2-swimmer-cap
     // level that's a confusing starting point for an ordinary new registration
+  // New Programs -> Levels structure, additive alongside level/planId
+  // above. Optional — "" means not assigned to a program (the swimmer
+  // still works exactly as before, driven entirely by level/planId).
+  const [program, setProgram] = useState(initial?.program || "");
+  const [programLevel, setProgramLevel] = useState(initial?.programLevel || "");
   const [planId, setPlanId] = useState(initial?.planId || inferPlanId(initial || {}));
   const [substituteCoachId, setSubstituteCoachId] = useState(initial?.substituteCoachId || "");
   const [substituteDate, setSubstituteDate] = useState(initial?.substituteDate || "");
@@ -6169,6 +6174,8 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           altPhone: altPhone.trim(),
           branch,
           level,
+          program: program || null,
+          programLevel: program ? programLevel || null : null,
           day,
           time,
           scheduleMonth,
@@ -6220,6 +6227,8 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           altPhone: altPhone.trim(),
           branch,
           level,
+          program: program || null,
+          programLevel: program ? programLevel || null : null,
           notes: notes.trim(),
           parentPin: parentPin,
           createdAt: initial?.createdAt || new Date().toISOString(),
@@ -6295,6 +6304,33 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
             ))}
           </select>
         </div>
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Program (optional)</label>
+          <select
+            value={program}
+            onChange={(e) => {
+              setProgram(e.target.value);
+              setProgramLevel(""); // levels differ per program — start blank rather than carry over a stale one
+            }}
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
+          >
+            <option value="">Not assigned</option>
+            {SWIM_PROGRAMS.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        </div>
+        {program && (
+          <div>
+            <label className="text-xs text-slate-500 mb-1 block">Program level</label>
+            <select value={programLevel} onChange={(e) => setProgramLevel(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white">
+              <option value="">Choose a level</option>
+              {(SWIM_PROGRAMS.find((p) => p.id === program)?.levels || []).map((lvl) => (
+                <option key={lvl} value={lvl}>{lvl}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <div>
           <label className="text-xs text-slate-500 mb-1 block">Monthly plan</label>
           <select value={planId} onChange={(e) => setPlanId(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white">
