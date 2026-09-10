@@ -608,7 +608,16 @@ function getProgramForLevel(level) {
 
 function getMonthlySchedule(swimmer, key) {
   const monthly = swimmer?.monthlySchedules?.[key];
-  if (monthly) return monthly;
+  // An entry that EXISTS but has no actual day/time (e.g. {day: "",
+  // time: ""}) isn't a real schedule — it's leftover from a bug in an
+  // earlier version of the Reconcile tool that could write an empty
+  // placeholder here. Treating it as truthy meant a swimmer with
+  // genuinely no schedule for this month still counted as "active"
+  // wherever this function's result is checked with a plain !!, even
+  // though there's really nothing in it. Falling through here (instead
+  // of returning the empty object) lets nextSchedule or the top-level
+  // fallback below apply normally, exactly as if this entry didn't exist.
+  if (monthly && (monthly.day || monthly.time)) return monthly;
   if (swimmer?.nextSchedule?.scheduleMonth === key) return swimmer.nextSchedule;
   // A swimmer's day/time is their ONGOING weekly schedule from
   // scheduleMonth onward — not a one-month-only booking that silently
