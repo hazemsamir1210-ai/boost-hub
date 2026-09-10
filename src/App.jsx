@@ -8387,6 +8387,63 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
   };
 
+  // Compares Dashboard's "active this month" count (getMonthlySchedule
+  // truthy) against the Swimmers tab's server-side filter logic — same
+  // rule, replicated exactly in JS here — to find precisely which
+  // swimmers are counted by one but not the other, and why. Read-only.
+  const [countDiscrepancyRunning, setCountDiscrepancyRunning] = useState(false);
+  const [countDiscrepancyResults, setCountDiscrepancyResults] = useState(null);
+  const findActiveCountDiscrepancy = async () => {
+    setCountDiscrepancyRunning(true);
+    setCountDiscrepancyResults(null);
+    try {
+      const all = await fetchAllSwimmers();
+      const key = monthKey();
+      // Exactly what the Dashboard counts.
+      const dashboardActive = new Set(all.filter((s) => !!getMonthlySchedule(s, key)).map((s) => s.id));
+      // Exactly what the Swimmers tab's "showUnscheduled = false" server
+      // filter checks: data->monthlySchedules->{key}->>day is non-empty,
+      // OR (no monthlySchedules[key] entry at all) AND top-level day/time
+      // are both non-empty. This does NOT consult nextSchedule or
+      // scheduleMonth at all, unlike getMonthlySchedule.
+      const swimmersTabActive = new Set(
+        all
+          .filter((s) => {
+            const monthlyDay = s.monthlySchedules?.[key]?.day;
+            if (monthlyDay) return true;
+            const hasMonthlyEntry = Object.prototype.hasOwnProperty.call(s.monthlySchedules || {}, key);
+            if (hasMonthlyEntry) return false; // entry exists but its day is empty — SQL "neq" excludes it
+            return !!s.day && !!s.time;
+          })
+          .map((s) => s.id)
+      );
+      const onlyDashboard = all.filter((s) => dashboardActive.has(s.id) && !swimmersTabActive.has(s.id));
+      const onlySwimmersTab = all.filter((s) => !dashboardActive.has(s.id) && swimmersTabActive.has(s.id));
+      const describe = (s) => {
+        const ms = s.monthlySchedules?.[key];
+        return {
+          id: s.id,
+          name: s.name,
+          detail: ms
+            ? `has monthlySchedules[${key}] = {day: "${ms.day || ""}", time: "${ms.time || ""}"}`
+            : s.nextSchedule?.scheduleMonth === key
+            ? `no entry for ${key}, but has nextSchedule for ${key}`
+            : `no entry for ${key} — top-level day="${s.day || ""}" time="${s.time || ""}" scheduleMonth="${s.scheduleMonth || ""}"`,
+        };
+      };
+      setCountDiscrepancyResults({
+        dashboardCount: dashboardActive.size,
+        swimmersTabCount: swimmersTabActive.size,
+        onlyDashboard: onlyDashboard.map(describe),
+        onlySwimmersTab: onlySwimmersTab.map(describe),
+      });
+    } catch (e) {
+      setCountDiscrepancyResults({ error: e?.message || "Could not check — please try again." });
+    } finally {
+      setCountDiscrepancyRunning(false);
+    }
+  };
+
   // Read-only dry run for the Programs -> Levels migration: groups every
   // CURRENT swimmer by their existing level, shows how many there are and
   // what they'd become under the new structure, and flags the levels that
@@ -21011,6 +21068,63 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     ))}
                   </div>
                 )
+              )}
+            </div>
+
+            <h3 className="font-bold text-slate-900 mb-1 mt-6">Compare Dashboard vs Swimmers tab counts</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              If the "active this month" numbers on Dashboard and the Swimmers tab don't match, this shows exactly which swimmers are counted by one but not the other, and why.
+            </p>
+            <div className="bg-slate-50 rounded-2xl p-5">
+              <button
+                onClick={findActiveCountDiscrepancy}
+                disabled={countDiscrepancyRunning}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-700 disabled:opacity-60"
+              >
+                <Search className={`w-4 h-4 ${countDiscrepancyRunning ? "animate-spin" : ""}`} /> {countDiscrepancyRunning ? "Checking..." : "Check now"}
+              </button>
+              {countDiscrepancyResults && countDiscrepancyResults.error && (
+                <p className="text-xs text-red-500 mt-2">{countDiscrepancyResults.error}</p>
+              )}
+              {countDiscrepancyResults && !countDiscrepancyResults.error && (
+                <div className="mt-3">
+                  <p className="text-sm text-slate-700 font-medium mb-3">
+                    Dashboard: {countDiscrepancyResults.dashboardCount} · Swimmers tab: {countDiscrepancyResults.swimmersTabCount}
+                  </p>
+                  {countDiscrepancyResults.onlyDashboard.length > 0 && (
+                    <>
+                      <p className="text-xs text-amber-700 font-medium mb-1.5">
+                        Counted by Dashboard only ({countDiscrepancyResults.onlyDashboard.length}):
+                      </p>
+                      <div className="space-y-1.5 mb-3">
+                        {countDiscrepancyResults.onlyDashboard.slice(0, 30).map((r) => (
+                          <div key={r.id} className="text-sm bg-white border border-slate-200 rounded-lg px-3 py-2">
+                            <span className="font-semibold text-slate-800">{r.name}</span>
+                            <span className="text-slate-400"> — {r.detail}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {countDiscrepancyResults.onlySwimmersTab.length > 0 && (
+                    <>
+                      <p className="text-xs text-amber-700 font-medium mb-1.5">
+                        Counted by Swimmers tab only ({countDiscrepancyResults.onlySwimmersTab.length}):
+                      </p>
+                      <div className="space-y-1.5">
+                        {countDiscrepancyResults.onlySwimmersTab.slice(0, 30).map((r) => (
+                          <div key={r.id} className="text-sm bg-white border border-slate-200 rounded-lg px-3 py-2">
+                            <span className="font-semibold text-slate-800">{r.name}</span>
+                            <span className="text-slate-400"> — {r.detail}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {countDiscrepancyResults.onlyDashboard.length === 0 && countDiscrepancyResults.onlySwimmersTab.length === 0 && (
+                    <p className="text-xs text-slate-400">No discrepancy found — both counts agree.</p>
+                  )}
+                </div>
               )}
             </div>
 
