@@ -9150,6 +9150,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     });
   };
 
+  // Swaps a level with its neighbor in the display order — direction is
+  // -1 (move earlier) or 1 (move later). Purely a display-order change:
+  // no swimmer's actual program/level assignment is touched by this.
+  const moveLevelInProgram = (program, index, direction) => {
+    const otherIndex = index + direction;
+    if (otherIndex < 0 || otherIndex >= program.levels.length) return;
+    const levels = [...program.levels];
+    [levels[index], levels[otherIndex]] = [levels[otherIndex], levels[index]];
+    const next = SWIM_PROGRAMS.map((p) => (p.id === program.id ? { ...p, levels } : p));
+    saveAndApplyPrograms(next);
+  };
+
   const [customPlanPrices, setCustomPlanPrices] = useState({}); // planId -> { name?, price? } override
   const [plansRefreshKey, setPlansRefreshKey] = useState(0); // bumped after saving, to force re-render of anything reading PLANS
   const [planDrafts, setPlanDrafts] = useState({}); // planId -> { name, price } draft while editing
@@ -18093,9 +18105,25 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   </div>
                   <div className="flex flex-wrap gap-1.5 mb-2">
                     {program.levels.length === 0 && <span className="text-xs text-slate-300">No levels yet</span>}
-                    {program.levels.map((lvl) => (
-                      <span key={lvl} className="flex items-center gap-1 text-xs pl-2.5 pr-1 py-1 rounded-full bg-slate-50 border border-slate-200 text-slate-600">
+                    {program.levels.map((lvl, idx) => (
+                      <span key={lvl} className="flex items-center gap-0.5 text-xs pl-2.5 pr-1 py-1 rounded-full bg-slate-50 border border-slate-200 text-slate-600">
+                        <button
+                          onClick={() => moveLevelInProgram(program, idx, -1)}
+                          disabled={idx === 0}
+                          className="text-slate-300 hover:text-slate-600 disabled:opacity-30 disabled:hover:text-slate-300 px-0.5"
+                          title="Move earlier"
+                        >
+                          ‹
+                        </button>
                         {lvl}
+                        <button
+                          onClick={() => moveLevelInProgram(program, idx, 1)}
+                          disabled={idx === program.levels.length - 1}
+                          className="text-slate-300 hover:text-slate-600 disabled:opacity-30 disabled:hover:text-slate-300 px-0.5"
+                          title="Move later"
+                        >
+                          ›
+                        </button>
                         <button onClick={() => removeLevelFromProgram(program, lvl)} className="text-slate-300 hover:text-red-500">
                           <X className="w-3 h-3" />
                         </button>
