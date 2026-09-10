@@ -504,6 +504,50 @@ let PLAN_PRICES = Object.fromEntries(PLANS.map((p) => [p.id, Number(p.price) || 
 const PLANS_KEY = "plans-custom";
 const DEFAULT_PLANS = JSON.parse(JSON.stringify(PLANS)); // frozen snapshot of the built-in defaults, for the "Reset to default" option
 
+// Truly NEW plan types beyond the 5 built-in ones (e.g. a distinct
+// "Adults/Ladies Group" price) — kept as a separate list rather than
+// folded into the override mechanism below, since that one only ever
+// edits the 5 fixed built-ins and replaces the whole PLANS array when it
+// runs. rebuildPlans() combines both into the one PLANS array everything
+// else in the app already reads, so this is purely additive.
+let EXTRA_PLANS = [];
+const EXTRA_PLANS_KEY = "extra-plans-custom";
+let lastPlanOverrides = {};
+
+function rebuildPlans() {
+  const overriddenBuiltIns = DEFAULT_PLANS.map((defaultPlan) => {
+    const o = lastPlanOverrides[defaultPlan.id];
+    if (!o) return { ...defaultPlan };
+    return {
+      ...defaultPlan,
+      ...(o.name ? { name: o.name } : {}),
+      ...(o.price != null && o.price !== "" ? { price: Number(o.price) || defaultPlan.price } : {}),
+    };
+  });
+  PLANS = [...overriddenBuiltIns, ...EXTRA_PLANS];
+  PLAN_PRICES = Object.fromEntries(PLANS.map((p) => [p.id, Number(p.price) || 0]));
+}
+
+async function loadExtraPlans() {
+  const res = await window.storage.get(EXTRA_PLANS_KEY);
+  if (!res) return [];
+  try {
+    const parsed = JSON.parse(res.value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveExtraPlans(list) {
+  return storageSet(EXTRA_PLANS_KEY, JSON.stringify(list));
+}
+
+function applyExtraPlans(list) {
+  EXTRA_PLANS = Array.isArray(list) ? list : [];
+  rebuildPlans();
+}
+
 async function loadCustomPlanPrices() {
   const res = await window.storage.get(PLANS_KEY);
   if (!res) return {};
@@ -524,16 +568,8 @@ async function saveCustomPlanPrices(overrides) {
 // reads PLANS/PLAN_PRICES sees the change immediately, without needing
 // to touch every place that calls PLANS.find(...).
 function applyCustomPlanPrices(overrides) {
-  PLANS = DEFAULT_PLANS.map((defaultPlan) => {
-    const o = overrides[defaultPlan.id];
-    if (!o) return { ...defaultPlan };
-    return {
-      ...defaultPlan,
-      ...(o.name ? { name: o.name } : {}),
-      ...(o.price != null && o.price !== "" ? { price: Number(o.price) || defaultPlan.price } : {}),
-    };
-  });
-  PLAN_PRICES = Object.fromEntries(PLANS.map((p) => [p.id, Number(p.price) || 0]));
+  lastPlanOverrides = overrides || {};
+  rebuildPlans();
 }
 
 function inferPlanId(swimmer) {
@@ -2505,6 +2541,51 @@ async function saveCustomLevelSkills(customSkills) {
 // already reads from it sees the change immediately.
 function applyCustomLevelSkills(customSkills) {
   LEVEL_SKILLS = { ...DEFAULT_LEVEL_SKILLS, ...customSkills };
+}
+
+// Skills for the NEW Programs -> Levels structure. Keyed by
+// "programId::levelName" rather than level name alone, since the same
+// level name can exist in more than one program (e.g. "Level 1" under
+// both Baby and Learn to swim) with completely different skill sets.
+const PROGRAM_LEVEL_SKILLS_KEY = "program-level-skills-custom";
+let PROGRAM_LEVEL_SKILLS = {}; // { "programId::levelName": [skillName, ...] }
+
+function programLevelSkillsKey(programId, levelName) {
+  return `${programId}::${levelName}`;
+}
+
+async function loadCustomProgramLevelSkills() {
+  const res = await window.storage.get(PROGRAM_LEVEL_SKILLS_KEY);
+  if (!res) return {};
+  try {
+    return JSON.parse(res.value);
+  } catch {
+    return {};
+  }
+}
+
+async function saveCustomProgramLevelSkills(skillsMap) {
+  return storageSet(PROGRAM_LEVEL_SKILLS_KEY, JSON.stringify(skillsMap));
+}
+
+function applyCustomProgramLevelSkills(skillsMap) {
+  PROGRAM_LEVEL_SKILLS = skillsMap || {};
+}
+
+// The skills to show for a given swimmer: if they've been migrated to
+// the new Programs structure AND that program/level has its own skills
+// defined, those take priority; otherwise falls back to the swimmer's
+// old-style level skills (LEVEL_SKILLS[swimmer.level]) exactly as every
+// screen already behaves today. This is the ONLY safe way to introduce
+// program-specific skills without having to rewrite every one of the
+// many places that read LEVEL_SKILLS directly.
+function getSkillsForSwimmer(swimmer) {
+  if (swimmer?.program && swimmer?.programLevel) {
+    const key = programLevelSkillsKey(swimmer.program, swimmer.programLevel);
+    const programSkills = PROGRAM_LEVEL_SKILLS[key];
+    if (programSkills && programSkills.length > 0) return programSkills;
+  }
+  return LEVEL_SKILLS[swimmer?.level] || [];
 }
 
 // The academy's own list of levels — some academies run more or fewer
@@ -8872,6 +8953,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [activityLogLoading, setActivityLogLoading] = useState(false);
 
   const [customLevelSkills, setCustomLevelSkills] = useState({});
+  const [customProgramLevelSkills, setCustomProgramLevelSkills] = useState({}); // "programId::level" -> [skill, ...]
+  const [newProgramSkillText, setNewProgramSkillText] = useState({}); // "programId::level" -> draft text
   const [skillsRefreshKey, setSkillsRefreshKey] = useState(0); // bumped after saving, to force re-render of anything reading LEVEL_SKILLS
   const [newSkillText, setNewSkillText] = useState({}); // level -> draft text for the "add skill" input
   const [skillsSaving, setSkillsSaving] = useState(false);
@@ -9034,6 +9117,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [customPlanPrices, setCustomPlanPrices] = useState({}); // planId -> { name?, price? } override
   const [plansRefreshKey, setPlansRefreshKey] = useState(0); // bumped after saving, to force re-render of anything reading PLANS
   const [planDrafts, setPlanDrafts] = useState({}); // planId -> { name, price } draft while editing
+  // Genuinely NEW plan types (e.g. a distinct Adults/Ladies Group price),
+  // kept separate from the built-in 5's override drafts above.
+  const [extraPlansState, setExtraPlansState] = useState([]);
+  const [newExtraPlanName, setNewExtraPlanName] = useState("");
+  const [newExtraPlanPrice, setNewExtraPlanPrice] = useState("");
+  const [extraPlansSaving, setExtraPlansSaving] = useState(false);
+  const [extraPlansError, setExtraPlansError] = useState("");
   const [plansSaving, setPlansSaving] = useState(false);
   const [plansError, setPlansError] = useState("");
   const [plansSaved, setPlansSaved] = useState(false);
@@ -9106,6 +9196,74 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
   };
 
+  const addExtraPlan = async () => {
+    setExtraPlansError("");
+    const name = newExtraPlanName.trim();
+    const price = Number(newExtraPlanPrice);
+    if (!name) return setExtraPlansError("Enter a name for the new plan");
+    if (!newExtraPlanPrice || isNaN(price) || price < 0) return setExtraPlansError("Enter a valid price");
+    const allIds = [...DEFAULT_PLANS.map((p) => p.id), ...extraPlansState.map((p) => p.id)];
+    let id = name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || `plan-${Date.now()}`;
+    if (allIds.includes(id)) id = `${id}-${Date.now()}`;
+    const next = [...extraPlansState, { id, name, price, desc: "" }];
+    setExtraPlansSaving(true);
+    try {
+      const res = await saveExtraPlans(next);
+      if (!res) throw new Error("Could not save — please try again");
+      applyExtraPlans(next);
+      setExtraPlansState(next);
+      setPlansRefreshKey((k) => k + 1);
+      setNewExtraPlanName("");
+      setNewExtraPlanPrice("");
+      logActivity(accountName, role, "Added plan", `${name} — ${price} EGP`);
+    } catch (e) {
+      setExtraPlansError(e?.message || "Could not save — please try again");
+    } finally {
+      setExtraPlansSaving(false);
+    }
+  };
+
+  const updateExtraPlan = async (planId, changes) => {
+    const next = extraPlansState.map((p) => (p.id === planId ? { ...p, ...changes } : p));
+    setExtraPlansState(next); // reflect in the input immediately, save follows
+    setExtraPlansSaving(true);
+    try {
+      const res = await saveExtraPlans(next);
+      if (!res) throw new Error("Could not save — please try again");
+      applyExtraPlans(next);
+      setPlansRefreshKey((k) => k + 1);
+    } catch (e) {
+      setExtraPlansError(e?.message || "Could not save — please try again");
+    } finally {
+      setExtraPlansSaving(false);
+    }
+  };
+
+  const removeExtraPlan = (plan) => {
+    const inUse = swimmers.some((s) => s.planId === plan.id);
+    setConfirmAction({
+      message: inUse
+        ? `${plan.name} is still set on at least one swimmer — remove this plan anyway? Their record keeps its current price, but this plan won't be selectable for anyone else.`
+        : `Remove the "${plan.name}" plan?`,
+      onConfirm: async () => {
+        const next = extraPlansState.filter((p) => p.id !== plan.id);
+        setExtraPlansSaving(true);
+        try {
+          const res = await saveExtraPlans(next);
+          if (!res) throw new Error("Could not save — please try again");
+          applyExtraPlans(next);
+          setExtraPlansState(next);
+          setPlansRefreshKey((k) => k + 1);
+          logActivity(accountName, role, "Removed plan", plan.name);
+        } catch (e) {
+          setExtraPlansError(e?.message || "Could not save — please try again");
+        } finally {
+          setExtraPlansSaving(false);
+        }
+      },
+    });
+  };
+
   const resetPlanDraft = (planId) => {
     const def = DEFAULT_PLANS.find((p) => p.id === planId);
     if (!def) return;
@@ -9117,6 +9275,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       loadCustomLevelSkills().then((custom) => {
         setCustomLevelSkills(custom);
         applyCustomLevelSkills(custom);
+        setSkillsRefreshKey((k) => k + 1);
+      });
+      loadCustomProgramLevelSkills().then((custom) => {
+        setCustomProgramLevelSkills(custom);
+        applyCustomProgramLevelSkills(custom);
         setSkillsRefreshKey((k) => k + 1);
       });
     }
@@ -9132,6 +9295,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       applyCustomLevelSkills(custom);
       setSkillsRefreshKey((k) => k + 1);
     });
+    loadCustomProgramLevelSkills().then((custom) => {
+      setCustomProgramLevelSkills(custom);
+      applyCustomProgramLevelSkills(custom);
+      setSkillsRefreshKey((k) => k + 1);
+    });
   }, [authed]);
 
   const updateLevelSkills = async (level, nextSkillsForLevel) => {
@@ -9145,6 +9313,35 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     } finally {
       setSkillsSaving(false);
     }
+  };
+
+  const updateProgramLevelSkills = async (key, nextSkillsForLevel) => {
+    setSkillsSaving(true);
+    try {
+      const next = { ...customProgramLevelSkills, [key]: nextSkillsForLevel };
+      await saveCustomProgramLevelSkills(next);
+      setCustomProgramLevelSkills(next);
+      applyCustomProgramLevelSkills(next);
+      setSkillsRefreshKey((k) => k + 1);
+    } finally {
+      setSkillsSaving(false);
+    }
+  };
+
+  const addProgramLevelSkill = (programId, levelName) => {
+    const key = programLevelSkillsKey(programId, levelName);
+    const text = (newProgramSkillText[key] || "").trim();
+    if (!text) return;
+    const current = PROGRAM_LEVEL_SKILLS[key] || [];
+    if (current.includes(text)) return;
+    updateProgramLevelSkills(key, [...current, text]);
+    setNewProgramSkillText((prev) => ({ ...prev, [key]: "" }));
+  };
+
+  const removeProgramLevelSkill = (programId, levelName, skill) => {
+    const key = programLevelSkillsKey(programId, levelName);
+    const current = PROGRAM_LEVEL_SKILLS[key] || [];
+    updateProgramLevelSkills(key, current.filter((s) => s !== skill));
   };
 
   const addSkill = (level) => {
@@ -9236,6 +9433,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [contactError, setContactError] = useState("");
   const [contactSaved, setContactSaved] = useState(false);
   const [showPricesModal, setShowPricesModal] = useState(false);
+  useEffect(() => {
+    if (showPricesModal) setExtraPlansState(EXTRA_PLANS.map((p) => ({ ...p })));
+  }, [showPricesModal]);
   const [showAchievementsModal, setShowAchievementsModal] = useState(false);
   const [settingsSubTab, setSettingsSubTab] = useState("general");
 
@@ -17908,6 +18108,60 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           </div>
 
           <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4 mb-5">
+            <h4 className="font-semibold text-slate-800 text-sm mb-1">Skills per program level</h4>
+            <p className="text-xs text-slate-400 mb-3">
+              For the new Programs structure — a level like "Level 1" can mean something different under Baby than under Learn to swim, so each program's levels have their own separate skill list here. A migrated swimmer sees these instead of the old level-based skills below, once a program level has at least one skill defined; until then they keep seeing the old list.
+            </p>
+            <div className="space-y-4">
+              {SWIM_PROGRAMS.filter((p) => p.levels.length > 0).map((program) => (
+                <div key={program.id}>
+                  <div className="text-xs font-semibold text-slate-600 mb-2">{program.name}</div>
+                  <div className="space-y-2 pl-2 border-l-2 border-slate-200">
+                    {program.levels.map((levelName) => {
+                      const key = programLevelSkillsKey(program.id, levelName);
+                      const skills = PROGRAM_LEVEL_SKILLS[key] || [];
+                      return (
+                        <div key={key} className="bg-white rounded-xl border border-slate-200 p-3">
+                          <div className="text-sm font-medium text-slate-700 mb-2">{levelName}</div>
+                          <div className="flex flex-wrap gap-1.5 mb-2">
+                            {skills.length === 0 && <span className="text-xs text-slate-300">No skills defined yet — using the old level's list for now</span>}
+                            {skills.map((skill) => (
+                              <span key={skill} className="flex items-center gap-1 text-xs pl-2.5 pr-1 py-1 rounded-full bg-slate-50 border border-slate-200 text-slate-600">
+                                {skill}
+                                <button onClick={() => removeProgramLevelSkill(program.id, levelName, skill)} className="text-slate-300 hover:text-red-500">
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                          <div className="flex gap-1.5">
+                            <input
+                              value={newProgramSkillText[key] || ""}
+                              onChange={(e) => setNewProgramSkillText((prev) => ({ ...prev, [key]: e.target.value }))}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") addProgramLevelSkill(program.id, levelName);
+                              }}
+                              placeholder="New skill name"
+                              className="flex-1 border border-slate-200 rounded-lg py-1.5 px-2.5 text-xs outline-none focus:border-sky-900 bg-white"
+                            />
+                            <button
+                              onClick={() => addProgramLevelSkill(program.id, levelName)}
+                              disabled={skillsSaving || !(newProgramSkillText[key] || "").trim()}
+                              className="px-3 py-1.5 rounded-lg bg-slate-700 text-white text-xs font-semibold hover:bg-slate-600 disabled:opacity-60"
+                            >
+                              Add
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4 mb-5">
             <div className="flex items-center justify-between mb-2">
               <h4 className="font-semibold text-slate-800 text-sm">Levels</h4>
               <button onClick={resetLevelsToDefault} className="text-xs text-slate-400 hover:text-slate-600 underline">
@@ -18113,6 +18367,64 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               );
             })}
           </div>
+
+          <div className="mt-6 pt-5 border-t border-slate-200">
+            <h4 className="font-semibold text-slate-800 text-sm mb-1">New plan types</h4>
+            <p className="text-xs text-slate-400 mb-3">
+              For a genuinely different price the 5 plans above don't cover — e.g. an Adults/Ladies Group price separate from the regular Group price. Saves immediately, independent of the Save button below.
+            </p>
+            {extraPlansState.length > 0 && (
+              <div className="space-y-2 mb-3">
+                {extraPlansState.map((plan) => (
+                  <div key={plan.id} className="bg-white rounded-xl border border-slate-200 p-3 grid sm:grid-cols-[1fr_140px_auto] gap-2 items-center">
+                    <input
+                      defaultValue={plan.name}
+                      onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== plan.name && updateExtraPlan(plan.id, { name: e.target.value.trim() })}
+                      className="border border-slate-200 rounded-lg py-2 px-2.5 text-sm outline-none focus:border-sky-900"
+                    />
+                    <input
+                      type="number"
+                      min="0"
+                      defaultValue={plan.price}
+                      onBlur={(e) => {
+                        const n = Number(e.target.value);
+                        if (!isNaN(n) && n >= 0 && n !== plan.price) updateExtraPlan(plan.id, { price: n });
+                      }}
+                      className="border border-slate-200 rounded-lg py-2 px-2.5 text-sm outline-none focus:border-sky-900"
+                    />
+                    <button onClick={() => removeExtraPlan(plan)} className="text-slate-300 hover:text-red-500 justify-self-end">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                value={newExtraPlanName}
+                onChange={(e) => setNewExtraPlanName(e.target.value)}
+                placeholder="Plan name, e.g. Adults/Ladies Group"
+                className="flex-1 border border-slate-200 rounded-lg py-2.5 px-3 text-sm outline-none focus:border-sky-900"
+              />
+              <input
+                type="number"
+                min="0"
+                value={newExtraPlanPrice}
+                onChange={(e) => setNewExtraPlanPrice(e.target.value)}
+                placeholder="Price (EGP)"
+                className="sm:w-36 border border-slate-200 rounded-lg py-2.5 px-3 text-sm outline-none focus:border-sky-900"
+              />
+              <button
+                onClick={addExtraPlan}
+                disabled={extraPlansSaving}
+                className="px-4 py-2.5 rounded-lg bg-slate-700 text-white text-sm font-semibold hover:bg-slate-600 disabled:opacity-60 whitespace-nowrap"
+              >
+                Add plan
+              </button>
+            </div>
+            {extraPlansError && <div className="text-red-500 text-xs mt-2">{extraPlansError}</div>}
+          </div>
+
           {plansError && <div className="text-red-500 text-sm mt-3">{plansError}</div>}
           {plansSaved && <div className="text-green-700 text-sm mt-3 bg-green-50 rounded-lg px-3 py-2">Saved.</div>}
           <button
@@ -24094,11 +24406,11 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
                 </div>
               )}
 
-              {(LEVEL_SKILLS[s.level] || []).length > 0 && (canViewAssessments || canEditAssessments) && (
+              {getSkillsForSwimmer(s).length > 0 && (canViewAssessments || canEditAssessments) && (
                 <div className="mt-3 pt-3 border-t border-slate-100">
                   <div className="text-xs font-semibold text-slate-500 mb-2">Skill progression — {s.level}</div>
                   <SkillTreePath
-                    skills={LEVEL_SKILLS[s.level]}
+                    skills={getSkillsForSwimmer(s)}
                     ratings={s.skills?.[s.level] || {}}
                     editable={canEditAssessments}
                     onRate={(skill, n) => setSkillRating(s, skill, n)}
@@ -29333,6 +29645,7 @@ function App() {
       // used to cause a visible flash (default photo, then the real one).
       Promise.all([
         loadCustomLevelSkills().then(applyCustomLevelSkills),
+        loadCustomProgramLevelSkills().then(applyCustomProgramLevelSkills),
         loadCustomLevels().then(applyCustomLevels),
         loadCustomSwimPrograms().then(applyCustomSwimPrograms),
         loadCustomTimeSlots().then(applyCustomTimeSlots),
@@ -29341,6 +29654,7 @@ function App() {
         loadCustomPrograms().then(applyCustomPrograms),
         loadCustomBranches().then(applyCustomBranches),
         loadCustomPlanPrices().then(applyCustomPlanPrices),
+        loadExtraPlans().then(applyExtraPlans),
         loadCustomTeamSquadCapacities(),
         loadSlotCapacityOverrides(),
         loadCustomSignature().then((sig) => {
