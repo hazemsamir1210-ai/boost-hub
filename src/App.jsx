@@ -574,6 +574,15 @@ function applyCustomPlanPrices(overrides) {
 
 function inferPlanId(swimmer) {
   if (swimmer?.planId && PLAN_PRICES[swimmer.planId] != null) return swimmer.planId;
+  // Only reached when a swimmer has no planId stored at all (rare — the
+  // swimmer form always sets one on save, program-suggested or not).
+  // Checks the configured Programs-structure default first, so even this
+  // fallback path is program-aware rather than only ever falling back to
+  // the old level-based rules below.
+  if (swimmer?.program && swimmer?.programLevel) {
+    const configuredPlanId = PROGRAM_LEVEL_DEFAULT_PLAN[programLevelSkillsKey(swimmer.program, swimmer.programLevel)];
+    if (configuredPlanId && PLAN_PRICES[configuredPlanId] != null) return configuredPlanId;
+  }
   if (swimmer?.level === "Baby") return "baby";
   if (["Exp", "Exp 2", "Exp 3"].includes(swimmer?.level)) return "exp";
   if (swimmer?.sessionType === "private") return "private";
@@ -1071,7 +1080,17 @@ function applyCustomProgramLevelDefaultPlan(next) {
 
 
 
-function sessionCapacity(sessionType, level) {
+function sessionCapacity(sessionType, level, program, programLevel) {
+  // A configured Programs-structure capacity takes priority when both
+  // program and programLevel are given and a number has actually been
+  // set for that combo in Settings — this is the ENFORCEMENT half of the
+  // capacity numbers recorded there; every existing caller that omits
+  // these two arguments is completely unaffected; nothing changes for a
+  // swimmer whose program+level pair has no configured number.
+  if (program && programLevel) {
+    const configured = PROGRAM_LEVEL_CAPACITIES[programLevelSkillsKey(program, programLevel)];
+    if (configured != null) return configured;
+  }
   if (sessionType === "group" && ["Exp", "Exp 2", "Exp 3"].includes(level)) return 2;
   if (sessionType === "group" && TEAM_SQUAD_LEVELS.includes(level)) return TEAM_SQUAD_CAPACITIES[level] || 20;
   return sessionTypeInfo(sessionType).capacity;
@@ -1105,12 +1124,12 @@ function slotCapacityKey(coachId, day, time) {
 // The one function every "is this slot full" check should call for
 // Star/Team levels — a specific slot override wins if one's been set,
 // otherwise falls back to that level's own general cap.
-function effectiveSlotCapacity(sessionType, level, coachId, day, time) {
-  if (sessionType === "group" && TEAM_SQUAD_LEVELS.includes(level)) {
+function effectiveSlotCapacity(sessionType, level, coachId, day, time, program, programLevel) {
+  if (sessionType === "group" && TEAM_SQUAD_LEVELS.includes(level) && !(program && programLevel)) {
     const override = SLOT_CAPACITY_OVERRIDES[slotCapacityKey(coachId, day, time)];
     if (override != null) return override;
   }
-  return sessionCapacity(sessionType, level);
+  return sessionCapacity(sessionType, level, program, programLevel);
 }
 
 // True if this coach isn't working at all this day, OR specifically
@@ -6219,7 +6238,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
     };
   }, [coachId, day, time, initial?.id, scheduleMonth]);
   const slotType = slotUsage[0]?.sessionType;
-  const capacity = effectiveSlotCapacity(sessionType, level, coachId, day, time);
+  const capacity = effectiveSlotCapacity(sessionType, level, coachId, day, time, program, programLevel);
   const slotMismatch = coachId && slotUsage.length > 0 && slotType !== sessionType;
   const slotFull = coachId && !slotMismatch && slotUsage.length >= capacity;
 
@@ -6237,7 +6256,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
       if (usage.length > 0 && usage[0].sessionType !== sessionType) {
         return setError(`This coach already has a ${sessionTypeInfo(usage[0].sessionType).label} session at this time`);
       }
-      const cap = effectiveSlotCapacity(sessionType, level, coachId, day, time);
+      const cap = effectiveSlotCapacity(sessionType, level, coachId, day, time, program, programLevel);
       if (usage.length >= cap) {
         return setError(`This coach is full for this time slot (${cap} max for ${sessionTypeInfo(sessionType).label}${cap === 2 && sessionType === "group" ? " at this level" : ""})`);
       }
@@ -11383,7 +11402,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       })();
                 if (!booking) return `<td class="open">—</td>`;
                 const specialLevel = booking.levels.find((lv) => ["Exp", "Exp 2", "Exp 3", ...TEAM_SQUAD_LEVELS].includes(lv));
-                const capacity = effectiveSlotCapacity(booking.sessionType, specialLevel, c.id, dayGroup.id, t);
+                // Representative program+level for this slot, so the
+                // displayed capacity matches what the booking form
+                // actually enforces for these swimmers.
+                const specialProgramEntry = booking.names.find((n) => n.program);
+                const capacity = effectiveSlotCapacity(booking.sessionType, specialLevel, c.id, dayGroup.id, t, specialProgramEntry?.program, specialProgramEntry?.programLevel);
                 const full = booking.count >= capacity;
                 // Every Baby swimmer is already private and level "Baby"
                 // by definition, so showing the level here is redundant —
@@ -11527,7 +11550,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               const group = bySlot[key].sort((a, b) => a.swimmer.name.localeCompare(b.swimmer.name));
               const { time, sessionType } = group[0];
               const planLabel = sessionTypeInfo(sessionType).label;
-              const capacity = Math.max(...group.map((g) => effectiveSlotCapacity(sessionType, g.swimmer.level, coachId, scheduleDayFilter, time)));
+              const capacity = Math.max(...group.map((g) => effectiveSlotCapacity(sessionType, g.swimmer.level, coachId, scheduleDayFilter, time, g.swimmer.program, g.swimmer.programLevel)));
               const filledRows = group
                 .map(
                   ({ swimmer: s }) =>
@@ -13330,7 +13353,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const { coachLoadById, coachBookingsById } = React.useMemo(() => {
     const loadById = {};
     const bookingsMapById = {};
-    const addBooking = (coachId, day, time, sessionType, level, age, swimmerName, swimmerId, program) => {
+    const addBooking = (coachId, day, time, sessionType, level, age, swimmerName, swimmerId, program, programLevel) => {
       if (!coachId || !day || !time) return;
       loadById[coachId] = (loadById[coachId] || 0) + 1;
       if (!bookingsMapById[coachId]) bookingsMapById[coachId] = {};
@@ -13340,7 +13363,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       bucket[key].count += 1;
       if (level) bucket[key].levels.add(level);
       if (age != null && age !== "") bucket[key].ages.push(Number(age));
-      bucket[key].names.push({ name: swimmerName, id: swimmerId, level, program });
+      bucket[key].names.push({ name: swimmerName, id: swimmerId, level, program, programLevel });
     };
     // Uses the exact same month resolver as the PDF export (getMonthlySchedule)
     // instead of separately checking top-level fields AND nextSchedule as if
@@ -13350,13 +13373,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     swimmers.forEach((s) => {
       const ms = getMonthlySchedule(s, scheduleMonth);
       if (!ms) return;
-      addBooking(ms.coachId, ms.day, ms.time, ms.sessionType, s.level, s.age, s.name, s.id, s.program);
+      addBooking(ms.coachId, ms.day, ms.time, ms.sessionType, s.level, s.age, s.name, s.id, s.program, s.programLevel);
       // A swimmer with a second weekly session (different coach or slot)
       // shows up under that booking too — same swimmer, two commitments.
       // Same day+time as the primary session isn't a real second
       // commitment — it's counted once already above.
       const second = getDistinctSecondSession(ms);
-      if (second) addBooking(second.coachId, second.day, second.time, second.sessionType, s.level, s.age, s.name, s.id, s.program);
+      if (second) addBooking(second.coachId, second.day, second.time, second.sessionType, s.level, s.age, s.name, s.id, s.program, s.programLevel);
     });
     const bookingsById = {};
     Object.keys(bookingsMapById).forEach((coachId) => {
@@ -16548,7 +16571,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                 );
                               }
                               const specialLevel = booking.levels.find((lv) => ["Exp", "Exp 2", "Exp 3", ...TEAM_SQUAD_LEVELS].includes(lv));
-                              const capacity = effectiveSlotCapacity(booking.sessionType, specialLevel, c.id, dayGroup.id, t);
+                              const specialProgramEntry = booking.names.find((n) => n.program);
+                              const capacity = effectiveSlotCapacity(booking.sessionType, specialLevel, c.id, dayGroup.id, t, specialProgramEntry?.program, specialProgramEntry?.programLevel);
                               const spotsLeft = capacity - booking.count;
                               const agesLabel = booking.ages.length > 0 ? booking.ages.slice().sort((a, b) => a - b).join(", ") : "";
                               return (
@@ -16796,13 +16820,23 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         const stillActiveThisMonth = activeLastMonth.filter((s) => !!getMonthlySchedule(s, coachPerfMonthKey));
         const retentionRate = activeLastMonth.length ? Math.round((stillActiveThisMonth.length / activeLastMonth.length) * 100) : null;
 
-        // Swimmers by program — new Programs structure, additive. Only
-        // counts swimmers already migrated (program set); swimmers not
-        // yet migrated simply don't show up in any program's count here.
-        const swimmersByProgram = SWIM_PROGRAMS.map((p) => ({
-          program: p,
-          count: swimmers.filter((s) => s.program === p.id).length,
-        })).filter((row) => row.count > 0);
+        // Swimmers by program — new Programs structure, additive. Every
+        // swimmer with a level has been migrated to a program by now, so
+        // "Unassigned" here specifically means the legacy/inactive
+        // swimmers who have neither a level nor a program (no current
+        // booking) — shown plainly so the totals add up and this group
+        // doesn't read as a mysterious gap, rather than something to
+        // chase down or fix.
+        const swimmersByProgram = [
+          ...SWIM_PROGRAMS.map((p) => ({
+            program: p,
+            count: swimmers.filter((s) => s.program === p.id).length,
+          })),
+          {
+            program: { id: "unassigned", name: "Unassigned (no active schedule)" },
+            count: swimmers.filter((s) => !s.program && !s.level).length,
+          },
+        ].filter((row) => row.count > 0);
 
         const prevRangeForCoaches = periodRange(reportType, previousAnchor(reportType, reportAnchor));
 
@@ -24248,7 +24282,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
       });
       if (inSlot.length === 0) return { coach: c, free: true, label: "Free — no bookings" };
       const type = inSlot[0].sessionType;
-      const capacity = effectiveSlotCapacity(type, inSlot[0].level, c.id, dayGroup, time);
+      const capacity = effectiveSlotCapacity(type, inSlot[0].level, c.id, dayGroup, time, inSlot[0].program, inSlot[0].programLevel);
       const spotsLeft = capacity - inSlot.length;
       return {
         coach: c,
@@ -29831,7 +29865,7 @@ function getAvailableMakeupSlots(swimmers = [], month, swimmer, day, time) {
     groups[key].swimmers.push(r.swimmer);
   });
   return Object.values(groups).filter((g) => {
-    const capacity = Math.max(...g.swimmers.map((s) => effectiveSlotCapacity(g.sessionType, s.level, g.coachId, g.day, g.time)), 1);
+    const capacity = Math.max(...g.swimmers.map((s) => effectiveSlotCapacity(g.sessionType, s.level, g.coachId, g.day, g.time, s.program, s.programLevel)), 1);
     return g.swimmers.length < capacity && !g.swimmers.some((s) => String(s.id) === String(swimmer?.id));
   });
 }
@@ -30161,7 +30195,7 @@ function ClassCalendarGrid({ classes = [], enrollments = [], coaches = [], swimm
       if (!ms || !ms.day || !ms.time) return;
       const key = `${ms.day}|${ms.time}`;
       if (!map[key]) map[key] = [];
-      map[key].push({ swimmer: s, coachId: ms.coachId, level: s.level, age: s.age });
+      map[key].push({ swimmer: s, coachId: ms.coachId, level: s.level, age: s.age, program: s.program, programLevel: s.programLevel });
     });
     return map;
   }, [swimmers]);
@@ -30201,7 +30235,8 @@ function ClassCalendarGrid({ classes = [], enrollments = [], coaches = [], swimm
                       {Object.entries(byCoach).map(([coachId, group]) => {
                         const coachName = coaches.find((co) => co.id === coachId)?.name;
                         const specialLevel = group.map((g) => g.level).find((lv) => ["Exp", "Exp 2", "Exp 3", ...TEAM_SQUAD_LEVELS].includes(lv));
-                        const capacity = effectiveSlotCapacity(group[0]?.sessionType || "group", specialLevel, coachId, d.id, t);
+                        const specialProgramEntry = group.find((g) => g.program);
+                        const capacity = effectiveSlotCapacity(group[0]?.sessionType || "group", specialLevel, coachId, d.id, t, specialProgramEntry?.program, specialProgramEntry?.programLevel);
                         const full = group.length >= capacity;
                         const ages = group.map((g) => Number(g.age)).filter((a) => !isNaN(a)).sort((a, b) => a - b);
                         return (
