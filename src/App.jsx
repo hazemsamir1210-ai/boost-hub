@@ -8974,10 +8974,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         })
         .map((s) => ({ id: s.id, name: s.name, level: s.level, program: s.program }));
 
-      let query = supabase.from("swimmers").select("data").eq("academy_id", window.__academy?.id).limit(20000);
-      const { data, error } = await query;
-      if (error) throw error;
-      const liveRows = (data || []).map((r) => r.data);
+      const PAGE = 1000;
+      let liveRows = [];
+      for (let page = 0; page < 20; page++) {
+        const { data: pageData, error: pageError } = await supabase
+          .from("swimmers")
+          .select("data")
+          .eq("academy_id", window.__academy?.id)
+          .range(page * PAGE, page * PAGE + PAGE - 1);
+        if (pageError) throw pageError;
+        liveRows = liveRows.concat(pageData || []);
+        if (!pageData || pageData.length < PAGE) break;
+      }
+      liveRows = liveRows.map((r) => r.data);
       const liveMatches = liveRows
         .filter((s) => {
           const ms = getMonthlySchedule(s, key);
@@ -13881,60 +13890,71 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       setSwimmersPageLoading(true);
       setSwimmersPageError("");
       try {
-        let query = supabase.from("swimmers").select("data", { count: "exact" }).eq("academy_id", window.__academy?.id);
-        // By default, only show swimmers who are actually enrolled — have a
-        // day/time slot, not just added to the system with nothing set yet.
-        // By default, only show swimmers who are actually enrolled in the
-        // selected "Acting on" month — have a real day/time for that
-        // specific month, not just whatever their current/latest one is.
-        // Swimmers imported with full per-month history (monthlySchedules)
-        // are checked against that exact month. Anyone WITHOUT an override
-        // for this specific month falls back to their flat day/time — this
-        // has to be "no override for THIS month", not "no monthlySchedules
-        // object at all": a swimmer edited once for some other month ends
-        // up with a non-null monthlySchedules that simply has no entry for
-        // the month currently being viewed, and the earlier version of
-        // this filter only fell back to top-level day/time when
-        // monthlySchedules was completely absent — so anyone with any
-        // per-month history but no entry for THIS month silently vanished
-        // from the roster for that month, even though getMonthlySchedule()
-        // (used everywhere else this same question is asked, e.g.
-        // Dashboard) would still correctly treat them as scheduled. Since
-        // a missing key and a genuinely-null object both resolve the JSON
-        // path below to null, checking only "->>day.is.null" covers both
-        // cases in one clause and keeps this filter's answer consistent
-        // with getMonthlySchedule()'s.
         const isHeavyFilterPath = dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || coachFilterValue !== "all" || levelFilter !== "all" || programFilter !== "all";
-        // The light (plain browse, no day/time/coach/level/program filter)
-        // path keeps this exact SQL narrowing, unchanged from before today.
-        if (!showUnscheduled && !isHeavyFilterPath) {
-          query = query.or(
-            `data->monthlySchedules->${paymentMonthFilter}->>day.neq.,and(data->monthlySchedules->${paymentMonthFilter}->>day.is.null,data->>day.neq.,data->>time.neq.)`
-          );
-        }
-        // A branch-restricted account always gets this filter, regardless
-        // of whatever the branch dropdown shows — it's a hard boundary,
-        // not just a starting filter they could change.
-        if (branchRestriction) query = query.eq("branch", branchRestriction);
-        else if (branchFilter !== "all") query = query.eq("branch", branchFilter);
-        // Program/level scope is a hard data boundary for staff accounts.
-        if (role !== "admin" && (programAccess.length || levelAccess.length)) {
-          const scopedLevels = [...new Set([
-            ...levelAccess,
-            ...programAccess.flatMap((program) => PROGRAM_LEVEL_SCOPE[program] || []),
-          ])];
-          if (scopedLevels.length) query = query.in("level", scopedLevels);
-          else query = query.eq("level", "__NO_ACCESS__");
-        } else if (role === "technical" && myAccount?.levelRestriction && levelFilter === "all") {
-          query = query.eq("level", myAccount.levelRestriction);
-        }
-        if (paymentStatusFilter === "paid") {
-          query = query.filter("data->paidMonths", "cs", JSON.stringify([paymentMonthFilter]));
-        } else if (paymentStatusFilter === "unpaid") {
-          query = query.not("data->paidMonths", "cs", JSON.stringify([paymentMonthFilter]));
-        }
-        const q = search.trim();
-        if (q) query = query.or(`name.ilike.%${q}%,phone.ilike.%${q}%`);
+        // Rebuilds the SAME filter chain from scratch on every call,
+        // rather than mutating and reusing one query object across
+        // several awaited requests — a Supabase query builder that's
+        // already been awaited once isn't reliably reusable for a
+        // second request with a different .range(), which is exactly
+        // why paging by re-ranging one shared builder was still quietly
+        // losing swimmers on the second page even though the loop itself
+        // was running correctly.
+        const buildQuery = () => {
+          let q = supabase.from("swimmers").select("data", { count: "exact" }).eq("academy_id", window.__academy?.id);
+          // By default, only show swimmers who are actually enrolled — have a
+          // day/time slot, not just added to the system with nothing set yet.
+          // By default, only show swimmers who are actually enrolled in the
+          // selected "Acting on" month — have a real day/time for that
+          // specific month, not just whatever their current/latest one is.
+          // Swimmers imported with full per-month history (monthlySchedules)
+          // are checked against that exact month. Anyone WITHOUT an override
+          // for this specific month falls back to their flat day/time — this
+          // has to be "no override for THIS month", not "no monthlySchedules
+          // object at all": a swimmer edited once for some other month ends
+          // up with a non-null monthlySchedules that simply has no entry for
+          // the month currently being viewed, and the earlier version of
+          // this filter only fell back to top-level day/time when
+          // monthlySchedules was completely absent — so anyone with any
+          // per-month history but no entry for THIS month silently vanished
+          // from the roster for that month, even though getMonthlySchedule()
+          // (used everywhere else this same question is asked, e.g.
+          // Dashboard) would still correctly treat them as scheduled. Since
+          // a missing key and a genuinely-null object both resolve the JSON
+          // path below to null, checking only "->>day.is.null" covers both
+          // cases in one clause and keeps this filter's answer consistent
+          // with getMonthlySchedule()'s.
+          // The light (plain browse, no day/time/coach/level/program filter)
+          // path keeps this exact SQL narrowing, unchanged from before today.
+          if (!showUnscheduled && !isHeavyFilterPath) {
+            q = q.or(
+              `data->monthlySchedules->${paymentMonthFilter}->>day.neq.,and(data->monthlySchedules->${paymentMonthFilter}->>day.is.null,data->>day.neq.,data->>time.neq.)`
+            );
+          }
+          // A branch-restricted account always gets this filter, regardless
+          // of whatever the branch dropdown shows — it's a hard boundary,
+          // not just a starting filter they could change.
+          if (branchRestriction) q = q.eq("branch", branchRestriction);
+          else if (branchFilter !== "all") q = q.eq("branch", branchFilter);
+          // Program/level scope is a hard data boundary for staff accounts.
+          if (role !== "admin" && (programAccess.length || levelAccess.length)) {
+            const scopedLevels = [...new Set([
+              ...levelAccess,
+              ...programAccess.flatMap((program) => PROGRAM_LEVEL_SCOPE[program] || []),
+            ])];
+            if (scopedLevels.length) q = q.in("level", scopedLevels);
+            else q = q.eq("level", "__NO_ACCESS__");
+          } else if (role === "technical" && myAccount?.levelRestriction && levelFilter === "all") {
+            q = q.eq("level", myAccount.levelRestriction);
+          }
+          if (paymentStatusFilter === "paid") {
+            q = q.filter("data->paidMonths", "cs", JSON.stringify([paymentMonthFilter]));
+          } else if (paymentStatusFilter === "unpaid") {
+            q = q.not("data->paidMonths", "cs", JSON.stringify([paymentMonthFilter]));
+          }
+          const q2 = search.trim();
+          if (q2) q = q.or(`name.ilike.%${q2}%,phone.ilike.%${q2}%`);
+          return q;
+        };
         // Day, time, session type, coach, AND level are all matched
         // client-side instead of at the database level. Day/time/
         // sessionType/coach can each be overridden per-month inside
@@ -13953,16 +13973,26 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         if (isHeavyFilterPath) {
           // No SQL-level "must be scheduled" narrowing on this path (see
           // above) means this can be fetching close to the FULL roster —
-          // an explicit limit well above any realistic roster size is
-          // required so the query can't silently get truncated by
-          // whatever row cap the platform applies by default, which is
-          // exactly what caused every genuinely-matching swimmer past
-          // that cutoff to vanish the last time this path fetched an
-          // unbounded set without one.
-          query = query.order("name", { ascending: true }).limit(20000);
-          const { data, error } = await query;
-          if (error) throw error;
-          const items = (data || [])
+          // and the server enforces its own hard cap on rows per request
+          // (confirmed at 1000 via the coach-filter diagnostic in
+          // Settings) that a client-side .limit() can't raise past, no
+          // matter how high a number is passed. Paging through with a
+          // FRESH query (see buildQuery above) for each page is the
+          // reliable way to actually get everything: keep asking for the
+          // next 1000 until a page comes back short of 1000 (the real
+          // end), with a generous page-count safety cap so a wrong
+          // assumption here fails loud (missing swimmers, checkable in
+          // the diagnostic in Settings) rather than hanging in an
+          // infinite loop.
+          const PAGE = 1000;
+          let allRows = [];
+          for (let page = 0; page < 20; page++) {
+            const { data: pageData, error: pageError } = await buildQuery().order("name", { ascending: true }).range(page * PAGE, page * PAGE + PAGE - 1);
+            if (pageError) throw pageError;
+            allRows = allRows.concat(pageData || []);
+            if (!pageData || pageData.length < PAGE) break; // short page — this was the last one
+          }
+          const items = allRows
             .map((r) => r.data)
             .filter((s) => {
               const ms = getMonthlySchedule(s, paymentMonthFilter);
@@ -14004,8 +14034,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           setSwimmersPageTotal(items.length);
           return;
         }
-        query = query.order("name", { ascending: true }).range(offset, offset + SWIMMERS_PAGE_SIZE - 1);
-        const { data, error, count } = await query;
+        const { data, error, count } = await buildQuery().order("name", { ascending: true }).range(offset, offset + SWIMMERS_PAGE_SIZE - 1);
         if (error) throw error;
         const items = (data || []).map((r) => r.data);
         setSwimmersPage((prev) => (append ? [...prev, ...items] : items));
@@ -21904,12 +21933,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     <option key={d.id} value={d.id}>{d.label}</option>
                   ))}
                 </select>
-                <input
+                <select
                   value={coachDiagTime}
                   onChange={(e) => setCoachDiagTime(e.target.value)}
-                  placeholder="Time, e.g. 7:30 PM"
-                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
-                />
+                  disabled={!coachDiagDay}
+                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white disabled:opacity-60"
+                >
+                  <option value="">Time...</option>
+                  {coachDiagDay &&
+                    getTimeOptions(BRANCHES[0].id, coachDiagDay, null).map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                </select>
               </div>
               <button
                 onClick={runCoachFilterDiagnostic}
