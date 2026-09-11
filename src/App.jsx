@@ -8945,6 +8945,66 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
   };
 
+  // Precise coach/day/time diagnostic — computes "who SHOULD match" from
+  // canonical data straight through getMonthlySchedule (the same
+  // resolver every other correct screen uses), then separately runs the
+  // ACTUAL live Swimmers tab query for the same inputs. Comparing the two
+  // pins down whether a mismatch is in the matching logic itself (would
+  // show up in the canonical side too) or specifically in how the live
+  // Supabase query executes (canonical side correct, live query isn't).
+  const [coachDiagCoachId, setCoachDiagCoachId] = useState("");
+  const [coachDiagDay, setCoachDiagDay] = useState("");
+  const [coachDiagTime, setCoachDiagTime] = useState("");
+  const [coachDiagRunning, setCoachDiagRunning] = useState(false);
+  const [coachDiagResults, setCoachDiagResults] = useState(null);
+  const runCoachFilterDiagnostic = async () => {
+    if (!coachDiagCoachId || !coachDiagDay || !coachDiagTime) return;
+    setCoachDiagRunning(true);
+    setCoachDiagResults(null);
+    try {
+      const key = monthKey();
+      const all = await fetchAllSwimmers();
+      const canonicalMatches = all
+        .filter((s) => {
+          const ms = getMonthlySchedule(s, key);
+          if (!ms) return false;
+          if (ms.day === coachDiagDay && ms.time === coachDiagTime && ms.coachId === coachDiagCoachId) return true;
+          const second = getDistinctSecondSession(ms);
+          return second?.day === coachDiagDay && second?.time === coachDiagTime && second?.coachId === coachDiagCoachId;
+        })
+        .map((s) => ({ id: s.id, name: s.name, level: s.level, program: s.program }));
+
+      let query = supabase.from("swimmers").select("data").eq("academy_id", window.__academy?.id).limit(20000);
+      const { data, error } = await query;
+      if (error) throw error;
+      const liveRows = (data || []).map((r) => r.data);
+      const liveMatches = liveRows
+        .filter((s) => {
+          const ms = getMonthlySchedule(s, key);
+          if (!ms) return false;
+          if (ms.day === coachDiagDay && ms.time === coachDiagTime && ms.coachId === coachDiagCoachId) return true;
+          const second = getDistinctSecondSession(ms);
+          return second?.day === coachDiagDay && second?.time === coachDiagTime && second?.coachId === coachDiagCoachId;
+        })
+        .map((s) => ({ id: s.id, name: s.name, level: s.level, program: s.program }));
+
+      const canonicalIds = new Set(canonicalMatches.map((s) => s.id));
+      const liveIds = new Set(liveMatches.map((s) => s.id));
+      setCoachDiagResults({
+        totalCanonicalSwimmers: all.length,
+        totalLiveRowsFetched: liveRows.length,
+        canonicalCount: canonicalMatches.length,
+        liveCount: liveMatches.length,
+        missingFromLive: canonicalMatches.filter((s) => !liveIds.has(s.id)),
+        extraInLive: liveMatches.filter((s) => !canonicalIds.has(s.id)),
+      });
+    } catch (e) {
+      setCoachDiagResults({ error: e?.message || "Could not check — please try again." });
+    } finally {
+      setCoachDiagRunning(false);
+    }
+  };
+
   // Read-only dry run for the Programs -> Levels migration: groups every
   // CURRENT swimmer by their existing level, shows how many there are and
   // what they'd become under the new structure, and flags the levels that
@@ -21813,6 +21873,94 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   )}
                   {countDiscrepancyResults.onlyDashboard.length === 0 && countDiscrepancyResults.onlySwimmersTab.length === 0 && (
                     <p className="text-xs text-slate-400">No discrepancy found — both counts agree.</p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <h3 className="font-bold text-slate-900 mb-1 mt-6">Coach filter diagnostic (exact mismatch finder)</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              Pick a coach, day, and time — shows exactly who SHOULD match (computed the same way the Schedule tab does) versus who the live Swimmers tab query actually returns for those same three things, so any gap points straight at where it's really coming from.
+            </p>
+            <div className="bg-slate-50 rounded-2xl p-5">
+              <div className="grid sm:grid-cols-3 gap-3 mb-3">
+                <select
+                  value={coachDiagCoachId}
+                  onChange={(e) => setCoachDiagCoachId(e.target.value)}
+                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                >
+                  <option value="">Coach...</option>
+                  {coaches.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+                <select
+                  value={coachDiagDay}
+                  onChange={(e) => setCoachDiagDay(e.target.value)}
+                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                >
+                  <option value="">Day...</option>
+                  {DAY_GROUPS.map((d) => (
+                    <option key={d.id} value={d.id}>{d.label}</option>
+                  ))}
+                </select>
+                <input
+                  value={coachDiagTime}
+                  onChange={(e) => setCoachDiagTime(e.target.value)}
+                  placeholder="Time, e.g. 7:30 PM"
+                  className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                />
+              </div>
+              <button
+                onClick={runCoachFilterDiagnostic}
+                disabled={coachDiagRunning || !coachDiagCoachId || !coachDiagDay || !coachDiagTime}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-slate-800 text-white text-sm font-semibold hover:bg-slate-700 disabled:opacity-60"
+              >
+                <Search className={`w-4 h-4 ${coachDiagRunning ? "animate-spin" : ""}`} /> {coachDiagRunning ? "Checking..." : "Check now"}
+              </button>
+              {coachDiagResults && coachDiagResults.error && (
+                <p className="text-xs text-red-500 mt-2">{coachDiagResults.error}</p>
+              )}
+              {coachDiagResults && !coachDiagResults.error && (
+                <div className="mt-3">
+                  <p className="text-sm text-slate-700 font-medium mb-1">
+                    Should match: {coachDiagResults.canonicalCount} · Live query actually returned: {coachDiagResults.liveCount}
+                  </p>
+                  <p className="text-xs text-slate-400 mb-3">
+                    Total swimmers (canonical): {coachDiagResults.totalCanonicalSwimmers} · Total rows the live query fetched: {coachDiagResults.totalLiveRowsFetched}
+                  </p>
+                  {coachDiagResults.missingFromLive.length > 0 && (
+                    <>
+                      <p className="text-xs text-amber-700 font-medium mb-1.5">
+                        Should match, but the live query missed them ({coachDiagResults.missingFromLive.length}):
+                      </p>
+                      <div className="space-y-1.5 mb-3">
+                        {coachDiagResults.missingFromLive.map((r) => (
+                          <div key={r.id} className="text-sm bg-white border border-slate-200 rounded-lg px-3 py-2">
+                            <span className="font-semibold text-slate-800">{r.name}</span>
+                            <span className="text-slate-400"> — level: {r.level || "—"}, program: {r.program || "—"}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {coachDiagResults.extraInLive.length > 0 && (
+                    <>
+                      <p className="text-xs text-amber-700 font-medium mb-1.5">
+                        Live query returned these, but they shouldn't match ({coachDiagResults.extraInLive.length}):
+                      </p>
+                      <div className="space-y-1.5">
+                        {coachDiagResults.extraInLive.map((r) => (
+                          <div key={r.id} className="text-sm bg-white border border-slate-200 rounded-lg px-3 py-2">
+                            <span className="font-semibold text-slate-800">{r.name}</span>
+                            <span className="text-slate-400"> — level: {r.level || "—"}, program: {r.program || "—"}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {coachDiagResults.missingFromLive.length === 0 && coachDiagResults.extraInLive.length === 0 && (
+                    <p className="text-xs text-slate-400">No mismatch found — both agree.</p>
                   )}
                 </div>
               )}
