@@ -117,6 +117,7 @@ const TOGGLEABLE_FEATURES = [
   { key: "chat", label: "Chat" },
   { key: "activity", label: "Activity log" },
   { key: "trainingplans", label: "Training Plans" },
+  { key: "competitions", label: "Competitions" },
 ];
 
 // True unless the super admin has explicitly switched this tab off for
@@ -584,22 +585,6 @@ function inferPlanId(swimmer) {
   return "group";
 }
 
-function getMonthlyBilling(swimmer, key) {
-  const saved = swimmer?.billingByMonth?.[key];
-  if (saved) return saved;
-  const planId = inferPlanId(swimmer);
-  const plan = PLANS.find((p) => p.id === planId) || { name: swimmer?.planName || planId, price: Number(swimmer?.planPrice) || 0 };
-  const originalPrice = Number(plan.price) || 0;
-  const payments = (swimmer?.paymentLedger || []).filter((p) => p.paidMonth === key || p.month === key);
-  const paidAmount = payments.reduce((sum, p) => sum + (Number(p.price ?? p.amount) || 0), 0);
-  const finalAmount = originalPrice;
-  return { month: key, planId, planName: plan.name, originalPrice, discountPercent: 0, discountAmount: 0, finalAmount, paidAmount, balance: Math.max(0, finalAmount - paidAmount), status: paidAmount >= finalAmount && finalAmount > 0 ? "paid" : paidAmount > 0 ? "partial" : "unpaid" };
-}
-
-function getProgramForLevel(level) {
-  return Object.entries(PROGRAM_LEVEL_SCOPE).find(([, levels]) => levels.includes(level))?.[0] || "";
-}
-
 function getMonthlySchedule(swimmer, key) {
   const monthly = swimmer?.monthlySchedules?.[key];
   // An entry that EXISTS but has no actual day/time (e.g. {day: "",
@@ -882,6 +867,18 @@ const WAITLIST_PRIORITY_TIERS = [
 // ordinary lesson group — capped at 20 instead of the usual 4, rather
 // than treating them as a normal-sized group.
 const TEAM_SQUAD_LEVELS = ["Star 1", "Star 2", "Star 3", "Star 4", "Team"];
+
+// Training Plans (daily workouts, season builder, testing) was built
+// before the new Programs structure and only ever offered TEAM_SQUAD_LEVELS
+// as the group to plan for — Level 7/8 (now part of Development team) and
+// Pre team's named teams had nowhere to select at all. This combines all
+// three into one list, computed fresh each call since Pre team's levels
+// are admin-editable.
+function getTrainingGroupOptions() {
+  const devTeamExtra = (SWIM_PROGRAMS.find((p) => p.id === "development-team")?.levels || []).filter((l) => !TEAM_SQUAD_LEVELS.includes(l));
+  const preTeamLevels = SWIM_PROGRAMS.find((p) => p.id === "pre-team")?.levels || [];
+  return [...TEAM_SQUAD_LEVELS, ...devTeamExtra, ...preTeamLevels];
+}
 
 // Star squads plan a session the traditional way (named blocks); Team
 // (the advanced/competitive squad) plans by energy zone instead — two
@@ -2294,7 +2291,7 @@ async function setStaffPasswordOverride(newPassword) {
    and any save right after that can fail with "Couldn't save...".
    Instead, each data type now lives as a single array under one key, so
    loading or saving a whole collection is exactly one storage call. */
-const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all", incidents: "incidents-all", registrations: "registrations-all", feedback: "parent-feedback-all", waitlist: "waitlist-all", courses: "coach-courses-all", coursePayments: "course-payments-all", courseStudents: "course-students-all", payrollAdjustments: "payroll-adjustments-all", trainingPlans: "training-plans-all", weeklyVolumes: "weekly-volumes-all", seasons: "training-seasons-all", testSets: "test-sets-all", workoutTemplates: "workout-templates-all" };
+const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all", incidents: "incidents-all", registrations: "registrations-all", feedback: "parent-feedback-all", waitlist: "waitlist-all", courses: "coach-courses-all", coursePayments: "course-payments-all", courseStudents: "course-students-all", payrollAdjustments: "payroll-adjustments-all", trainingPlans: "training-plans-all", weeklyVolumes: "weekly-volumes-all", seasons: "training-seasons-all", testSets: "test-sets-all", workoutTemplates: "workout-templates-all", meets: "meets-all" };
 
 // Standard periodization phases used in competitive swimming training
 // (the same general model most swim federation coaching courses teach —
@@ -2418,6 +2415,53 @@ function formatSeconds(totalSeconds) {
   const s = t - m * 60;
   return m > 0 ? `${m}:${s.toFixed(2).padStart(5, "0")}` : s.toFixed(2);
 }
+
+// A running clock from `startedAt` (ms epoch) to now, ticking on its own
+// so only this one small piece re-renders every tick — not the whole
+// heat/lane list around it. Purely visual; the actual time a judge's
+// Stop tap records is computed separately, straight from Date.now() at
+// the moment of the tap, so this display's own render timing never
+// affects accuracy.
+function LiveStopwatch({ startedAt }) {
+  const [elapsed, setElapsed] = useState(() => (Date.now() - startedAt) / 1000);
+  useEffect(() => {
+    const t = setInterval(() => setElapsed((Date.now() - startedAt) / 1000), 31);
+    return () => clearInterval(t);
+  }, [startedAt]);
+  return <span className="font-mono tabular-nums">{formatSeconds(elapsed)}</span>;
+}
+
+// Race times are timed to the hundredth of a second — a third field
+// beyond parseTimeToSeconds' plain minutes/seconds.
+function parseRaceTime(minutes, seconds, hundredths) {
+  const m = Number(minutes) || 0;
+  const s = Number(seconds) || 0;
+  const h = Number(hundredths) || 0;
+  const total = m * 60 + s + h / 100;
+  return total > 0 ? total : 0;
+}
+
+// Every lane across every heat of one event, ranked together by time —
+// swimmers race in separate heats (a pool only has so many lanes), but
+// placings and medals are decided by time across the WHOLE event, not
+// within just one heat. Disqualified or not-yet-timed lanes sort last,
+// unranked.
+function rankedResultsForEvent(event) {
+  const allLanes = (event.heats || []).flatMap((h) =>
+    (h.lanes || [])
+      .filter((l) => l.swimmerId)
+      .map((l) => ({ ...l, heatNumber: h.heatNumber }))
+  );
+  const finishers = allLanes
+    .filter((l) => !l.dq && l.timeSeconds != null)
+    .sort((a, b) => a.timeSeconds - b.timeSeconds)
+    .map((l, i) => ({ ...l, rank: i + 1 }));
+  const others = allLanes
+    .filter((l) => l.dq || l.timeSeconds == null)
+    .map((l) => ({ ...l, rank: null }));
+  return [...finishers, ...others];
+}
+
 // Fastest (lowest) recorded time for a swimmer in a given event.
 function bestTestResult(testSets, swimmerId, eventId) {
   const relevant = testSets.filter((t) => t.swimmerId === swimmerId && t.event === eventId);
@@ -3274,10 +3318,6 @@ function renewalWaMessage(swimmer) {
 
 /* A scheduled, non-frozen swimmer who hasn't paid this month yet — i.e.
    someone the admin should be nudging about renewal right now. */
-function isDueForRenewal(swimmer) {
-  return !!(swimmer.day && swimmer.time) && !isPaidThisMonth(swimmer) && !isFrozen(swimmer);
-}
-
 /* ---------- Roster-scale helpers ----------
    With a large roster (1000+ swimmers), holding everyone in React state
    just to render a page of 10-40 and search/filter client-side is what was
@@ -3844,13 +3884,6 @@ async function setBookingOpenDate(dateStr) {
 
 /* Swimmers a given coach already has booked in the same day+time slot
    (excludeId lets us ignore the swimmer currently being edited) */
-function coachSlotUsage(swimmers, coachId, day, time, excludeId) {
-  if (!coachId) return [];
-  return swimmers.filter(
-    (s) => s.coachId === coachId && s.day === day && s.time === time && s.id !== excludeId
-  );
-}
-
 /* ============================================================
    Full-history import — for a sheet laid out with one 4-column block
    per month (payment / level / day / time), like an academy's
@@ -4365,28 +4398,6 @@ function dateLabel(iso) {
     day: "numeric",
     month: "short",
   });
-}
-
-function lastNDaysISO(n) {
-  const arr = [];
-  const now = new Date();
-  for (let i = 0; i < n; i++) {
-    const dt = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-    arr.push(`${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`);
-  }
-  return arr;
-}
-
-function attendanceCounts(swimmer, dateSet) {
-  let present = 0;
-  let absent = 0;
-  for (const [d, status] of Object.entries(swimmer.attendance || {})) {
-    if (dateSet.has(d)) {
-      if (status === "present") present++;
-      else if (status === "absent") absent++;
-    }
-  }
-  return { present, absent };
 }
 
 // Marking a swimmer absent automatically grants one makeup credit;
@@ -5960,7 +5971,7 @@ function TrainingPlanForm({ modal, onSave, onCancel }) {
                 className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
               >
                 <option value="all">All levels</option>
-                {TEAM_SQUAD_LEVELS.map((lv) => (
+                {getTrainingGroupOptions().map((lv) => (
                   <option key={lv} value={lv}>{lv}</option>
                 ))}
               </select>
@@ -7664,6 +7675,245 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [planModal, setPlanModal] = useState(null); // null | { mode: "new"|"edit", form }
   const [trainingPlansSubTab, setTrainingPlansSubTab] = useState("daily"); // "daily" | "phases" | "testing"
 
+  // ---------- Competitions (internal meets: events, heats, lanes, results) ----------
+  const [meets, setMeets] = useState([]);
+  const [meetsLoading, setMeetsLoading] = useState(false);
+  const [selectedMeetId, setSelectedMeetId] = useState(null);
+  const [selectedEventId, setSelectedEventId] = useState(null);
+  const [newMeetName, setNewMeetName] = useState("");
+  const [newMeetDate, setNewMeetDate] = useState(todayISO());
+  const [newMeetLaneCount, setNewMeetLaneCount] = useState(8);
+  const [newEventName, setNewEventName] = useState(TEST_EVENTS[0].label);
+  const [laneTimeDrafts, setLaneTimeDrafts] = useState({}); // laneKey -> { minutes, seconds, hundredths }
+
+  const loadMeets = useCallback(async () => {
+    setMeetsLoading(true);
+    try {
+      const list = await loadCollection(STORE_KEYS.meets);
+      setMeets(list || []);
+    } finally {
+      setMeetsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab !== "competitions") return;
+    loadMeets();
+    // Every judge is on their own device watching the SAME heat — this
+    // is what lets a lane's Stop tap, or the starter's Start press, show
+    // up on everyone else's screen without them doing anything. The
+    // stopwatch itself stays accurate regardless of this interval, since
+    // it always computes elapsed time from the real startedAt timestamp,
+    // not from whenever the last poll happened to land.
+    const t = setInterval(loadMeets, 2000);
+    return () => clearInterval(t);
+  }, [tab, loadMeets]);
+
+  const saveMeets = async (next) => {
+    setMeets(next);
+    await saveCollection(STORE_KEYS.meets, next);
+  };
+
+  const selectedMeet = meets.find((m) => m.id === selectedMeetId) || null;
+  const selectedEvent = selectedMeet?.events.find((e) => e.id === selectedEventId) || null;
+
+  const addMeet = async () => {
+    const name = newMeetName.trim();
+    if (!name) return;
+    const meet = { id: genId(), name, date: newMeetDate, laneCount: Number(newMeetLaneCount) || 8, events: [], currentHeatId: null };
+    await saveMeets([meet, ...meets]);
+    setNewMeetName("");
+    logActivity(accountName, role, "Created competition", name);
+  };
+
+  const deleteMeet = (meet) => {
+    setConfirmAction({
+      message: `Delete "${meet.name}" and all its events, heats, and results? This can't be undone.`,
+      onConfirm: async () => {
+        await saveMeets(meets.filter((m) => m.id !== meet.id));
+        if (selectedMeetId === meet.id) { setSelectedMeetId(null); setSelectedEventId(null); }
+        logActivity(accountName, role, "Deleted competition", meet.name);
+      },
+    });
+  };
+
+  const addEvent = async () => {
+    const name = newEventName.trim();
+    if (!name || !selectedMeet) return;
+    const event = { id: genId(), name, heats: [] };
+    const next = meets.map((m) => (m.id === selectedMeet.id ? { ...m, events: [...m.events, event] } : m));
+    await saveMeets(next);
+  };
+
+  const deleteEvent = (event) => {
+    setConfirmAction({
+      message: `Delete the "${event.name}" event and all its heats and results?`,
+      onConfirm: async () => {
+        const next = meets.map((m) => (m.id === selectedMeet.id ? { ...m, events: m.events.filter((e) => e.id !== event.id) } : m));
+        await saveMeets(next);
+        if (selectedEventId === event.id) setSelectedEventId(null);
+      },
+    });
+  };
+
+  // New heats get one empty lane per the meet's own lane count (set when
+  // the meet was created) — a 4-lane pool doesn't need to carry 4 unused
+  // lanes on every single heat.
+  const addHeat = async () => {
+    if (!selectedMeet || !selectedEvent) return;
+    const heatNumber = (selectedEvent.heats?.length || 0) + 1;
+    const laneCount = selectedMeet.laneCount || 8;
+    const heat = {
+      id: genId(),
+      heatNumber,
+      startedAt: null, // set the moment the starter presses "Start heat" — each lane's stopwatch runs from this
+      lanes: Array.from({ length: laneCount }, (_, i) => ({ lane: i + 1, swimmerId: "", swimmerName: "", timeSeconds: null, dq: false })),
+    };
+    const next = meets.map((m) =>
+      m.id === selectedMeet.id
+        ? { ...m, events: m.events.map((e) => (e.id === selectedEvent.id ? { ...e, heats: [...e.heats, heat] } : e)) }
+        : m
+    );
+    await saveMeets(next);
+  };
+
+  const deleteHeat = (heat) => {
+    setConfirmAction({
+      message: `Delete Heat ${heat.heatNumber} and its results?`,
+      onConfirm: async () => {
+        const next = meets.map((m) =>
+          m.id === selectedMeet.id
+            ? { ...m, events: m.events.map((e) => (e.id === selectedEvent.id ? { ...e, heats: e.heats.filter((h) => h.id !== heat.id) } : e)) }
+            : m
+        );
+        await saveMeets(next);
+      },
+    });
+  };
+
+  const updateLane = async (heatId, laneNumber, changes) => {
+    const fresh = (await loadCollection(STORE_KEYS.meets)) || [];
+    const next = fresh.map((m) =>
+      m.id !== selectedMeet.id
+        ? m
+        : {
+            ...m,
+            events: m.events.map((e) =>
+              e.id !== selectedEvent.id
+                ? e
+                : {
+                    ...e,
+                    heats: e.heats.map((h) =>
+                      h.id !== heatId
+                        ? h
+                        : { ...h, lanes: h.lanes.map((l) => (l.lane === laneNumber ? { ...l, ...changes } : l)) }
+                    ),
+                  }
+            ),
+          }
+    );
+    await saveMeets(next);
+  };
+
+  const updateHeat = async (heatId, changes) => {
+    const fresh = (await loadCollection(STORE_KEYS.meets)) || [];
+    const next = fresh.map((m) =>
+      m.id !== selectedMeet.id
+        ? m
+        : {
+            ...m,
+            events: m.events.map((e) =>
+              e.id !== selectedEvent.id
+                ? e
+                : { ...e, heats: e.heats.map((h) => (h.id !== heatId ? h : { ...h, ...changes })) }
+            ),
+          }
+    );
+    await saveMeets(next);
+  };
+
+  // The single "spotlight" a judge's screen always follows — set this
+  // and every judge (who only ever picked their own lane number, not a
+  // specific heat) automatically sees whichever heat is current next
+  // time their screen polls, with no action needed on their end.
+  const setCurrentHeat = async (heatId) => {
+    const fresh = (await loadCollection(STORE_KEYS.meets)) || [];
+    const next = fresh.map((m) => (m.id === selectedMeet.id ? { ...m, currentHeatId: heatId } : m));
+    await saveMeets(next);
+  };
+
+  // Walks every heat across every event of a meet, in order, and returns
+  // the one right after the given heat — powers the "Next heat →"
+  // shortcut so advancing the spotlight doesn't mean hunting for the
+  // next heat by hand, including across an event boundary.
+  const nextHeatAfter = (meet, heatId) => {
+    const allHeats = meet.events.flatMap((e) => e.heats);
+    const idx = allHeats.findIndex((h) => h.id === heatId);
+    if (idx === -1 || idx === allHeats.length - 1) return null;
+    return allHeats[idx + 1];
+  };
+
+  // Starter presses this once, at the moment the race begins — every
+  // lane's stopwatch runs from this same instant, so all judges are
+  // timing off the exact same start regardless of which device they're
+  // each using. Also spotlights this heat, since starting it is the
+  // natural moment for it to become what every judge's screen follows.
+  const startHeat = async (heatId) => {
+    await updateHeat(heatId, { startedAt: Date.now() });
+    await setCurrentHeat(heatId);
+  };
+
+  // For a false start — clears the start time (and any times already
+  // caught for this heat, since they'd be measured from a start that no
+  // longer counts) so the starter can press Start again for the re-swim.
+  const resetHeatStart = (heat) => {
+    setConfirmAction({
+      message: `Reset Heat ${heat.heatNumber}'s start? Any times already recorded for this heat will be cleared too, since they were timed from the old start.`,
+      onConfirm: () =>
+        updateHeat(heat.id, {
+          startedAt: null,
+          lanes: heat.lanes.map((l) => ({ ...l, timeSeconds: null, dq: false })),
+        }),
+    });
+  };
+
+  // The actual "automatic" capture a judge triggers by tapping Stop at
+  // their lane — reads the elapsed time locally, right at the moment of
+  // the tap, so it's accurate regardless of how long the save afterward
+  // takes. No number ever gets typed in for a normally-timed swimmer.
+  const stopLane = (heatId, laneNumber, startedAt) => {
+    const elapsed = (Date.now() - startedAt) / 1000;
+    updateLane(heatId, laneNumber, { timeSeconds: elapsed });
+  };
+
+  const printMeetResults = (meet, event) => {
+    const results = rankedResultsForEvent(event);
+    const rows = results
+      .map(
+        (r) => `<tr>
+          <td>${r.rank ? (r.rank <= 3 ? ["🥇", "🥈", "🥉"][r.rank - 1] : r.rank) : "—"}</td>
+          <td>${escapeHtml(r.swimmerName)}</td>
+          <td>Heat ${r.heatNumber} · Lane ${r.lane}</td>
+          <td>${r.dq ? "DQ" : r.timeSeconds != null ? formatSeconds(r.timeSeconds) : "—"}</td>
+        </tr>`
+      )
+      .join("");
+    const bodyHtml = `
+      <div class="header">
+        <img src="${CONFIG.logoDataUri}" />
+        <div>
+          <h1>${escapeHtml(CONFIG.academyName)}</h1>
+          <div class="sub">${escapeHtml(meet.name)} — ${escapeHtml(meet.date)}</div>
+        </div>
+      </div>
+      <h3>${escapeHtml(event.name)} — Results</h3>
+      <table>
+        <tr><th>Rank</th><th>Swimmer</th><th>Heat / Lane</th><th>Time</th></tr>
+        ${rows}
+      </table>`;
+    downloadReportHTML(`${meet.name}-${event.name}-results`, bodyHtml);
+  };
+
   // --- Testing / Assessment (test sets & personal bests) ---
   const [squadSwimmers, setSquadSwimmers] = useState([]); // Star/Team swimmers, for the test-log swimmer picker
   const [squadSwimmersLoading, setSquadSwimmersLoading] = useState(false);
@@ -7677,7 +7927,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     setSquadSwimmersLoading(true);
     try {
       const all = await fetchAllSwimmers();
-      setSquadSwimmers(all.filter((s) => TEAM_SQUAD_LEVELS.includes(s.level)).sort((a, b) => (a.name || "").localeCompare(b.name || "")));
+      // Matches on the OLD level (still populated for already-migrated
+      // swimmers) OR the NEW program — a swimmer registered after today's
+      // Levels list was emptied has no old-style level to match at all,
+      // so relying on TEAM_SQUAD_LEVELS.includes(s.level) alone would
+      // silently exclude every new Development team / Pre team swimmer
+      // from Training Plans going forward.
+      setSquadSwimmers(
+        all
+          .filter((s) => TEAM_SQUAD_LEVELS.includes(s.level) || ["development-team", "pre-team"].includes(s.program))
+          .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+      );
     } finally {
       setSquadSwimmersLoading(false);
     }
@@ -12191,7 +12451,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     // and every action on it (payments, freezing, editing...) reads/writes
     // the full roster fresh each time via fetchAllSwimmers/updateSwimmerById
     // instead of keeping it sitting in state.
-    if (tab === "reports" || tab === "coaches" || tab === "schedule" || tab === "dashboard" || tab === "coachassign") loadSwimmers();
+    if (tab === "reports" || tab === "coaches" || tab === "schedule" || tab === "dashboard" || tab === "coachassign" || tab === "competitions") loadSwimmers();
     // Every save the admin makes themselves already triggers an immediate
     // refresh right where it happens (see saveSwimmer/assignCoach) — this
     // interval exists only to catch changes made by OTHER logged-in staff
@@ -12204,7 +12464,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       loadCoaches();
       if (tab === "reports") loadExpenses();
       if (tab === "accounts") loadAccounts();
-      if (tab === "reports" || tab === "coaches" || tab === "schedule" || tab === "dashboard" || tab === "coachassign") loadSwimmers();
+      if (tab === "reports" || tab === "coaches" || tab === "schedule" || tab === "dashboard" || tab === "coachassign" || tab === "competitions") loadSwimmers();
     }, 60000);
     return () => clearInterval(t);
   }, [authed, tab, loadRequests, loadSwimmers, loadCoaches, loadExpenses, loadAccounts, loadAchievements, loadMyAccessLevel, loadMyPayrollAccess]);
@@ -13728,6 +13988,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           className={navBtnClass("trainingplans")}
         >
           <CalendarDays className="w-4 h-4" /> Training Plans
+        </button>
+        )}
+        {(can("manageTrainingPlans") || role === "technical_director") && isTabEnabled("competitions") && (
+        <button
+          onClick={() => setTab("competitions")}
+          className={navBtnClass("competitions")}
+        >
+          <Award className="w-4 h-4" /> Competitions
         </button>
         )}
         {canEdit && role !== "technical_director" && isTabEnabled("accounts") && (
@@ -21472,7 +21740,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   onChange={(e) => { setWeeklyVolumeLevel(e.target.value); setActiveWeekId(null); }}
                   className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                 >
-                  {TEAM_SQUAD_LEVELS.map((lv) => (
+                  {getTrainingGroupOptions().map((lv) => (
                     <option key={lv} value={lv}>{lv}</option>
                   ))}
                 </select>
@@ -21731,10 +21999,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                 Individual adjustments — this week's squad plan stays the same for everyone; note anything a specific swimmer should do differently
                               </div>
                               <div className="space-y-1.5">
-                                {squadSwimmers.filter((s) => s.level === weeklyVolumeLevel).length === 0 && (
+                                {squadSwimmers.filter((s) => s.level === weeklyVolumeLevel || s.programLevel === weeklyVolumeLevel).length === 0 && (
                                   <div className="text-xs text-slate-400">No swimmers found for {weeklyVolumeLevel}.</div>
                                 )}
-                                {squadSwimmers.filter((s) => s.level === weeklyVolumeLevel).map((s) => (
+                                {squadSwimmers.filter((s) => s.level === weeklyVolumeLevel || s.programLevel === weeklyVolumeLevel).map((s) => (
                                   <div key={s.id} className="flex items-center gap-2 bg-white rounded-xl p-2.5">
                                     <span className="text-xs font-medium text-slate-600 w-28 shrink-0 truncate">{s.name}</span>
                                     <input
@@ -21788,7 +22056,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   onChange={(e) => setDailyWorkoutLevel(e.target.value)}
                   className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                 >
-                  {TEAM_SQUAD_LEVELS.map((lv) => (
+                  {getTrainingGroupOptions().map((lv) => (
                     <option key={lv} value={lv}>{lv}</option>
                   ))}
                 </select>
@@ -22347,6 +22615,324 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           )}
 
           {planModal && <TrainingPlanForm modal={planModal} onSave={savePlan} onCancel={() => setPlanModal(null)} />}
+        </div>
+      )}
+
+      {tab === "competitions" && (can("manageTrainingPlans") || role === "technical_director") && isTabEnabled("competitions") && (
+        <div>
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+            <div>
+              <h2 className="text-xl font-bold text-slate-900">Competitions</h2>
+              <p className="text-sm text-slate-400">Internal meets — events, heats, lanes, and ranked results.</p>
+            </div>
+          </div>
+
+          {/* ---------- Level 1: list of meets ---------- */}
+          {!selectedMeet && (
+            <div>
+              <div className="bg-slate-50 rounded-2xl p-5 mb-5">
+                <h3 className="font-bold text-slate-900 text-sm mb-3">New competition</h3>
+                <div className="grid sm:grid-cols-[1fr_150px_110px_auto] gap-3">
+                  <input
+                    value={newMeetName}
+                    onChange={(e) => setNewMeetName(e.target.value)}
+                    placeholder="e.g. Internal Gala — September 2026"
+                    className="border border-slate-200 rounded-lg py-2.5 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                  />
+                  <input
+                    type="date"
+                    value={newMeetDate}
+                    onChange={(e) => setNewMeetDate(e.target.value)}
+                    className="border border-slate-200 rounded-lg py-2.5 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                  />
+                  <div>
+                    <select
+                      value={newMeetLaneCount}
+                      onChange={(e) => setNewMeetLaneCount(e.target.value)}
+                      title="How many lanes this pool has — every heat you add will have this many lanes"
+                      className="w-full border border-slate-200 rounded-lg py-2.5 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                    >
+                      {[4, 6, 8, 10].map((n) => (
+                        <option key={n} value={n}>{n} lanes</option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    onClick={addMeet}
+                    disabled={!newMeetName.trim()}
+                    className="px-5 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 disabled:opacity-60"
+                  >
+                    Create
+                  </button>
+                </div>
+              </div>
+
+              {meetsLoading ? (
+                <div className="text-center text-slate-400 py-10">Loading...</div>
+              ) : meets.length === 0 ? (
+                <div className="text-center text-slate-400 py-10">No competitions yet — create one above.</div>
+              ) : (
+                <div className="space-y-2">
+                  {meets.map((meet) => (
+                    <div key={meet.id} className="bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between gap-3">
+                      <button onClick={() => setSelectedMeetId(meet.id)} className="text-left flex-1">
+                        <div className="font-semibold text-slate-900">{meet.name}</div>
+                        <div className="text-xs text-slate-400">{meet.date} · {meet.events.length} event{meet.events.length === 1 ? "" : "s"}</div>
+                      </button>
+                      <button onClick={() => deleteMeet(meet)} className="text-slate-300 hover:text-red-500 p-1.5">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ---------- Level 2: events within a meet ---------- */}
+          {selectedMeet && !selectedEvent && (
+            <div>
+              <button onClick={() => setSelectedMeetId(null)} className="text-sm text-slate-400 hover:text-slate-600 mb-4">
+                ← All competitions
+              </button>
+              <h3 className="font-bold text-slate-900 mb-1">{selectedMeet.name}</h3>
+              <p className="text-xs text-slate-400 mb-4">{selectedMeet.date}</p>
+
+              <div className="bg-slate-50 rounded-2xl p-5 mb-5">
+                <h4 className="font-semibold text-slate-800 text-sm mb-3">Add event</h4>
+                <div className="grid sm:grid-cols-[1fr_auto] gap-3">
+                  <select
+                    value={newEventName}
+                    onChange={(e) => setNewEventName(e.target.value)}
+                    className="border border-slate-200 rounded-lg py-2.5 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                  >
+                    {TEST_EVENTS.map((ev) => (
+                      <option key={ev.id} value={ev.label}>{ev.label}</option>
+                    ))}
+                  </select>
+                  <button onClick={addEvent} className="px-5 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900">
+                    Add event
+                  </button>
+                </div>
+              </div>
+
+              {selectedMeet.events.length === 0 ? (
+                <div className="text-center text-slate-400 py-10">No events yet — add one above.</div>
+              ) : (
+                <div className="space-y-2">
+                  {selectedMeet.events.map((event) => (
+                    <div key={event.id} className="bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between gap-3">
+                      <button onClick={() => setSelectedEventId(event.id)} className="text-left flex-1">
+                        <div className="font-semibold text-slate-900">{event.name}</div>
+                        <div className="text-xs text-slate-400">{event.heats.length} heat{event.heats.length === 1 ? "" : "s"}</div>
+                      </button>
+                      <button onClick={() => deleteEvent(event)} className="text-slate-300 hover:text-red-500 p-1.5">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ---------- Level 3: heats, lanes, and results within an event ---------- */}
+          {selectedMeet && selectedEvent && (
+            <div>
+              <button onClick={() => setSelectedEventId(null)} className="text-sm text-slate-400 hover:text-slate-600 mb-4">
+                ← {selectedMeet.name}
+              </button>
+              <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+                <h3 className="font-bold text-slate-900">{selectedEvent.name}</h3>
+                <button
+                  onClick={() => printMeetResults(selectedMeet, selectedEvent)}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200"
+                >
+                  <FileDown className="w-4 h-4" /> Print results
+                </button>
+              </div>
+
+              <button
+                onClick={addHeat}
+                className="mb-5 px-4 py-2 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900"
+              >
+                + Add heat
+              </button>
+
+              {selectedEvent.heats.length === 0 ? (
+                <div className="text-center text-slate-400 py-10">No heats yet — add one above.</div>
+              ) : (
+                <div className="space-y-4 mb-8">
+                  {selectedEvent.heats.map((heat) => {
+                    const isCurrent = selectedMeet.currentHeatId === heat.id;
+                    const next = nextHeatAfter(selectedMeet, heat.id);
+                    return (
+                    <div key={heat.id} className={`rounded-2xl p-4 ${isCurrent ? "bg-sky-50 ring-2 ring-sky-900" : "bg-slate-50"}`}>
+                      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                        <h4 className="font-semibold text-slate-800 text-sm flex items-center gap-2">
+                          Heat {heat.heatNumber}
+                          {isCurrent && <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-900 text-white font-bold">LIVE ON JUDGE SCREENS</span>}
+                        </h4>
+                        <div className="flex items-center gap-2">
+                          {!heat.startedAt ? (
+                            <button
+                              onClick={() => startHeat(heat.id)}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs font-semibold hover:bg-green-700"
+                            >
+                              ▶ Start heat
+                            </button>
+                          ) : (
+                            <>
+                              <span className="text-xs text-slate-400">Running: <LiveStopwatch startedAt={heat.startedAt} /></span>
+                              <button
+                                onClick={() => resetHeatStart(heat)}
+                                className="text-xs px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 hover:bg-amber-100 font-medium"
+                              >
+                                ↺ Reset (false start)
+                              </button>
+                            </>
+                          )}
+                          {!isCurrent && (
+                            <button
+                              onClick={() => setCurrentHeat(heat.id)}
+                              className="text-xs px-3 py-1.5 rounded-lg bg-slate-200 text-slate-700 hover:bg-slate-300 font-medium"
+                              title="Point every judge's screen at this heat, without (re)starting it"
+                            >
+                              Make current
+                            </button>
+                          )}
+                          {isCurrent && next && (
+                            <button
+                              onClick={() => setCurrentHeat(next.id)}
+                              className="text-xs px-3 py-1.5 rounded-lg bg-sky-900 text-white hover:bg-sky-800 font-medium"
+                            >
+                              Next heat →
+                            </button>
+                          )}
+                          <button onClick={() => deleteHeat(heat)} className="text-slate-300 hover:text-red-500">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="space-y-1.5">
+                        {heat.lanes.map((lane) => {
+                          const laneKey = `${heat.id}-${lane.lane}`;
+                          const draft = laneTimeDrafts[laneKey] || {};
+                          // A lane is "running" once the heat has started
+                          // and this lane doesn't have a time yet — the
+                          // judge at this lane just watches the clock and
+                          // taps Stop the instant their swimmer finishes,
+                          // no numbers typed at all. A lane that already
+                          // has a time (from Stop or a manual correction)
+                          // always shows the editable fields instead, so
+                          // it can still be fixed by hand if needed.
+                          const isRunning = !!heat.startedAt && lane.timeSeconds == null && !!lane.swimmerId;
+                          return (
+                            <div key={lane.lane} className="bg-white border border-slate-200 rounded-lg p-2.5 grid sm:grid-cols-[50px_1fr_140px_auto] gap-2 items-center">
+                              <div className="text-xs font-semibold text-slate-400 text-center">Lane {lane.lane}</div>
+                              <select
+                                value={lane.swimmerId}
+                                onChange={(e) => {
+                                  const sw = swimmers.find((s) => s.id === e.target.value);
+                                  updateLane(heat.id, lane.lane, { swimmerId: e.target.value, swimmerName: sw?.name || "" });
+                                }}
+                                className="border border-slate-200 rounded-lg py-1.5 px-2 text-xs outline-none focus:border-sky-900"
+                              >
+                                <option value="">— empty —</option>
+                                {swimmers.map((s) => (
+                                  <option key={s.id} value={s.id}>{s.name}</option>
+                                ))}
+                              </select>
+                              {isRunning ? (
+                                <button
+                                  onClick={() => stopLane(heat.id, lane.lane, heat.startedAt)}
+                                  className="flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg bg-red-600 text-white text-xs font-bold hover:bg-red-700"
+                                >
+                                  <LiveStopwatch startedAt={heat.startedAt} /> · STOP
+                                </button>
+                              ) : (
+                                <div className="flex items-center gap-1">
+                                  <input
+                                    type="number" min="0" placeholder="m"
+                                    defaultValue={lane.timeSeconds != null ? Math.floor(lane.timeSeconds / 60) : ""}
+                                    onChange={(e) => setLaneTimeDrafts((prev) => ({ ...prev, [laneKey]: { ...prev[laneKey], minutes: e.target.value } }))}
+                                    className="w-11 border border-slate-200 rounded-lg py-1.5 px-1.5 text-xs outline-none focus:border-sky-900 text-center"
+                                  />
+                                  <input
+                                    type="number" min="0" max="59" placeholder="s"
+                                    defaultValue={lane.timeSeconds != null ? Math.floor(lane.timeSeconds % 60) : ""}
+                                    onChange={(e) => setLaneTimeDrafts((prev) => ({ ...prev, [laneKey]: { ...prev[laneKey], seconds: e.target.value } }))}
+                                    className="w-11 border border-slate-200 rounded-lg py-1.5 px-1.5 text-xs outline-none focus:border-sky-900 text-center"
+                                  />
+                                  <input
+                                    type="number" min="0" max="99" placeholder="hh"
+                                    defaultValue={lane.timeSeconds != null ? Math.round((lane.timeSeconds % 1) * 100) : ""}
+                                    onChange={(e) => setLaneTimeDrafts((prev) => ({ ...prev, [laneKey]: { ...prev[laneKey], hundredths: e.target.value } }))}
+                                    className="w-11 border border-slate-200 rounded-lg py-1.5 px-1.5 text-xs outline-none focus:border-sky-900 text-center"
+                                  />
+                                  <button
+                                    onClick={() => {
+                                      const timeSeconds = parseRaceTime(draft.minutes, draft.seconds, draft.hundredths);
+                                      updateLane(heat.id, lane.lane, { timeSeconds: timeSeconds > 0 ? timeSeconds : null });
+                                    }}
+                                    className="text-xs px-2 py-1.5 rounded-lg bg-slate-700 text-white hover:bg-slate-600"
+                                  >
+                                    Set
+                                  </button>
+                                </div>
+                              )}
+                              <label className="flex items-center gap-1 text-xs text-slate-500 whitespace-nowrap">
+                                <input
+                                  type="checkbox"
+                                  checked={!!lane.dq}
+                                  onChange={(e) => updateLane(heat.id, lane.lane, { dq: e.target.checked })}
+                                  className="w-3.5 h-3.5"
+                                />
+                                DQ
+                              </label>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <h4 className="font-bold text-slate-900 mb-3">Results</h4>
+              {(() => {
+                const results = rankedResultsForEvent(selectedEvent);
+                if (results.length === 0) return <div className="text-center text-slate-400 py-6">No lanes with a swimmer assigned yet.</div>;
+                return (
+                  <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-slate-50 text-left text-xs text-slate-400">
+                          <th className="px-3 py-2">Rank</th>
+                          <th className="px-3 py-2">Swimmer</th>
+                          <th className="px-3 py-2">Heat / Lane</th>
+                          <th className="px-3 py-2">Time</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {results.map((r) => (
+                          <tr key={`${r.heatNumber}-${r.lane}`} className="border-t border-slate-100">
+                            <td className="px-3 py-2 font-semibold">
+                              {r.rank ? (r.rank <= 3 ? ["🥇", "🥈", "🥉"][r.rank - 1] : r.rank) : "—"}
+                            </td>
+                            <td className="px-3 py-2">{r.swimmerName}</td>
+                            <td className="px-3 py-2 text-slate-400">Heat {r.heatNumber} · Lane {r.lane}</td>
+                            <td className="px-3 py-2 font-mono">{r.dq ? "DQ" : r.timeSeconds != null ? formatSeconds(r.timeSeconds) : "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
         </div>
       )}
 
@@ -26016,135 +26602,168 @@ function CoachView({ onExit, preAuthedCoach = null }) {
 }
 
 /* ============================================================
-   Technical role — search a swimmer by name and check them in.
-   Can't create swimmers, can't see anything else.
+   Judge view — no login needed. A judge picks their meet, event,
+   heat, and lane once, then sees ONLY a big stopwatch and a Stop
+   button for that one lane — nothing else on screen. Reads/writes
+   the exact same "meets" data as the Competitions tab, through the
+   same fresh-fetch-before-write pattern, so several judges on
+   several phones stopping different lanes at the same moment never
+   overwrite each other.
    ============================================================ */
-function TechnicalView({ accountName, onExit }) {
-  const [swimmers, setSwimmers] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [query, setQuery] = useState("");
-  const [justCheckedIn, setJustCheckedIn] = useState({}); // id -> true, transient
+function JudgeView({ onExit }) {
+  const [meets, setMeets] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [meetId, setMeetId] = useState("");
+  const [lane, setLane] = useState("");
 
-  const loadSwimmers = useCallback(async () => {
-    setLoading(true);
-    try {
-      const items = await loadCollection(STORE_KEYS.swimmers);
-      setSwimmers(items);
-    } catch (e) {
-      console.warn("load swimmers failed", e);
-    } finally {
-      setLoading(false);
-    }
+  const load = useCallback(async () => {
+    const list = await loadCollection(STORE_KEYS.meets);
+    setMeets(list || []);
+    setLoading(false);
   }, []);
 
   useEffect(() => {
-    loadSwimmers();
-    const t = setInterval(loadSwimmers, 15000);
+    load();
+    const t = setInterval(load, 1000); // fast poll — this screen lives or dies by catching Start (and a new current heat) the instant it happens
     return () => clearInterval(t);
-  }, [loadSwimmers]);
+  }, [load]);
 
-  const today = todayISO();
-  const q = query.trim().toLowerCase();
-  const results = q.length < 2 ? [] : swimmers.filter((s) => s.name.toLowerCase().includes(q));
+  const meet = meets.find((m) => m.id === meetId) || null;
+  const laneNum = Number(lane) || null;
+  // The judge only ever picked a lane NUMBER, never a specific heat —
+  // this always resolves to whatever the meet director most recently
+  // marked "current" (see setCurrentHeat in the Competitions tab), so a
+  // judge standing at Lane 3 all day automatically times Lane 3 in
+  // every heat as the director advances through them, with nothing to
+  // reselect in between.
+  const currentEvent = meet?.events.find((e) => e.heats.some((h) => h.id === meet.currentHeatId)) || null;
+  const heat = currentEvent?.heats.find((h) => h.id === meet.currentHeatId) || null;
+  const laneData = heat?.lanes.find((l) => l.lane === laneNum) || null;
 
-  const checkIn = async (swimmer) => {
-    const attendance = { ...(swimmer.attendance || {}), [today]: "present" };
-    const trainingDates = Array.from(new Set([...(swimmer.trainingDates || []), today])).sort();
-    const updated = { ...swimmer, attendance, trainingDates };
-    const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
-    setSwimmers(nextSwimmers);
-    try {
-      const res = await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
-      if (!res) throw new Error("save failed");
-      setJustCheckedIn((prev) => ({ ...prev, [swimmer.id]: true }));
-    } catch (e) {
-      loadSwimmers();
-    }
+  const stopThisLane = async () => {
+    if (!heat?.startedAt || !laneNum) return;
+    const elapsed = (Date.now() - heat.startedAt) / 1000;
+    // Fetch fresh right before writing — same safeguard as the
+    // Competitions tab, so this judge's Stop can never be lost to
+    // another judge's Stop landing at nearly the same instant.
+    const fresh = (await loadCollection(STORE_KEYS.meets)) || [];
+    const next = fresh.map((m) =>
+      m.id !== meetId
+        ? m
+        : {
+            ...m,
+            events: m.events.map((e) => ({
+              ...e,
+              heats: e.heats.map((h) =>
+                h.id !== heat.id ? h : { ...h, lanes: h.lanes.map((l) => (l.lane === laneNum ? { ...l, timeSeconds: elapsed } : l)) }
+              ),
+            })),
+          }
+    );
+    setMeets(next);
+    await saveCollection(STORE_KEYS.meets, next);
   };
 
-  const levelUp = async (swimmer) => {
-    const suggestion = nextLevelSuggestionFor(swimmer);
-    if (!suggestion) return; // already at the top, in whichever structure applies to them
-    if (!window.confirm(`Move ${swimmer.name} up to ${suggestion.value}? This saves right away.`)) return;
-    const updated = levelUpSwimmer(swimmer);
-    const nextSwimmers = swimmers.map((s) => (s.id === swimmer.id ? updated : s));
-    setSwimmers(nextSwimmers);
-    try {
-      const res = await saveCollection(STORE_KEYS.swimmers, nextSwimmers);
-      if (!res) throw new Error("save failed");
-    } catch (e) {
-      loadSwimmers();
-    }
-  };
+  if (loading) {
+    return <div className="min-h-screen flex items-center justify-center text-slate-400">Loading...</div>;
+  }
 
-  return (
-    <div className="max-w-2xl mx-auto px-4 py-8">
-      <div className="flex items-center justify-between mb-1">
-        <div>
-          <h2 className="text-xl font-bold text-slate-900">Hi, {accountName}</h2>
-          <div className="text-sm text-slate-400">Search a swimmer by name and check them in</div>
+  // Not fully set up yet — just meet + lane, nothing else to pick.
+  if (!meet || !laneNum) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <div className="w-full max-w-sm bg-white rounded-2xl shadow-sm p-6">
+          <h1 className="text-lg font-bold text-slate-900 mb-1">Judge — pick your lane</h1>
+          <p className="text-sm text-slate-400 mb-5">
+            Just the competition and the lane you're standing at — the screen follows whichever heat the meet director starts, automatically.
+          </p>
+
+          <label className="text-xs text-slate-500 mb-1 block">Competition</label>
+          <select
+            value={meetId}
+            onChange={(e) => { setMeetId(e.target.value); setLane(""); }}
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 text-sm outline-none focus:border-sky-900 mb-4"
+          >
+            <option value="">Choose...</option>
+            {meets.map((m) => (
+              <option key={m.id} value={m.id}>{m.name}</option>
+            ))}
+          </select>
+
+          {meet && (
+            <>
+              <label className="text-xs text-slate-500 mb-1 block">Lane</label>
+              <select
+                value={lane}
+                onChange={(e) => setLane(e.target.value)}
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 text-sm outline-none focus:border-sky-900 mb-4"
+              >
+                <option value="">Choose...</option>
+                {Array.from({ length: meet.laneCount || 8 }, (_, i) => i + 1).map((n) => (
+                  <option key={n} value={n}>Lane {n}</option>
+                ))}
+              </select>
+            </>
+          )}
+
+          <button onClick={onExit} className="w-full text-center text-sm text-slate-400 hover:text-slate-600 mt-2">
+            Back to site
+          </button>
         </div>
-        <button onClick={onExit} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
-          <LogOut className="w-4 h-4" />
+      </div>
+    );
+  }
+
+  // No heat has been marked current yet — nothing to time right now.
+  if (!heat) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center">
+        <div className="text-xl font-bold mb-2">Lane {laneNum}</div>
+        <div className="text-slate-400">Waiting for the meet director to start the next heat...</div>
+        <button onClick={() => setMeetId("")} className="text-sm text-slate-500 hover:text-slate-300 mt-10">
+          Change competition / lane
         </button>
       </div>
+    );
+  }
 
-      <div className="relative mt-5 mb-2">
-        <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Type a swimmer's name..."
-          className="w-full border border-slate-200 rounded-xl py-3 pl-10 pr-3 outline-none focus:border-sky-900"
-          autoFocus
-        />
-      </div>
+  // Fully set up — the ONLY thing on screen is this lane's timer.
+  const isRunning = !!heat.startedAt && laneData && laneData.timeSeconds == null;
+  return (
+    <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white">
+      <div className="text-slate-400 text-sm mb-1">{currentEvent.name} · Heat {heat.heatNumber}</div>
+      <div className="text-2xl font-bold mb-1">Lane {laneNum}</div>
+      <div className="text-slate-300 mb-8">{laneData?.swimmerName || "— no swimmer in this lane —"}</div>
 
-      {q.length >= 2 && results.length === 0 && !loading && (
-        <div className="text-center text-slate-400 py-10 text-sm">
-          No registered swimmer found with that name — they'd need to be added by the admin first.
-        </div>
+      {!laneData?.swimmerId ? (
+        <div className="text-slate-500 text-lg">Nothing to time — this lane is empty for this heat.</div>
+      ) : !heat.startedAt ? (
+        <div className="text-slate-400 text-lg">Waiting for the starter...</div>
+      ) : isRunning ? (
+        <>
+          <div className="text-7xl font-mono tabular-nums mb-10">
+            <LiveStopwatch startedAt={heat.startedAt} />
+          </div>
+          <button
+            onClick={stopThisLane}
+            className="w-48 h-48 rounded-full bg-red-600 hover:bg-red-700 text-white text-3xl font-bold shadow-lg active:scale-95 transition"
+          >
+            STOP
+          </button>
+        </>
+      ) : (
+        <>
+          <div className="text-6xl font-mono tabular-nums mb-4">{laneData.dq ? "DQ" : formatSeconds(laneData.timeSeconds)}</div>
+          <div className="text-slate-400">Recorded ✓ — next heat will appear here automatically</div>
+        </>
       )}
 
-      <div className="space-y-2 mt-4">
-        {results.map((s) => {
-          const already = (s.attendance || {})[today] === "present" || justCheckedIn[s.id];
-          const nextSuggestion = nextLevelSuggestionFor(s);
-          return (
-            <div key={s.id} className="bg-slate-50 rounded-2xl p-4 flex items-center justify-between gap-3">
-              <div>
-                <div className="font-semibold text-slate-900">{s.name}</div>
-                <div className="text-xs text-slate-400">
-                  {s.level} · {s.age} yrs · {BRANCHES.find((b) => b.id === s.branch)?.name || s.branch}
-                  {s.program && (
-                    <span className="text-indigo-500"> · {SWIM_PROGRAMS.find((p) => p.id === s.program)?.name || s.program} / {s.programLevel}</span>
-                  )}
-                </div>
-              </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                {nextSuggestion && (
-                  <button
-                    onClick={() => levelUp(s)}
-                    className="px-3 py-2 rounded-full text-xs font-semibold whitespace-nowrap bg-amber-50 text-amber-700 hover:bg-amber-100"
-                    title={`Move up to ${nextSuggestion.value}`}
-                  >
-                    ⬆ {nextSuggestion.value}
-                  </button>
-                )}
-                <button
-                  onClick={() => checkIn(s)}
-                  disabled={already}
-                  className={`px-4 py-2 rounded-full text-xs font-semibold whitespace-nowrap ${
-                    already ? "bg-green-100 text-green-700" : "bg-sky-950 text-white hover:bg-sky-900"
-                  }`}
-                >
-                  {already ? "Checked in ✓" : "Check in"}
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      <button onClick={() => setMeetId("")} className="text-sm text-slate-500 hover:text-slate-300 mt-12">
+        Change competition / lane
+      </button>
+      <button onClick={onExit} className="text-sm text-slate-600 hover:text-slate-400 mt-2">
+        Exit
+      </button>
     </div>
   );
 }
@@ -27325,7 +27944,7 @@ function useLang() {
   return { lang, setLang, t, dir: lang === "ar" ? "rtl" : "ltr" };
 }
 
-function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff, onStaffPortal, onParentPortal }) {
+function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff, onStaffPortal, onParentPortal, onJudge }) {
   const { lang, setLang, t, dir } = useLang();
   const hasPhotos = CONFIG.heroPhotos && CONFIG.heroPhotos.length > 0;
   const [menuOpen, setMenuOpen] = useState(false);
@@ -27356,6 +27975,7 @@ function HomeView({ onChoosePlan, onNewRegistration, onCourses, onAdmin, onStaff
     { label: t("newRegistration"), icon: User, onClick: onNewRegistration },
     { label: t("subscribeNow"), icon: Waves, onClick: () => onChoosePlan(null) },
     { label: t("courses"), icon: GraduationCap, onClick: onCourses },
+    { label: "Judge (race timing)", icon: Clock, onClick: onJudge },
     { label: t("logIn"), icon: Lock, onClick: () => setLoginPickerOpen(true) },
   ];
   return (
@@ -29942,14 +30562,6 @@ class ErrorBoundary extends React.Component {
    SCHEDULE / MAKEUP / WAITLIST INTEGRATION
    Additive helpers. Legacy monthlySchedules remain untouched.
    ============================================================ */
-function integratedSessionCapacity(sessionType, level) {
-  if (sessionType === "private") return 1;
-  if (sessionType === "semi-private") return 2;
-  if (sessionType === "group" && ["Exp", "Exp 2", "Exp 3"].includes(level)) return 2;
-  if (sessionType === "group" && TEAM_SQUAD_LEVELS.includes(level)) return TEAM_SQUAD_CAPACITIES[level] || 20;
-  return 4;
-}
-
 function getScheduleOccupancy(swimmers = [], month) {
   const rows = [];
   swimmers.forEach((s) => {
@@ -30156,8 +30768,11 @@ function App() {
           onStaff={() => setView("staff")}
           onStaffPortal={() => setView("staffportal")}
           onParentPortal={() => setView("parentportal")}
+          onJudge={() => setView("judge")}
         />
       )}
+
+      {view === "judge" && <JudgeView onExit={() => setView("home")} />}
 
       {view === "courses" && <CoursesPortalView onBack={() => setView("home")} />}
 
