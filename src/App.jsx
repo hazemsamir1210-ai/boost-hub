@@ -1166,7 +1166,9 @@ function slotCapacityKey(coachId, day, time) {
 // Star/Team levels — a specific slot override wins if one's been set,
 // otherwise falls back to that level's own general cap.
 function effectiveSlotCapacity(sessionType, level, coachId, day, time, program, programLevel) {
-  if (sessionType === "group" && TEAM_SQUAD_LEVELS.includes(level) && !(program && programLevel)) {
+  const hasConfiguredProgramCapacity =
+    program && programLevel && PROGRAM_LEVEL_CAPACITIES[programLevelSkillsKey(program, programLevel)] != null;
+  if (sessionType === "group" && TEAM_SQUAD_LEVELS.includes(level) && !hasConfiguredProgramCapacity) {
     const override = SLOT_CAPACITY_OVERRIDES[slotCapacityKey(coachId, day, time)];
     if (override != null) return override;
   }
@@ -13842,7 +13844,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         // path below to null, checking only "->>day.is.null" covers both
         // cases in one clause and keeps this filter's answer consistent
         // with getMonthlySchedule()'s.
-        if (!showUnscheduled) {
+        // Day, time, session type, coach, or level/program filters being
+        // active means the fuller, resolver-based check below is about to
+        // run anyway — so the "must actually be scheduled" question is
+        // answered there too (getMonthlySchedule, which also knows about
+        // nextSchedule), rather than by the SQL clause just above, which
+        // doesn't.
+        const isHeavyFilterPath = dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || coachFilterValue !== "all" || levelFilter !== "all" || programFilter !== "all";
+        if (!showUnscheduled && !isHeavyFilterPath) {
           query = query.or(
             `data->monthlySchedules->${paymentMonthFilter}->>day.neq.,and(data->monthlySchedules->${paymentMonthFilter}->>day.is.null,data->>day.neq.,data->>time.neq.)`
           );
@@ -13885,7 +13894,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         // Matching level against the swimmer's actual data.level, same as
         // the others, keeps this filter's answer correct regardless of
         // whether the mirror ever fell behind.
-        if (dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || coachFilterValue !== "all" || levelFilter !== "all" || programFilter !== "all") {
+        if (isHeavyFilterPath) {
           query = query.order("name", { ascending: true });
           const { data, error } = await query;
           if (error) throw error;
@@ -13893,6 +13902,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             .map((r) => r.data)
             .filter((s) => {
               const ms = getMonthlySchedule(s, paymentMonthFilter);
+              // Replaces the SQL-level "must be scheduled" exclusion for
+              // this path — this resolver also knows about nextSchedule,
+              // which the SQL clause doesn't, so a swimmer scheduled that
+              // way (common right after being promoted off the waitlist)
+              // no longer silently disappears the moment any of these
+              // other filters gets used.
+              if (!showUnscheduled && !ms) return false;
               const effDay = ms ? ms.day : s.day;
               const effTime = ms ? ms.time : s.time;
               const effSessionType = ms ? ms.sessionType : s.sessionType;
