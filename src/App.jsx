@@ -4548,9 +4548,14 @@ function applyAttendanceStatus(swimmer, date, status) {
 function computeCoachPerformance(swimmers = [], coachId, feedback = []) {
   // Same month-aware resolver used everywhere else — a swimmer's CURRENT
   // coach can live in monthlySchedules rather than the top-level coachId.
+  // Checks BOTH the primary and second-session coach, so a swimmer whose
+  // second weekly session is with this coach counts toward them too.
   const mine = swimmers.filter((s) => {
     const ms = getMonthlySchedule(s, monthKey());
-    return (ms ? ms.coachId : s.coachId) === coachId;
+    if (!ms) return false;
+    if (ms.coachId === coachId) return true;
+    const second = getDistinctSecondSession(ms);
+    return second?.coachId === coachId;
   });
   const mineIds = new Set(mine.map((s) => String(s.id)));
   let present = 0, absent = 0;
