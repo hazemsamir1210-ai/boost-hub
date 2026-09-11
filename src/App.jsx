@@ -2462,7 +2462,53 @@ function rankedResultsForEvent(event) {
   return [...finishers, ...others];
 }
 
+// Standard swim-meet scoring: 1st through 8th place. A lane with no
+// team assigned (team is entirely optional — most internal meets won't
+// use it) simply doesn't contribute any points anywhere.
+const SWIM_POINTS_BY_RANK = { 1: 9, 2: 7, 3: 6, 4: 5, 5: 4, 6: 3, 7: 2, 8: 1 };
+
+// Every event in the meet, combined into one points total per team.
+function teamStandingsForMeet(meet) {
+  const totals = {};
+  (meet.events || []).forEach((event) => {
+    rankedResultsForEvent(event).forEach((r) => {
+      if (!r.team || !r.rank) return;
+      totals[r.team] = (totals[r.team] || 0) + (SWIM_POINTS_BY_RANK[r.rank] || 0);
+    });
+  });
+  return Object.entries(totals)
+    .map(([team, points]) => ({ team, points }))
+    .sort((a, b) => b.points - a.points);
+}
+
 // Fastest (lowest) recorded time for a swimmer in a given event.
+// Links a race result into the swimmer's existing Personal Bests history
+// (the same "testSets" a coach logs manually in Training Plans ->
+// Testing) — a swimmer's competition time then shows up there
+// automatically, compared against their previous bests, instead of only
+// ever living inside the one competition record. Silently does nothing
+// if the event name doesn't match one of the recognized TEST_EVENTS
+// (a custom/one-off event name has nothing to link to).
+async function recordPersonalBestFromRace({ swimmerId, swimmerName, swimmerLevel, eventLabel, date, seconds, recordedBy }) {
+  if (!swimmerId || seconds == null) return;
+  const testEventId = TEST_EVENTS.find((e) => e.label === eventLabel)?.id;
+  if (!testEventId) return;
+  const all = await loadCollection(STORE_KEYS.testSets);
+  const record = {
+    id: genId(),
+    swimmerId,
+    swimmerName: swimmerName || "",
+    level: swimmerLevel || "",
+    event: testEventId,
+    date,
+    seconds,
+    notes: "From competition",
+    recordedBy: recordedBy || "Competition",
+    createdAt: new Date().toISOString(),
+  };
+  await saveCollection(STORE_KEYS.testSets, [...all, record]);
+}
+
 function bestTestResult(testSets, swimmerId, eventId) {
   const relevant = testSets.filter((t) => t.swimmerId === swimmerId && t.event === eventId);
   if (!relevant.length) return null;
@@ -7696,19 +7742,6 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
   }, []);
 
-  useEffect(() => {
-    if (tab !== "competitions") return;
-    loadMeets();
-    // Every judge is on their own device watching the SAME heat — this
-    // is what lets a lane's Stop tap, or the starter's Start press, show
-    // up on everyone else's screen without them doing anything. The
-    // stopwatch itself stays accurate regardless of this interval, since
-    // it always computes elapsed time from the real startedAt timestamp,
-    // not from whenever the last poll happened to land.
-    const t = setInterval(loadMeets, 2000);
-    return () => clearInterval(t);
-  }, [tab, loadMeets]);
-
   const saveMeets = async (next) => {
     setMeets(next);
     await saveCollection(STORE_KEYS.meets, next);
@@ -7767,7 +7800,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       id: genId(),
       heatNumber,
       startedAt: null, // set the moment the starter presses "Start heat" — each lane's stopwatch runs from this
-      lanes: Array.from({ length: laneCount }, (_, i) => ({ lane: i + 1, swimmerId: "", swimmerName: "", timeSeconds: null, dq: false })),
+      lanes: Array.from({ length: laneCount }, (_, i) => ({ lane: i + 1, swimmerId: "", swimmerName: "", timeSeconds: null, dq: false, team: "" })),
     };
     const next = meets.map((m) =>
       m.id === selectedMeet.id
@@ -7813,6 +7846,20 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           }
     );
     await saveMeets(next);
+    if (changes.timeSeconds != null && !changes.dq) {
+      const savedLane = next.find((m) => m.id === selectedMeet.id)?.events.find((e) => e.id === selectedEvent.id)?.heats.find((h) => h.id === heatId)?.lanes.find((l) => l.lane === laneNumber);
+      if (savedLane && !savedLane.dq) {
+        recordPersonalBestFromRace({
+          swimmerId: savedLane.swimmerId,
+          swimmerName: savedLane.swimmerName,
+          swimmerLevel: savedLane.swimmerLevel,
+          eventLabel: selectedEvent.name,
+          date: selectedMeet.date,
+          seconds: savedLane.timeSeconds,
+          recordedBy: accountName || "Competition",
+        });
+      }
+    }
   };
 
   const updateHeat = async (heatId, changes) => {
@@ -9273,6 +9320,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   };
 
   const [tab, setTab] = useState("dashboard");
+
+  useEffect(() => {
+    if (tab !== "competitions") return;
+    loadMeets();
+    // Every judge is on their own device watching the SAME heat — this
+    // is what lets a lane's Stop tap, or the starter's Start press, show
+    // up on everyone else's screen without them doing anything. The
+    // stopwatch itself stays accurate regardless of this interval, since
+    // it always computes elapsed time from the real startedAt timestamp,
+    // not from whenever the last poll happened to land.
+    const t = setInterval(loadMeets, 2000);
+    return () => clearInterval(t);
+  }, [tab, loadMeets]);
 
   useEffect(() => {
     if (tab === "trainingplans" && trainingPlansSubTab === "daily") { loadDailyWorkouts(); loadWorkoutTemplates(); }
@@ -22828,13 +22888,21 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                           // it can still be fixed by hand if needed.
                           const isRunning = !!heat.startedAt && lane.timeSeconds == null && !!lane.swimmerId;
                           return (
-                            <div key={lane.lane} className="bg-white border border-slate-200 rounded-lg p-2.5 grid sm:grid-cols-[50px_1fr_140px_auto] gap-2 items-center">
+                            <div key={lane.lane} className="bg-white border border-slate-200 rounded-lg p-2.5 grid sm:grid-cols-[50px_1fr_90px_140px_auto] gap-2 items-center">
                               <div className="text-xs font-semibold text-slate-400 text-center">Lane {lane.lane}</div>
                               <select
                                 value={lane.swimmerId}
                                 onChange={(e) => {
                                   const sw = swimmers.find((s) => s.id === e.target.value);
-                                  updateLane(heat.id, lane.lane, { swimmerId: e.target.value, swimmerName: sw?.name || "" });
+                                  // Pre-team's named teams (Team A/B/C...)
+                                  // suggest a starting value here — still
+                                  // just a plain text field the admin can
+                                  // change to anything (a school house
+                                  // name, etc.) since team scoring is
+                                  // entirely optional and not tied to the
+                                  // Programs structure otherwise.
+                                  const suggestedTeam = sw?.program === "pre-team" ? sw.programLevel : "";
+                                  updateLane(heat.id, lane.lane, { swimmerId: e.target.value, swimmerName: sw?.name || "", swimmerLevel: sw?.level || "", team: suggestedTeam });
                                 }}
                                 className="border border-slate-200 rounded-lg py-1.5 px-2 text-xs outline-none focus:border-sky-900"
                               >
@@ -22843,6 +22911,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                   <option key={s.id} value={s.id}>{s.name}</option>
                                 ))}
                               </select>
+                              <input
+                                value={lane.team || ""}
+                                onChange={(e) => updateLane(heat.id, lane.lane, { team: e.target.value })}
+                                placeholder="Team"
+                                title="Optional — only used for the Team standings totals"
+                                className="border border-slate-200 rounded-lg py-1.5 px-2 text-xs outline-none focus:border-sky-900"
+                              />
                               {isRunning ? (
                                 <button
                                   onClick={() => stopLane(heat.id, lane.lane, heat.startedAt)}
@@ -22911,8 +22986,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         <tr className="bg-slate-50 text-left text-xs text-slate-400">
                           <th className="px-3 py-2">Rank</th>
                           <th className="px-3 py-2">Swimmer</th>
+                          <th className="px-3 py-2">Team</th>
                           <th className="px-3 py-2">Heat / Lane</th>
                           <th className="px-3 py-2">Time</th>
+                          <th className="px-3 py-2">Points</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -22922,8 +22999,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               {r.rank ? (r.rank <= 3 ? ["🥇", "🥈", "🥉"][r.rank - 1] : r.rank) : "—"}
                             </td>
                             <td className="px-3 py-2">{r.swimmerName}</td>
+                            <td className="px-3 py-2 text-slate-400">{r.team || "—"}</td>
                             <td className="px-3 py-2 text-slate-400">Heat {r.heatNumber} · Lane {r.lane}</td>
                             <td className="px-3 py-2 font-mono">{r.dq ? "DQ" : r.timeSeconds != null ? formatSeconds(r.timeSeconds) : "—"}</td>
+                            <td className="px-3 py-2 text-slate-400">{r.team && r.rank ? SWIM_POINTS_BY_RANK[r.rank] || 0 : "—"}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -26662,6 +26741,17 @@ function JudgeView({ onExit }) {
     );
     setMeets(next);
     await saveCollection(STORE_KEYS.meets, next);
+    if (laneData && !laneData.dq) {
+      recordPersonalBestFromRace({
+        swimmerId: laneData.swimmerId,
+        swimmerName: laneData.swimmerName,
+        swimmerLevel: laneData.swimmerLevel,
+        eventLabel: currentEvent?.name,
+        date: meet.date,
+        seconds: elapsed,
+        recordedBy: "Competition (judge)",
+      });
+    }
   };
 
   if (loading) {
