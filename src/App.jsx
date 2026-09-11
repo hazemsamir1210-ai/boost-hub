@@ -578,11 +578,16 @@ function inferPlanId(swimmer) {
     const configuredPlanId = PROGRAM_LEVEL_DEFAULT_PLAN[programLevelSkillsKey(swimmer.program, swimmer.programLevel)];
     if (configuredPlanId && PLAN_PRICES[configuredPlanId] != null) return configuredPlanId;
   }
-  if (swimmer?.level === "Baby") return "baby";
-  if (["Exp", "Exp 2", "Exp 3"].includes(swimmer?.level)) return "exp";
-  if (swimmer?.sessionType === "private") return "private";
-  if (swimmer?.sessionType === "semi-private") return "semi-private";
-  return "group";
+  // The direct replacement for the old built-in private/semi-private/
+  // group plans: whichever real plan the admin has configured for this
+  // session type (and, for group sessions, this specific level — e.g.
+  // Exp's own price) — configured in Settings, not guessed.
+  const sessionTypePlanId = planIdForSessionType(swimmer?.sessionType, swimmer?.level);
+  if (sessionTypePlanId && PLAN_PRICES[sessionTypePlanId] != null) return sessionTypePlanId;
+  // Nothing configured at all — falls back to whichever real plan
+  // happens to be first, so the value returned always matches an actual
+  // option in the Monthly plan dropdown rather than a dead reference.
+  return PLANS[0]?.id || "";
 }
 
 function getMonthlySchedule(swimmer, key) {
@@ -1073,6 +1078,47 @@ function applyCustomProgramLevelDefaultPlan(next) {
   PROGRAM_LEVEL_DEFAULT_PLAN = next || {};
 }
 
+// Which Plan should be SUGGESTED for a given session type — this is
+// the direct replacement for the old built-in private/semi-private/group
+// plans that got removed: picking "Private" as the session type now
+// suggests whichever real plan the admin has configured for "Private"
+// here, instead of pointing at a plan that no longer exists.
+// Keyed by sessionType alone ("private", "semi-private", "group") for
+// the general case. "group" also supports a per-LEVEL override under
+// the same key scheme as PROGRAM_LEVEL_DEFAULT_PLAN ("group::Exp") —
+// this is what lets an Exp swimmer in a group session get the Exp
+// group's own price (and, separately, its own 2-swimmer capacity)
+// instead of the regular group price.
+const SESSION_TYPE_DEFAULT_PLAN_KEY = "session-type-default-plan-custom";
+let SESSION_TYPE_DEFAULT_PLAN = {}; // { "private": planId, "group": planId, "group::Exp": planId, ... }
+
+async function loadCustomSessionTypeDefaultPlan() {
+  const res = await window.storage.get(SESSION_TYPE_DEFAULT_PLAN_KEY);
+  if (!res) return {};
+  try {
+    return JSON.parse(res.value);
+  } catch {
+    return {};
+  }
+}
+
+async function saveCustomSessionTypeDefaultPlan(next) {
+  return storageSet(SESSION_TYPE_DEFAULT_PLAN_KEY, JSON.stringify(next));
+}
+
+function applyCustomSessionTypeDefaultPlan(next) {
+  SESSION_TYPE_DEFAULT_PLAN = next || {};
+}
+
+// The plan to suggest for a given sessionType + level combo — checks
+// the level-specific override first (e.g. "group" + "Exp"), then falls
+// back to the plain sessionType default.
+function planIdForSessionType(sessionType, level) {
+  if (!sessionType) return null;
+  const levelKey = programLevelSkillsKey(sessionType, level || "");
+  if (SESSION_TYPE_DEFAULT_PLAN[levelKey]) return SESSION_TYPE_DEFAULT_PLAN[levelKey];
+  return SESSION_TYPE_DEFAULT_PLAN[sessionType] || null;
+}
 
 
 function sessionCapacity(sessionType, level, program, programLevel) {
@@ -1353,8 +1399,8 @@ const DEFAULT_TIME_SLOTS = JSON.parse(JSON.stringify(TIME_SLOTS));
 /* Baby classes run on their own fully independent time slots (see
    BABY_TIME_SLOTS above) — separate from and not derived from the
    regular hourly slots at all. */
-function getTimeOptions(branch, day, level) {
-  if (level === "Baby") return (BABY_TIME_SLOTS[branch] && BABY_TIME_SLOTS[branch][day]) || [];
+function getTimeOptions(branch, day, level, program) {
+  if (level === "Baby" || program === "baby") return (BABY_TIME_SLOTS[branch] && BABY_TIME_SLOTS[branch][day]) || [];
   return (TIME_SLOTS[branch] && TIME_SLOTS[branch][day]) || [];
 }
 
@@ -2764,6 +2810,20 @@ function getSkillsForSwimmer(swimmer) {
     if (programSkills && programSkills.length > 0) return programSkills;
   }
   return LEVEL_SKILLS[swimmer?.level] || [];
+}
+
+// The level label to actually show for "where this swimmer currently
+// is" — a migrated swimmer's real standing is their program level
+// (level-up only ever advances that, never the old level field, which
+// stays frozen on purpose since it still drives pricing/capacity
+// elsewhere). Showing the old level here made a swimmer who'd genuinely
+// been promoted several times look stuck at the same level forever.
+function effectiveLevelLabel(swimmer) {
+  if (swimmer?.program && swimmer?.programLevel) {
+    const programName = SWIM_PROGRAMS.find((p) => p.id === swimmer.program)?.name || swimmer.program;
+    return `${programName} / ${swimmer.programLevel}`;
+  }
+  return swimmer?.level || "";
 }
 
 // The academy's own list of levels — some academies run more or fewer
@@ -6199,7 +6259,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
   const [time2, setTime2] = useState(initial?.time2 || "");
   const [sessionType2, setSessionType2] = useState(initial?.sessionType2 || "group");
   const [coachId2, setCoachId2] = useState(initial?.coachId2 || "");
-  const timeOptions2 = getTimeOptions(branch, day2, level);
+  const timeOptions2 = getTimeOptions(branch, day2, level, program);
 
   // Switching the month this schedule is for is really "start a fresh
   // booking" — carrying over whatever day/time/coach this swimmer had
@@ -6226,16 +6286,16 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
 
   const handleDay2Change = (newDay) => {
     setDay2(newDay);
-    const newOptions = getTimeOptions(branch, newDay, level);
+    const newOptions = getTimeOptions(branch, newDay, level, program);
     if (!newOptions.includes(time2)) setTime2(newOptions[0]);
     if (coachId2 && isCoachClosedAt((coaches || []).find((c) => c.id === coachId2), newDay, time2)) setCoachId2("");
   };
 
-  const timeOptions = getTimeOptions(branch, day, level);
+  const timeOptions = getTimeOptions(branch, day, level, program);
 
   const handleBranchChange = (newBranch) => {
     setBranch(newBranch);
-    const newOptions = getTimeOptions(newBranch, day, level);
+    const newOptions = getTimeOptions(newBranch, day, level, program);
     if (!newOptions.includes(time)) setTime(newOptions[0]);
     // coach list is branch-scoped, so clear any coach that no longer belongs here
     if (coachId && !(coaches || []).some((c) => c.id === coachId && c.branch === newBranch)) setCoachId("");
@@ -6243,7 +6303,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
 
   const handleDayChange = (newDay) => {
     setDay(newDay);
-    const newOptions = getTimeOptions(branch, newDay, level);
+    const newOptions = getTimeOptions(branch, newDay, level, program);
     if (!newOptions.includes(time)) setTime(newOptions[0]);
     // clear the assigned coach if they're off on the newly picked day
     if (coachId && isCoachClosedAt((coaches || []).find((c) => c.id === coachId), newDay, time)) setCoachId("");
@@ -6251,13 +6311,21 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
 
   const handleLevelChange = (newLevel) => {
     setLevel(newLevel);
-    const newOptions = getTimeOptions(branch, day, newLevel);
+    const newOptions = getTimeOptions(branch, day, newLevel, program);
     if (!newOptions.includes(time)) setTime(newOptions[0]);
     // Baby classes are always 1-on-1, so the session type follows automatically.
-    if (newLevel === "Baby") setSessionType("private");
+    if (newLevel === "Baby") {
+      setSessionType("private");
+      const suggested = planIdForSessionType("private", newLevel);
+      if (suggested && PLAN_PRICES[suggested] != null) setPlanId(suggested);
+    }
     // Exp / Exp 2 / Exp 3 are small groups — 2 swimmers max, not the usual
     // group size — so this also picks Group for them automatically.
-    if (["Exp", "Exp 2", "Exp 3"].includes(newLevel)) setSessionType("group");
+    if (["Exp", "Exp 2", "Exp 3"].includes(newLevel)) {
+      setSessionType("group");
+      const suggested = planIdForSessionType("group", newLevel);
+      if (suggested && PLAN_PRICES[suggested] != null) setPlanId(suggested);
+    }
   };
 
   const [saving, setSaving] = useState(false);
@@ -6501,8 +6569,16 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           <select
             value={program}
             onChange={(e) => {
-              setProgram(e.target.value);
+              const newProgram = e.target.value;
+              setProgram(newProgram);
               setProgramLevel(""); // levels differ per program — start blank rather than carry over a stale one
+              // Baby's time slots are a completely separate set from the
+              // regular hourly ones — switching the Program to/from Baby
+              // needs the same options-refresh the old Level dropdown
+              // already does, or the time field could be left showing an
+              // option that doesn't actually exist for Baby (or vice versa).
+              const newOptions = getTimeOptions(branch, day, level, newProgram);
+              if (!newOptions.includes(time)) setTime(newOptions[0] || "");
             }}
             className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
           >
@@ -6601,7 +6677,12 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           <label className="text-xs text-slate-500 mb-1 block">Session type</label>
           <select
             value={sessionType}
-            onChange={(e) => setSessionType(e.target.value)}
+            onChange={(e) => {
+              const newSessionType = e.target.value;
+              setSessionType(newSessionType);
+              const suggested = planIdForSessionType(newSessionType, level);
+              if (suggested && PLAN_PRICES[suggested] != null) setPlanId(suggested);
+            }}
             className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
           >
             {SESSION_TYPES.map((t) => (
@@ -9614,6 +9695,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [customProgramLevelSkills, setCustomProgramLevelSkills] = useState({}); // "programId::level" -> [skill, ...]
   const [customProgramLevelCapacities, setCustomProgramLevelCapacities] = useState({}); // "programId::level" -> number
   const [customProgramLevelDefaultPlan, setCustomProgramLevelDefaultPlan] = useState({}); // "programId::level" -> planId
+  const [customSessionTypeDefaultPlan, setCustomSessionTypeDefaultPlan] = useState({}); // "private" | "group" | "group::Exp" -> planId
+  const [newGroupExceptionLevel, setNewGroupExceptionLevel] = useState("");
+  const [newGroupExceptionPlan, setNewGroupExceptionPlan] = useState("");
   const [newProgramSkillText, setNewProgramSkillText] = useState({}); // "programId::level" -> draft text
   const [skillsRefreshKey, setSkillsRefreshKey] = useState(0); // bumped after saving, to force re-render of anything reading LEVEL_SKILLS
   const [newSkillText, setNewSkillText] = useState({}); // level -> draft text for the "add skill" input
@@ -9623,8 +9707,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [newLevelName, setNewLevelName] = useState("");
   const [teamSquadCaps, setTeamSquadCaps] = useState(() => ({ ...TEAM_SQUAD_CAPACITIES }));
   const [teamSquadCapsSaved, setTeamSquadCapsSaved] = useState(false);
-  const saveTeamSquadCaps = async (next) => {
+  const saveTeamSquadCaps = async (level, value) => {
+    // Fetches fresh right before writing (same guard used elsewhere
+    // today for this exact class of bug) so this save can only ever
+    // change the ONE level just edited — never overwrite any other
+    // level with a stale local value, no matter how this component's
+    // own state got out of sync.
+    const fresh = await loadCustomTeamSquadCapacities();
+    const next = { ...fresh, [level]: value };
     await saveCustomTeamSquadCapacities(next);
+    setTeamSquadCaps(next);
     setTeamSquadCapsSaved(true);
     setTimeout(() => setTeamSquadCapsSaved(false), 2000);
   };
@@ -9964,6 +10056,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         applyCustomProgramLevelDefaultPlan(custom);
         setSkillsRefreshKey((k) => k + 1);
       });
+      loadCustomSessionTypeDefaultPlan().then((custom) => {
+        setCustomSessionTypeDefaultPlan(custom);
+        applyCustomSessionTypeDefaultPlan(custom);
+        setSkillsRefreshKey((k) => k + 1);
+      });
     }
   }, [tab]);
 
@@ -9990,6 +10087,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     loadCustomProgramLevelDefaultPlan().then((custom) => {
       setCustomProgramLevelDefaultPlan(custom);
       applyCustomProgramLevelDefaultPlan(custom);
+      setSkillsRefreshKey((k) => k + 1);
+    });
+    loadCustomSessionTypeDefaultPlan().then((custom) => {
+      setCustomSessionTypeDefaultPlan(custom);
+      applyCustomSessionTypeDefaultPlan(custom);
       setSkillsRefreshKey((k) => k + 1);
     });
   }, [authed]);
@@ -10061,6 +10163,22 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       await saveCustomProgramLevelDefaultPlan(next);
       setCustomProgramLevelDefaultPlan(next);
       applyCustomProgramLevelDefaultPlan(next);
+    } finally {
+      setSkillsSaving(false);
+    }
+  };
+
+  // key is either a plain sessionType ("private", "semi-private",
+  // "group") or a sessionType+level override ("group::Exp").
+  const updateSessionTypeDefaultPlan = async (key, planId) => {
+    const next = { ...customSessionTypeDefaultPlan };
+    if (!planId) delete next[key];
+    else next[key] = planId;
+    setSkillsSaving(true);
+    try {
+      await saveCustomSessionTypeDefaultPlan(next);
+      setCustomSessionTypeDefaultPlan(next);
+      applyCustomSessionTypeDefaultPlan(next);
     } finally {
       setSkillsSaving(false);
     }
@@ -10349,6 +10467,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   };
 
   const [showSkillsModal, setShowSkillsModal] = useState(false);
+  // Refreshes Star/Team capacities from actual storage whenever the
+  // Skills & Levels modal opens, rather than trusting the lazy useState
+  // initializer on teamSquadCaps above — that initializer only ever runs
+  // once, at this component's first mount, which can happen before the
+  // app's startup load of custom capacities has finished. When that race
+  // lost, teamSquadCaps silently stayed at the built-in {20,20,20,20,20}
+  // defaults forever, even though the module-level TEAM_SQUAD_CAPACITIES
+  // itself did eventually update — this component's own copy just never
+  // re-synced to it.
+  useEffect(() => {
+    if (!showSkillsModal) return;
+    loadCustomTeamSquadCapacities().then((fresh) => setTeamSquadCaps({ ...fresh }));
+  }, [showSkillsModal]);
   const [settingsSignature, setSettingsSignature] = useState("");
   const [settingsInstapayHandle, setSettingsInstapayHandle] = useState("");
   const [settingsInstapayPhone, setSettingsInstapayPhone] = useState("");
@@ -13761,6 +13892,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               const effTime = ms ? ms.time : s.time;
               const effSessionType = ms ? ms.sessionType : s.sessionType;
               const effCoachId = ms ? ms.coachId : s.coachId;
+              const effCoachId2 = ms ? ms.coachId2 : s.coachId2;
               if (levelFilter !== "all" && s.level !== levelFilter) return false;
               // Only matches swimmers already migrated to the new
               // structure (s.program set) — unmigrated swimmers simply
@@ -13771,7 +13903,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               if (timeFilter !== "all" && effTime !== timeFilter) return false;
               if (sessionTypeFilter !== "all" && effSessionType !== sessionTypeFilter) return false;
               if (coachFilterValue !== "all") {
-                if (coachFilterValue === "none" ? !!effCoachId : String(effCoachId) !== String(coachFilterValue)) return false;
+                // Checks BOTH the primary and second-session coach — a
+                // swimmer whose second weekly session is with this coach
+                // (even if their primary session is with someone else)
+                // should still show up when filtering by that coach.
+                if (coachFilterValue === "none") {
+                  if (effCoachId || effCoachId2) return false;
+                } else if (String(effCoachId) !== String(coachFilterValue) && String(effCoachId2) !== String(coachFilterValue)) {
+                  return false;
+                }
               }
               return true;
             });
@@ -15724,7 +15864,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   {(can("viewAssessments") || can("editAssessments") || canEditContent) && (
                   <div className="mt-4 pt-4 border-t border-slate-100">
                     <div className="flex items-center justify-between mb-2">
-                      <div className="text-xs font-semibold text-slate-500">Skill progression — {s.level}</div>
+                      <div className="text-xs font-semibold text-slate-500">Skill progression — {effectiveLevelLabel(s)}</div>
                       {getSkillsForSwimmer(s).length > 0 && (
                         <div className="text-xs text-slate-400 flex items-center gap-1">
                           <Star className="w-3 h-3" />
@@ -19007,7 +19147,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     max="50"
                     value={teamSquadCaps[lvl] ?? 20}
                     onChange={(e) => setTeamSquadCaps({ ...teamSquadCaps, [lvl]: Math.max(2, Number(e.target.value) || 2) })}
-                    onBlur={() => saveTeamSquadCaps(teamSquadCaps)}
+                    onBlur={() => saveTeamSquadCaps(lvl, teamSquadCaps[lvl] ?? 20)}
                     className="w-full border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
                   />
                 </div>
@@ -19213,6 +19353,97 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </button>
             </div>
             {extraPlansError && <div className="text-red-500 text-xs mt-2">{extraPlansError}</div>}
+          </div>
+
+          <div className="mt-6 pt-5 border-t border-slate-200">
+            <h4 className="font-semibold text-slate-800 text-sm mb-1">Session type → suggested plan</h4>
+            <p className="text-xs text-slate-400 mb-3">
+              What Private, Semi Private, and Group sessions each suggest for Monthly plan — this is what replaced the old built-in plans of the same names. Only a suggestion: still changeable per swimmer before saving.
+            </p>
+            <div className="space-y-2 mb-4">
+              {[
+                { id: "private", label: "Private" },
+                { id: "semi-private", label: "Semi Private" },
+                { id: "group", label: "Group" },
+              ].map((st) => (
+                <div key={st.id} className="flex items-center gap-2">
+                  <label className="text-sm text-slate-600 w-28">{st.label}</label>
+                  <select
+                    value={customSessionTypeDefaultPlan[st.id] || ""}
+                    onChange={(e) => updateSessionTypeDefaultPlan(st.id, e.target.value)}
+                    className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                  >
+                    <option value="">None</option>
+                    {PLANS.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name} — {p.price} EGP</option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+
+            <h5 className="text-xs font-semibold text-slate-600 mb-2">Group exceptions by level (e.g. Exp — smaller group, different price)</h5>
+            <div className="space-y-2 mb-3">
+              {Object.entries(customSessionTypeDefaultPlan)
+                .filter(([key]) => key.startsWith("group::"))
+                .map(([key, planId]) => {
+                  const levelName = key.split("::")[1];
+                  return (
+                    <div key={key} className="flex items-center gap-2">
+                      <span className="text-sm text-slate-600 w-28">{levelName}</span>
+                      <select
+                        value={planId}
+                        onChange={(e) => updateSessionTypeDefaultPlan(key, e.target.value)}
+                        className="flex-1 border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+                      >
+                        <option value="">None</option>
+                        {PLANS.map((p) => (
+                          <option key={p.id} value={p.id}>{p.name} — {p.price} EGP</option>
+                        ))}
+                      </select>
+                      <button onClick={() => updateSessionTypeDefaultPlan(key, "")} className="text-slate-300 hover:text-red-500">
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  );
+                })}
+            </div>
+            <div className="flex items-center gap-2">
+              <select
+                value={newGroupExceptionLevel}
+                onChange={(e) => setNewGroupExceptionLevel(e.target.value)}
+                className="border border-slate-200 rounded-lg py-2 px-2.5 text-sm outline-none focus:border-sky-900 bg-white"
+              >
+                <option value="">Add exception for level...</option>
+                {["Exp", "Exp 2", "Exp 3"]
+                  .filter((lv) => !customSessionTypeDefaultPlan[`group::${lv}`])
+                  .map((lv) => (
+                    <option key={lv} value={lv}>{lv}</option>
+                  ))}
+              </select>
+              <select
+                value={newGroupExceptionPlan}
+                onChange={(e) => setNewGroupExceptionPlan(e.target.value)}
+                className="flex-1 border border-slate-200 rounded-lg py-2 px-2.5 text-sm outline-none focus:border-sky-900 bg-white"
+              >
+                <option value="">Plan...</option>
+                {PLANS.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name} — {p.price} EGP</option>
+                ))}
+              </select>
+              <button
+                onClick={() => {
+                  if (!newGroupExceptionLevel || !newGroupExceptionPlan) return;
+                  updateSessionTypeDefaultPlan(`group::${newGroupExceptionLevel}`, newGroupExceptionPlan);
+                  setNewGroupExceptionLevel("");
+                  setNewGroupExceptionPlan("");
+                }}
+                disabled={!newGroupExceptionLevel || !newGroupExceptionPlan}
+                className="px-4 py-2 rounded-lg bg-slate-700 text-white text-sm font-semibold hover:bg-slate-600 disabled:opacity-60 whitespace-nowrap"
+              >
+                Add
+              </button>
+            </div>
           </div>
 
           {plansError && <div className="text-red-500 text-sm mt-3">{plansError}</div>}
@@ -25830,7 +26061,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
 
               {getSkillsForSwimmer(s).length > 0 && (canViewAssessments || canEditAssessments) && (
                 <div className="mt-3 pt-3 border-t border-slate-100">
-                  <div className="text-xs font-semibold text-slate-500 mb-2">Skill progression — {s.level}</div>
+                  <div className="text-xs font-semibold text-slate-500 mb-2">Skill progression — {effectiveLevelLabel(s)}</div>
                   <SkillTreePath
                     skills={getSkillsForSwimmer(s)}
                     ratings={s.skills?.[s.level] || {}}
@@ -31189,6 +31420,7 @@ function App() {
         loadCustomTeamSquadCapacities(),
         loadCustomProgramLevelCapacities().then(applyCustomProgramLevelCapacities),
         loadCustomProgramLevelDefaultPlan().then(applyCustomProgramLevelDefaultPlan),
+        loadCustomSessionTypeDefaultPlan().then(applyCustomSessionTypeDefaultPlan),
         loadSlotCapacityOverrides(),
         loadCustomSignature().then((sig) => {
           if (sig) CONFIG.signatureDataUri = sig;
