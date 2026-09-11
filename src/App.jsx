@@ -13844,22 +13844,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         // path below to null, checking only "->>day.is.null" covers both
         // cases in one clause and keeps this filter's answer consistent
         // with getMonthlySchedule()'s.
-        // Includes a swimmer whose CURRENT month schedule lives in
-        // nextSchedule (common right after being promoted off the
-        // waitlist) as a third OR-branch — the two branches above only
-        // ever checked monthlySchedules and the flat top-level day/time,
-        // so a nextSchedule-only swimmer used to silently vanish from
-        // every filtered view that reaches this query, even though
-        // getMonthlySchedule() (used everywhere else this same question
-        // is asked) already correctly counted them as scheduled.
-        // Deliberately keeping this as a real SQL-level filter (not
-        // moved to a client-side check) — the row count needs to stay
-        // well under the server's row cap, since this query has no
-        // .range() applied on this path and the full roster is well
-        // over that cap.
-        if (!showUnscheduled) {
+        const isHeavyFilterPath = dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || coachFilterValue !== "all" || levelFilter !== "all" || programFilter !== "all";
+        // The light (plain browse, no day/time/coach/level/program filter)
+        // path keeps this exact SQL narrowing, unchanged from before today.
+        if (!showUnscheduled && !isHeavyFilterPath) {
           query = query.or(
-            `data->monthlySchedules->${paymentMonthFilter}->>day.neq.,and(data->monthlySchedules->${paymentMonthFilter}->>day.is.null,data->>day.neq.,data->>time.neq.),and(data->nextSchedule->>scheduleMonth.eq.${paymentMonthFilter},data->nextSchedule->>day.neq.)`
+            `data->monthlySchedules->${paymentMonthFilter}->>day.neq.,and(data->monthlySchedules->${paymentMonthFilter}->>day.is.null,data->>day.neq.,data->>time.neq.)`
           );
         }
         // A branch-restricted account always gets this filter, regardless
@@ -13900,8 +13890,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         // Matching level against the swimmer's actual data.level, same as
         // the others, keeps this filter's answer correct regardless of
         // whether the mirror ever fell behind.
-        if (dayFilter !== "all" || timeFilter !== "all" || sessionTypeFilter !== "all" || coachFilterValue !== "all" || levelFilter !== "all" || programFilter !== "all") {
-          query = query.order("name", { ascending: true });
+        if (isHeavyFilterPath) {
+          // No SQL-level "must be scheduled" narrowing on this path (see
+          // above) means this can be fetching close to the FULL roster —
+          // an explicit limit well above any realistic roster size is
+          // required so the query can't silently get truncated by
+          // whatever row cap the platform applies by default, which is
+          // exactly what caused every genuinely-matching swimmer past
+          // that cutoff to vanish the last time this path fetched an
+          // unbounded set without one.
+          query = query.order("name", { ascending: true }).limit(20000);
           const { data, error } = await query;
           if (error) throw error;
           const items = (data || [])
