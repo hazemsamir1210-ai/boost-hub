@@ -25492,6 +25492,34 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   // so no further filtering is needed here.
   const sessionSwimmers = swimmers;
 
+  // Groups the session's swimmers by whichever coach is actually
+  // teaching each one in THIS slot — using the same day/time match
+  // loadSwimmers used to decide they belong here in the first place, so
+  // a swimmer matched via their second weekly session correctly groups
+  // under coachId2, not the (possibly different) coach on coachId.
+  const coachIdForThisSlot = (s) => {
+    const ms = getMonthlySchedule(s, monthKey());
+    if (!ms) return null;
+    if (ms.day === dayGroup && ms.time === time) return ms.coachId || null;
+    if (ms.day2 === dayGroup && ms.time2 === time) return ms.coachId2 || null;
+    return null;
+  };
+  const swimmersByCoachGroup = (() => {
+    const groups = new Map(); // coachId (or "unassigned") -> swimmers[]
+    sessionSwimmers.forEach((s) => {
+      const key = coachIdForThisSlot(s) || "unassigned";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(s);
+    });
+    const entries = Array.from(groups.entries()).map(([coachId, list]) => ({
+      coachId,
+      coachName: coachId === "unassigned" ? "No coach assigned" : coaches.find((c) => c.id === coachId)?.name || "Unknown coach",
+      list,
+    }));
+    entries.sort((a, b) => (a.coachId === "unassigned" ? 1 : b.coachId === "unassigned" ? -1 : b.list.length - a.list.length));
+    return entries;
+  })();
+
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
       <div className="flex items-center justify-between mb-1">
@@ -25702,8 +25730,15 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
         <div className="text-center text-slate-400 py-16">No swimmers scheduled for this day & time</div>
       )}
 
-      <div className="space-y-3">
-        {sessionSwimmers.map((s) => {
+      <div className="space-y-6">
+        {swimmersByCoachGroup.map((group) => (
+          <div key={group.coachId}>
+            <div className="flex items-center gap-2 mb-3">
+              <h3 className="font-bold text-slate-800 text-sm">{group.coachName}</h3>
+              <span className="text-xs text-slate-400">({group.list.length})</span>
+            </div>
+            <div className="space-y-3">
+              {group.list.map((s) => {
           const status = (s.attendance || {})[today];
           return (
             <div key={s.id} className="bg-slate-50 rounded-2xl p-4">
@@ -25806,7 +25841,10 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
               )}
             </div>
           );
-        })}
+              })}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
