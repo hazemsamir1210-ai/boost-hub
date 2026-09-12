@@ -648,6 +648,20 @@ function getDistinctSecondSession(ms) {
   return { day: ms.day2, time: ms.time2, coachId: ms.coachId2, sessionType: ms.sessionType2, classId: ms.classId };
 }
 
+// Whether a resolved month's schedule (from getMonthlySchedule) counts as
+// this coach's, checking the primary session OR a genuinely distinct
+// second one — never a raw ms.coachId2 match on its own, which would
+// also fire on a data-entry slip where day2/time2 duplicate the primary
+// session (see getDistinctSecondSession). Every "which swimmers are
+// this coach's" check in Coach Performance (the tab, the dashboard
+// report, the Excel export, and the program breakdown) should go
+// through this one function so they can never quietly drift apart again.
+function monthlyScheduleMatchesCoach(ms, coachId) {
+  if (!ms || !coachId) return false;
+  if (ms.coachId === coachId) return true;
+  return getDistinctSecondSession(ms)?.coachId === coachId;
+}
+
 let LEVELS = [];
 
 /* ---------- New curriculum structure: Programs -> Levels ----------
@@ -903,6 +917,79 @@ function getTrainingGroupOptions() {
 // never wrongly re-match a squad group they've since moved out of.
 function trainingGroupOf(swimmer) {
   return swimmer?.program ? swimmer?.programLevel : swimmer?.level;
+}
+
+// trainingGroupOf() above returns just the bare level name even for a
+// migrated swimmer ("Star 1"), which collides whenever two different
+// programs happen to use the same level name (a "Development" Star 1
+// and a "Competition" Star 1 are NOT the same squad, but trainingGroupOf
+// can't tell them apart). This is the disambiguated version — workouts,
+// seasons, and training plans should key on THIS going forward, not
+// trainingGroupOf's bare name.
+function trainingGroupKey(swimmer) {
+  if (swimmer?.program && swimmer?.programLevel) {
+    return programLevelSkillsKey(swimmer.program, swimmer.programLevel);
+  }
+  return swimmer?.level || "";
+}
+
+// Friendly display label for a trainingGroupKey — "development::Star 1"
+// becomes "Development / Star 1"; a bare legacy level ("Star 1", no
+// "::") is shown as-is.
+function trainingGroupLabel(key) {
+  if (key && key.includes("::")) {
+    const [programId, levelName] = key.split("::");
+    const programName = SWIM_PROGRAMS.find((p) => p.id === programId)?.name || programId;
+    return `${programName} / ${levelName}`;
+  }
+  return key || "";
+}
+
+// Whether an existing training record (a daily workout, a season, a
+// weekly volume entry, or a training plan) belongs to a given training
+// group. Records created going forward carry their own groupKey (the
+// disambiguated key above) and are matched exactly. Records that
+// predate this — everything already saved — only ever have the bare
+// level name, with no way to know which program they were really meant
+// for; those keep matching on that bare name (the last segment of a
+// disambiguated key, or the whole key for an unmigrated swimmer's own
+// level) exactly like they always did, so nothing already saved
+// silently disappears. The tradeoff this keeps: an old, not-yet-specific
+// workout still shows up for BOTH programs' same-named level, until an
+// admin creates a new one that targets just one of them.
+function trainingRecordMatchesGroup(record, groupKey) {
+  if (!record || !groupKey) return false;
+  if (record.groupKey) return record.groupKey === groupKey;
+  const bareLevel = groupKey.includes("::") ? groupKey.split("::")[1] : groupKey;
+  return record.level === bareLevel;
+}
+
+// The list of training groups to offer in a "which group" dropdown —
+// always includes the classic bare Star/Team levels (so every existing
+// workout/season/plan stays reachable), plus any distinct program+level
+// combination actually in use among current swimmers (so a program can
+// get its OWN workouts/seasons going forward instead of colliding with
+// another program's same-named level).
+function computeTrainingGroups(swimmers) {
+  const groups = new Map(); // key -> label
+  TEAM_SQUAD_LEVELS.forEach((lv) => groups.set(lv, lv));
+  (swimmers || []).forEach((s) => {
+    if (s?.program && s?.programLevel && TEAM_SQUAD_LEVELS.includes(s.programLevel)) {
+      const key = trainingGroupKey(s);
+      if (!groups.has(key)) groups.set(key, trainingGroupLabel(key));
+    }
+  });
+  return Array.from(groups.entries()).map(([key, label]) => ({ key, label }));
+}
+
+// The bare level name out of a training-group key — "development::Star
+// 1" -> "Star 1"; a bare legacy key ("Star 1", no "::") is returned as-
+// is. Needed wherever the workout's STRUCTURE (Star-style sections vs
+// Team-style sections, via workoutSectionsFor) is decided — that only
+// ever needs the bare name, the program prefix doesn't change which
+// sections a workout has.
+function bareLevelFromGroupKey(key) {
+  return key && key.includes("::") ? key.split("::")[1] : key || "";
 }
 
 // Star squads plan a session the traditional way (named blocks); Team
@@ -3104,6 +3191,31 @@ function levelBelongsToProgram(level, program) {
   return levels.includes(level);
 }
 
+// The legacy-style level name to check a migrated swimmer against for
+// the OLD, name-based staff access grants (levelRestriction, levelAccess,
+// and — through levelBelongsToProgram — programAccess). These grants
+// predate the Programs structure and only know legacy level names, so
+// checking a migrated swimmer's frozen swimmer.level directly is exactly
+// the kind of stale-data read this whole file's Programs work has been
+// closing everywhere else. Using swimmer.programLevel instead isn't
+// safe either for every program, though: Learn to swim and Development
+// team kept their level names identical across the migration, so their
+// Program Level matches an old-style grant directly and unambiguously —
+// but Baby's new sub-levels ("Level 1/2/3") are a renamed replacement
+// for the single old "Baby" level, and happen to reuse the exact same
+// names Learn to swim already uses for ITS OWN levels. Comparing a Baby
+// swimmer's raw Program Level against these grants could therefore
+// silently match (or fail to match) the wrong program entirely. Pre
+// team / Ladies / Adults are new programs with no legacy equivalent at
+// all, so an old-style grant — authored before these programs existed —
+// has nothing meaningful to compare against and can never match them.
+function legacyCompatibleLevelOf(swimmer) {
+  if (!swimmer?.program) return swimmer?.level;
+  if (swimmer.program === "baby") return "Baby";
+  if (swimmer.program === "learn-to-swim" || swimmer.program === "development-team") return swimmer.programLevel;
+  return null;
+}
+
 
 async function loadCollection(storeKey) {
   try {
@@ -4633,13 +4745,7 @@ function computeCoachPerformance(swimmers = [], coachId, feedback = []) {
   // coach can live in monthlySchedules rather than the top-level coachId.
   // Checks BOTH the primary and second-session coach, so a swimmer whose
   // second weekly session is with this coach counts toward them too.
-  const mine = swimmers.filter((s) => {
-    const ms = getMonthlySchedule(s, monthKey());
-    if (!ms) return false;
-    if (ms.coachId === coachId) return true;
-    const second = getDistinctSecondSession(ms);
-    return second?.coachId === coachId;
-  });
+  const mine = swimmers.filter((s) => monthlyScheduleMatchesCoach(getMonthlySchedule(s, monthKey()), coachId));
   const mineIds = new Set(mine.map((s) => String(s.id)));
   let present = 0, absent = 0;
   let masteredTotal = 0, skillsTotal = 0;
@@ -5024,7 +5130,7 @@ function SwimmerProfileModal({ swimmer: s, coaches, onClose, onEditSkill, canEdi
           <div className="flex items-start justify-between gap-3">
             <div>
               <h2 className="text-xl font-bold text-slate-900 tracking-tight">{s.name}</h2>
-              <p className="text-sm text-slate-500 mt-0.5">{s.age} yrs · {s.level}</p>
+              <p className="text-sm text-slate-500 mt-0.5">{s.age} yrs · {effectiveLevelLabel(s)}</p>
             </div>
             <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400">
               <X className="w-5 h-5" />
@@ -7233,8 +7339,16 @@ async function saveCoreCollection(key, list) {
   return saveCollection(key, list);
 }
 
+// Mirrors classIdForSchedule's key composition: uses program::programLevel
+// instead of the frozen legacy level whenever both are present, so two
+// programs sharing a level name never collide into the same Family &
+// Billing class. Callers must include program/programLevel on whatever
+// they pass in (both the swimmer AND any already-stored class record),
+// or a stored class's key will never again match its swimmer's — see the
+// program/programLevel fields added to every class record built below.
 function coreClassKey(s) {
-  return [s.branch || "", s.level || "", s.day || "", s.time || "", s.coachId || "", s.sessionType || "group"].join("|");
+  const levelPart = s.program && s.programLevel ? `${s.program}::${s.programLevel}` : (s.level || "");
+  return [s.branch || "", levelPart, s.day || "", s.time || "", s.coachId || "", s.sessionType || "group"].join("|");
 }
 
 function buildCoreModelsFromSwimmers(swimmers) {
@@ -7273,6 +7387,8 @@ function buildCoreModelsFromSwimmers(swimmers) {
           name: `${s.level || "Class"} · ${schedule.day} · ${schedule.time}`,
           branch: s.branch || BRANCHES[0]?.id || "",
           level: s.level || "",
+          program: s.program || null,
+          programLevel: s.programLevel || null,
           day: schedule.day,
           time: schedule.time,
           coachId: schedule.coachId || s.coachId || null,
@@ -7417,6 +7533,8 @@ async function syncSwimmerToCoreEngine(swimmer) {
         name: `${swimmer.level || "Class"} · ${swimmer.day} · ${swimmer.time}`,
         branch: swimmer.branch || BRANCHES[0]?.id || "",
         level: swimmer.level || "",
+        program: swimmer.program || null,
+        programLevel: swimmer.programLevel || null,
         day: swimmer.day,
         time: swimmer.time,
         coachId: swimmer.coachId || null,
@@ -7508,6 +7626,8 @@ async function syncManySwimmersToCoreEngine(swimmerList) {
         name: `${swimmer.level || "Class"} · ${swimmer.day} · ${swimmer.time}`,
         branch: swimmer.branch || BRANCHES[0]?.id || "",
         level: swimmer.level || "",
+        program: swimmer.program || null,
+        programLevel: swimmer.programLevel || null,
         day: swimmer.day,
         time: swimmer.time,
         coachId: swimmer.coachId || null,
@@ -8373,7 +8493,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     const record = {
       id: genId(),
       name: templateNameDraft.trim(),
-      level: dailyWorkoutLevel,
+      level: bareLevelFromGroupKey(dailyWorkoutLevel),
       sections: dailyWorkoutForm,
       sets: dailyWorkoutSets,
       createdAt: new Date().toISOString(),
@@ -8589,13 +8709,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   // none) — reads whichever section keys apply to the level currently
   // selected (Star's named blocks, or Team's energy zones).
   useEffect(() => {
-    const existing = dailyWorkouts.find((w) => w.date === dailyWorkoutDate && w.level === dailyWorkoutLevel);
+    const existing = dailyWorkouts.find((w) => w.date === dailyWorkoutDate && trainingRecordMatchesGroup(w, dailyWorkoutLevel));
+    const bareLevel = bareLevelFromGroupKey(dailyWorkoutLevel);
     const blank = {};
-    workoutSectionsFor(dailyWorkoutLevel).forEach((s) => {
+    workoutSectionsFor(bareLevel).forEach((s) => {
       blank[s.key] = existing?.[s.key] || "";
     });
     setDailyWorkoutForm(blank);
-    setDailyWorkoutSets(existing?.sets || blankWorkoutSets(dailyWorkoutLevel));
+    setDailyWorkoutSets(existing?.sets || blankWorkoutSets(bareLevel));
     setDailyWorkoutNotes(existing?.coachNotes || "");
     setDailyWorkoutEquipment(existing?.equipment || []);
     setDailyWorkoutStatus(existing?.status || "published");
@@ -8610,15 +8731,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   // nothing is overwritten until the technical director actually commits it.
   const copyPreviousWorkout = () => {
     const previous = dailyWorkouts
-      .filter((w) => w.level === dailyWorkoutLevel && w.date < dailyWorkoutDate)
+      .filter((w) => trainingRecordMatchesGroup(w, dailyWorkoutLevel) && w.date < dailyWorkoutDate)
       .sort((a, b) => b.date.localeCompare(a.date))[0];
     if (!previous) return;
+    const bareLevel = bareLevelFromGroupKey(dailyWorkoutLevel);
     const copied = {};
-    workoutSectionsFor(dailyWorkoutLevel).forEach((s) => {
+    workoutSectionsFor(bareLevel).forEach((s) => {
       copied[s.key] = previous[s.key] || "";
     });
     setDailyWorkoutForm(copied);
-    setDailyWorkoutSets(previous.sets || blankWorkoutSets(dailyWorkoutLevel));
+    setDailyWorkoutSets(previous.sets || blankWorkoutSets(bareLevel));
     setDailyWorkoutNotes(previous.coachNotes || "");
     setDailyWorkoutEquipment(previous.equipment || []);
   };
@@ -8632,14 +8754,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     setDuplicateMessage("");
     try {
       const all = await loadCollection(STORE_KEYS.workouts);
-      const idx = all.findIndex((w) => w.date === duplicateTargetDate && w.level === dailyWorkoutLevel);
+      const idx = all.findIndex((w) => w.date === duplicateTargetDate && trainingRecordMatchesGroup(w, dailyWorkoutLevel));
+      const bareLevel = bareLevelFromGroupKey(dailyWorkoutLevel);
       const record = {
         id: idx === -1 ? genId() : all[idx].id,
         date: duplicateTargetDate,
-        level: dailyWorkoutLevel,
+        level: bareLevel,
+        groupKey: dailyWorkoutLevel,
         ...dailyWorkoutForm,
         sets: dailyWorkoutSets,
-        totalDistance: workoutTotalMeters(dailyWorkoutSets, dailyWorkoutLevel),
+        totalDistance: workoutTotalMeters(dailyWorkoutSets, bareLevel),
         coachNotes: dailyWorkoutNotes,
         equipment: dailyWorkoutEquipment,
         status: dailyWorkoutStatus,
@@ -8650,7 +8774,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       const next = idx === -1 ? [...all, record] : all.map((w, i) => (i === idx ? record : w));
       await saveCollection(STORE_KEYS.workouts, next);
       setDailyWorkouts(next);
-      logActivity(accountName, role, "Duplicated daily training plan", `${dailyWorkoutLevel} — to ${duplicateTargetDate}`);
+      logActivity(accountName, role, "Duplicated daily training plan", `${trainingGroupLabel(dailyWorkoutLevel)} — to ${duplicateTargetDate}`);
       setDuplicateMessage(`Copied to ${duplicateTargetDate}.`);
       setTimeout(() => setDuplicateMessage(""), 3000);
     } catch (e) {
@@ -8667,14 +8791,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     setDailyWorkoutSaved(false);
     try {
       const all = await loadCollection(STORE_KEYS.workouts);
-      const idx = all.findIndex((w) => w.date === dailyWorkoutDate && w.level === dailyWorkoutLevel);
+      const idx = all.findIndex((w) => w.date === dailyWorkoutDate && trainingRecordMatchesGroup(w, dailyWorkoutLevel));
+      const bareLevel = bareLevelFromGroupKey(dailyWorkoutLevel);
       const record = {
         id: idx === -1 ? genId() : all[idx].id,
         date: dailyWorkoutDate,
-        level: dailyWorkoutLevel,
+        level: bareLevel,
+        groupKey: dailyWorkoutLevel,
         ...dailyWorkoutForm,
         sets: dailyWorkoutSets,
-        totalDistance: workoutTotalMeters(dailyWorkoutSets, dailyWorkoutLevel),
+        totalDistance: workoutTotalMeters(dailyWorkoutSets, bareLevel),
         coachNotes: dailyWorkoutNotes,
         equipment: dailyWorkoutEquipment,
         status: dailyWorkoutStatus,
@@ -8685,7 +8811,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       const next = idx === -1 ? [...all, record] : all.map((w, i) => (i === idx ? record : w));
       await saveCollection(STORE_KEYS.workouts, next);
       setDailyWorkouts(next);
-      logActivity(accountName, role, "Saved daily training plan", `${dailyWorkoutLevel} — ${dailyWorkoutDate}`);
+      logActivity(accountName, role, "Saved daily training plan", `${trainingGroupLabel(dailyWorkoutLevel)} — ${dailyWorkoutDate}`);
       setDailyWorkoutSaved(true);
       setTimeout(() => setDailyWorkoutSaved(false), 2500);
     } finally {
@@ -11855,11 +11981,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const swimmerIsInProgramScope = useCallback((s) => {
     if (role === "admin" || (!programAccess.length && !levelAccess.length)) {
       // Preserve the old technical levelRestriction as a backwards-compatible scope.
-      if (role === "technical" && myAccount?.levelRestriction) return s.level === myAccount.levelRestriction;
+      if (role === "technical" && myAccount?.levelRestriction) return legacyCompatibleLevelOf(s) === myAccount.levelRestriction;
       return true;
     }
-    if (levelAccess.length && levelAccess.includes(s.level)) return true;
-    if (programAccess.length) return programAccess.some((p) => levelBelongsToProgram(s.level, p));
+    if (levelAccess.length && levelAccess.includes(legacyCompatibleLevelOf(s))) return true;
+    if (programAccess.length) return programAccess.some((p) => levelBelongsToProgram(legacyCompatibleLevelOf(s), p));
     return false;
   }, [role, programAccess, levelAccess, myAccount]);
 
@@ -12020,6 +12146,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   };
 
   const [scheduleDayFilter, setScheduleDayFilter] = useState(dayGroupForToday() || DAY_GROUPS[0].id);
+  const [scheduleViewMode, setScheduleViewMode] = useState("regular"); // "regular" | "baby" — Baby coaches get their own separate view, away from the regular coach grid
+  const [babyScheduleDay, setBabyScheduleDay] = useState(dayGroupForToday() || DAY_GROUPS[0].id);
   const [scheduleTimeFilter, setScheduleTimeFilter] = useState("all"); // "all" or one specific time
   // An array of selected levels, or ["all"] meaning every level — was a
   // single string, now multi-select so e.g. "Star 3 + Star 4 + Team" can
@@ -12173,6 +12301,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         const times = scheduleLevelIsBabyOnly ? babyTimes : regularTimes;
         if (times.length === 0) return "";
         const activeCoaches = coaches
+          .filter((c) => !c.isBabyCoach) // dedicated Baby coaches have their own separate schedule
           .filter((c) => !(c.offDays || []).includes(dayGroup.id))
           .filter((c) => {
             if (scheduleLevelIsAll) return true;
@@ -12202,12 +12331,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 // Any Baby time strictly between this column and the
                 // next one (or, for the last column, any Baby time after
                 // it) belongs visually inside THIS cell — it has nowhere
-                // else on this narrower grid to be shown.
+                // else on this narrower grid to be shown. The first
+                // column also picks up anything EARLIER than it.
                 let extraBabyLines = "";
                 if (!scheduleLevelIsBabyOnly) {
                   const nextColMin = ti + 1 < times.length ? timeToMinutes(times[ti + 1]) : Infinity;
+                  const lowerBoundMin = ti === 0 ? -Infinity : timeToMinutes(t);
                   const inBetweenBabyTimes = babyTimes.filter(
-                    (bt) => timeToMinutes(bt) > timeToMinutes(t) && timeToMinutes(bt) < nextColMin
+                    (bt) => timeToMinutes(bt) !== timeToMinutes(t) && timeToMinutes(bt) > lowerBoundMin && timeToMinutes(bt) < nextColMin
                   );
                   extraBabyLines = inBetweenBabyTimes
                     .map((bt) => (coachBookingsById[c.id] || []).find((b) => b.day === dayGroup.id && b.time === bt))
@@ -12302,21 +12433,25 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       // pending nextSchedule pre-booked for it.
       const inSessionAll = [];
       all.forEach((s) => {
-        const hasMonthly = !!s.monthlySchedules?.[scheduleMonth];
-        if (!hasMonthly && (s.scheduleMonth || monthKey()) === scheduleMonth) {
-          if (s.day === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time === scheduleTimeFilter)) {
-            inSessionAll.push({ swimmer: s, time: s.time, coachId: s.coachId, sessionType: s.sessionType });
-          }
-          if (s.day2 === scheduleDayFilter && (scheduleTimeFilter === "all" || s.time2 === scheduleTimeFilter) && !(s.day2 === s.day && s.time2 === s.time)) {
-            inSessionAll.push({ swimmer: s, time: s.time2, coachId: s.coachId2, sessionType: s.sessionType2 });
-          }
-        }
+        // Single source of truth for both sessions: getMonthlySchedule
+        // already resolves the right record for this month (an explicit
+        // monthlySchedules entry, a pending nextSchedule, or the ongoing
+        // top-level day/time), and getDistinctSecondSession only returns
+        // a second entry when it's genuinely a different day+time. A
+        // separate manual check against the raw top-level day/day2
+        // fields used to run ALONGSIDE this one for any swimmer with no
+        // explicit monthlySchedules entry yet (the common case) — since
+        // getMonthlySchedule resolves to those exact same top-level
+        // fields in that situation, every such swimmer was silently
+        // pushed twice and counted twice on the exported roster.
         const ms = getMonthlySchedule(s, scheduleMonth);
-        if (ms && ms.day === scheduleDayFilter && (scheduleTimeFilter === "all" || ms.time === scheduleTimeFilter)) {
+        if (!ms) return;
+        if (ms.day === scheduleDayFilter && (scheduleTimeFilter === "all" || ms.time === scheduleTimeFilter)) {
           inSessionAll.push({ swimmer: s, time: ms.time, coachId: ms.coachId, sessionType: ms.sessionType, classId: ms.classId, substituteCoachId: ms.substituteCoachId, substituteDate: ms.substituteDate });
         }
-        if (ms && ms.day2 === scheduleDayFilter && (scheduleTimeFilter === "all" || ms.time2 === scheduleTimeFilter) && !(ms.day2 === ms.day && ms.time2 === ms.time)) {
-          inSessionAll.push({ swimmer: s, time: ms.time2, coachId: ms.coachId2, sessionType: ms.sessionType2, classId: ms.classId, substituteCoachId: ms.substituteCoachId, substituteDate: ms.substituteDate });
+        const second = getDistinctSecondSession(ms);
+        if (second && second.day === scheduleDayFilter && (scheduleTimeFilter === "all" || second.time === scheduleTimeFilter)) {
+          inSessionAll.push({ swimmer: s, time: second.time, coachId: second.coachId, sessionType: second.sessionType, classId: second.classId, substituteCoachId: ms.substituteCoachId, substituteDate: ms.substituteDate });
         }
       });
       // Respects the same "All levels" / "Baby only" / etc. filter as the
@@ -14080,15 +14215,40 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           if (branchRestriction) q = q.eq("branch", branchRestriction);
           else if (branchFilter !== "all") q = q.eq("branch", branchFilter);
           // Program/level scope is a hard data boundary for staff accounts.
+          // scopedLevels is a list of OLD-style legacy level names (that's
+          // all levelAccess/programAccess have ever understood) — matching
+          // the "level" column alone would miss any swimmer who's since
+          // moved onto the Programs structure, since their level column is
+          // frozen at whatever it was before migration. The extra OR clause
+          // below re-admits exactly the swimmers legacyCompatibleLevelOf()
+          // would also allow client-side (see swimmerIsInProgramScope) —
+          // Learn to swim / Development team kept their old level names
+          // unchanged, so their Program Level matches a scoped name
+          // directly; Baby's legacy equivalent is coarse ("Baby" covers
+          // every Baby sub-level, since Baby had no sub-levels before).
+          // Pre team / Ladies / Adults have no legacy equivalent, so a
+          // scope authored before they existed still can't reach them here
+          // — same limit as the client-side resolver.
           if (role !== "admin" && (programAccess.length || levelAccess.length)) {
             const scopedLevels = [...new Set([
               ...levelAccess,
               ...programAccess.flatMap((program) => PROGRAM_LEVEL_SCOPE[program] || []),
             ])];
-            if (scopedLevels.length) q = q.in("level", scopedLevels);
-            else q = q.eq("level", "__NO_ACCESS__");
+            if (scopedLevels.length) {
+              const migratedLevelNames = scopedLevels.filter((l) => l !== "Baby");
+              const orClauses = [`level.in.(${scopedLevels.join(",")})`];
+              if (scopedLevels.includes("Baby")) orClauses.push("data->>program.eq.baby");
+              if (migratedLevelNames.length) {
+                orClauses.push(`and(data->>program.in.(learn-to-swim,development-team),data->>programLevel.in.(${migratedLevelNames.join(",")}))`);
+              }
+              q = q.or(orClauses.join(","));
+            } else q = q.eq("level", "__NO_ACCESS__");
           } else if (role === "technical" && myAccount?.levelRestriction && levelFilter === "all") {
-            q = q.eq("level", myAccount.levelRestriction);
+            if (myAccount.levelRestriction === "Baby") {
+              q = q.or(`level.eq.Baby,data->>program.eq.baby`);
+            } else {
+              q = q.or(`level.eq.${myAccount.levelRestriction},and(data->>program.in.(learn-to-swim,development-team),data->>programLevel.eq.${myAccount.levelRestriction})`);
+            }
           }
           if (paymentStatusFilter === "paid") {
             q = q.filter("data->paidMonths", "cs", JSON.stringify([paymentMonthFilter]));
@@ -17165,6 +17325,31 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
       {tab === "schedule" && isTabEnabled("schedule") && (
         <div>
+          <div className="flex items-center gap-2 mb-4">
+            <button
+              onClick={() => setScheduleViewMode("regular")}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold ${scheduleViewMode === "regular" ? "bg-sky-950 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+            >
+              Regular schedule
+            </button>
+            <button
+              onClick={() => setScheduleViewMode("baby")}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold ${scheduleViewMode === "baby" ? "bg-amber-500 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+            >
+              Baby schedule
+            </button>
+          </div>
+
+          {scheduleViewMode === "baby" && (
+            <BabyScheduleView
+              coaches={coaches}
+              swimmers={swimmers}
+              babyScheduleDay={babyScheduleDay}
+              setBabyScheduleDay={setBabyScheduleDay}
+            />
+          )}
+
+          <div style={{ display: scheduleViewMode === "regular" ? undefined : "none" }}>
           <div className="flex items-center justify-between gap-2 flex-wrap mb-4">
             <p className="text-sm text-slate-500">
               Every coach, every time, at a glance — same idea as the paper sheet, always up to date.
@@ -17394,7 +17579,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       </thead>
                       <tbody>
                         {coaches
-                          .filter((c) => !(c.offDays || []).includes(dayGroup.id))
+                          .filter((c) => !c.isBabyCoach) // dedicated Baby coaches have their own separate schedule
+          .filter((c) => !(c.offDays || []).includes(dayGroup.id))
                           .filter((c) => {
                             if (scheduleLevelIsAll) return true;
                             // Only show a coach row at all if they have at
@@ -17440,12 +17626,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               // Any Baby time strictly between this column
                               // and the next one belongs visually inside
                               // THIS cell — it has nowhere else to be
-                              // shown on this narrower grid.
+                              // shown on this narrower grid. The first
+                              // column also picks up anything EARLIER
+                              // than it (lowerBoundMin is -Infinity only
+                              // there) — a Baby time before the first
+                              // regular column previously had no cell to
+                              // appear in at all.
                               const nextColMin = !scheduleLevelIsBabyOnly && ti + 1 < times.length ? timeToMinutes(times[ti + 1]) : Infinity;
+                              const lowerBoundMin = ti === 0 ? -Infinity : timeToMinutes(t);
                               const inBetweenBabyBookings = scheduleLevelIsBabyOnly
                                 ? []
                                 : babyTimes
-                                    .filter((bt) => timeToMinutes(bt) > timeToMinutes(t) && timeToMinutes(bt) < nextColMin)
+                                    .filter((bt) => timeToMinutes(bt) !== timeToMinutes(t) && timeToMinutes(bt) > lowerBoundMin && timeToMinutes(bt) < nextColMin)
                                     .map((bt) => ({ time: bt, booking: (coachBookingsById[c.id] || []).find((b) => b.day === dayGroup.id && b.time === bt) }))
                                     .filter((x) => x.booking);
                               const babyExtra = inBetweenBabyBookings.length > 0 && (
@@ -17569,6 +17761,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           <p className="text-xs text-slate-400">
             — means that coach has no swimmer booked at that day/time yet (fully open). A green box means there's still room; gray means it's full. Ages shown are whoever's already booked in that slot — hover for the exact list too. Click any slot to see the exact swimmer names counted in it.
           </p>
+          </div>
         </div>
       )}
 
@@ -17827,7 +18020,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           // mis-attributed swimmers to the wrong coach here.
           const myActiveSwimmers = swimmers.filter((s) => {
             const ms = getMonthlySchedule(s, coachPerfMonthKey);
-            return ms && (ms.coachId === c.id || ms.coachId2 === c.id);
+            return monthlyScheduleMatchesCoach(ms, c.id);
           });
           // Deliberately NOT OR'd with a raw top-level coachId/coachId2
           // match — getMonthlySchedule() already falls back to those
@@ -18511,7 +18704,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           // current month.
           const myActiveSwimmers = swimmers.filter((s) => {
             const ms = getMonthlySchedule(s, selectedMonthKey);
-            return ms && (ms.coachId === c.id || ms.coachId2 === c.id);
+            return monthlyScheduleMatchesCoach(ms, c.id);
           });
           // Deliberately NOT OR'd with a raw top-level coachId/coachId2
           // match — getMonthlySchedule() already falls back to those
@@ -18739,7 +18932,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   swimmers.forEach((s) => {
                     if (!s.program) return;
                     const ms = getMonthlySchedule(s, selectedMonthKey);
-                    if (!ms || (ms.coachId !== c.id && ms.coachId2 !== c.id)) return;
+                    if (!monthlyScheduleMatchesCoach(ms, c.id)) return;
                     counts[s.program] = (counts[s.program] || 0) + 1;
                   });
                   return { coach: c, counts, total: Object.values(counts).reduce((a, b) => a + b, 0) };
@@ -18901,7 +19094,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
         const swimmersByLevel = {};
         activeSwimmersNow.forEach((s) => {
-          swimmersByLevel[s.level] = (swimmersByLevel[s.level] || 0) + 1;
+          const label = effectiveLevelLabel(s) || "(no level set)";
+          swimmersByLevel[label] = (swimmersByLevel[label] || 0) + 1;
         });
 
         const frozenCount = swimmers.filter((s) => isFrozen(s)).length;
@@ -22883,8 +23077,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               </div>
 
               {(() => {
-                const totalMeters = workoutTotalMeters(dailyWorkoutSets, dailyWorkoutLevel);
-                const { totals: strokeTotals, grand } = workoutStrokeBreakdown(dailyWorkoutSets, dailyWorkoutLevel);
+                const bareLevel = bareLevelFromGroupKey(dailyWorkoutLevel);
+                const totalMeters = workoutTotalMeters(dailyWorkoutSets, bareLevel);
+                const { totals: strokeTotals, grand } = workoutStrokeBreakdown(dailyWorkoutSets, bareLevel);
                 const matchedWeek = findWeekForDate(dailyWorkoutLevel, dailyWorkoutDate);
                 const loggedSoFar = matchedWeek ? loggedDistanceForWeek(dailyWorkoutLevel, matchedWeek) : 0;
                 const plannedWeek = matchedWeek ? Number(matchedWeek.totalVolume) || 0 : 0;
@@ -22995,14 +23190,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 {templatePickerOpen && (
                   <div className="mb-4 bg-white border border-slate-200 rounded-xl p-3">
                     <div className="flex items-center justify-between mb-2">
-                      <div className="text-xs font-semibold text-slate-500">Templates for {dailyWorkoutLevel}</div>
+                      <div className="text-xs font-semibold text-slate-500">Templates for {bareLevelFromGroupKey(dailyWorkoutLevel)}</div>
                       <button onClick={() => setTemplatePickerOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
                     </div>
-                    {workoutTemplates.filter((t) => t.level === dailyWorkoutLevel).length === 0 ? (
-                      <div className="text-xs text-slate-400 py-2">No templates saved yet for {dailyWorkoutLevel}. Build a workout below, then "Save as template".</div>
+                    {workoutTemplates.filter((t) => t.level === bareLevelFromGroupKey(dailyWorkoutLevel)).length === 0 ? (
+                      <div className="text-xs text-slate-400 py-2">No templates saved yet for {bareLevelFromGroupKey(dailyWorkoutLevel)}. Build a workout below, then "Save as template".</div>
                     ) : (
                       <div className="space-y-1.5">
-                        {workoutTemplates.filter((t) => t.level === dailyWorkoutLevel).map((tpl) => (
+                        {workoutTemplates.filter((t) => t.level === bareLevelFromGroupKey(dailyWorkoutLevel)).map((tpl) => (
                           <div key={tpl.id} className="flex items-center justify-between gap-2 bg-slate-50 rounded-lg px-2.5 py-2">
                             <button onClick={() => applyTemplate(tpl)} className="text-sm text-slate-700 hover:text-sky-900 font-medium text-left flex-1">
                               {tpl.name} <span className="text-xs text-slate-400 font-normal">· {workoutTotalMeters(tpl.sets, tpl.level).toLocaleString()}m</span>
@@ -23015,7 +23210,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   </div>
                 )}
                 <div className="space-y-4">
-                  {workoutSectionsFor(dailyWorkoutLevel).map((section) => (
+                  {workoutSectionsFor(bareLevelFromGroupKey(dailyWorkoutLevel)).map((section) => (
                     <div key={section.key}>
                       <label className="text-xs text-slate-500 mb-1 block">{section.label}</label>
                       <WorkoutSetBuilder
@@ -23073,7 +23268,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     {dailyWorkoutSaving ? "Saving..." : dailyWorkoutSaved ? "Saved ✓" : "Save"}
                   </button>
                   <button
-                    onClick={() => printWorkout({ coachName: dailyWorkoutMeta?.updatedBy || accountName, level: dailyWorkoutLevel, date: dailyWorkoutDate, ...dailyWorkoutForm, sets: dailyWorkoutSets, totalDistance: workoutTotalMeters(dailyWorkoutSets, dailyWorkoutLevel), coachNotes: dailyWorkoutNotes })}
+                    onClick={() => printWorkout({ coachName: dailyWorkoutMeta?.updatedBy || accountName, level: bareLevelFromGroupKey(dailyWorkoutLevel), date: dailyWorkoutDate, ...dailyWorkoutForm, sets: dailyWorkoutSets, totalDistance: workoutTotalMeters(dailyWorkoutSets, bareLevelFromGroupKey(dailyWorkoutLevel)), coachNotes: dailyWorkoutNotes })}
                     className="px-4 py-2.5 rounded-lg bg-white border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-100"
                   >
                     Print
@@ -23106,12 +23301,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               ) : (
                 (() => {
                   const recentForLevel = dailyWorkouts
-                    .filter((w) => w.level === dailyWorkoutLevel)
+                    .filter((w) => trainingRecordMatchesGroup(w, dailyWorkoutLevel))
                     .sort((a, b) => b.date.localeCompare(a.date))
                     .slice(0, 14);
                   return recentForLevel.length > 0 ? (
                     <div className="mt-4">
-                      <div className="text-xs text-slate-400 mb-1.5">Recent plans for {dailyWorkoutLevel}</div>
+                      <div className="text-xs text-slate-400 mb-1.5">Recent plans for {trainingGroupLabel(dailyWorkoutLevel)}</div>
                       <div className="flex flex-wrap gap-1.5">
                         {recentForLevel.map((w) => (
                           <button
@@ -24914,6 +25109,109 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 }
 
 /* ============================================================
+   Baby schedule — a separate, dedicated grid for coaches who only
+   teach Baby classes. Deliberately much simpler than the regular
+   coach grid: every cell has at most ONE swimmer (Baby classes are
+   always 1-on-1), so there's no need for the regular grid's
+   capacity/count math, click-through "see the list of names" modal,
+   or the off-column "extra line" trick that grid uses to fold Baby
+   bookings into an hourly cell — here every column already IS a
+   Baby time.
+   ============================================================ */
+function BabyScheduleView({ coaches, swimmers, babyScheduleDay, setBabyScheduleDay }) {
+  const babyCoaches = coaches.filter((c) => c.isBabyCoach);
+  const babyTimes = getTimeOptions(BRANCHES[0].id, babyScheduleDay, "Baby")
+    .slice()
+    .sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
+
+  // Finds whichever swimmer occupies this Baby coach's slot on this day —
+  // checks both a swimmer's primary session and their distinct second
+  // session, same as everywhere else in the app this question is asked.
+  const bookingFor = (coachId, time) => {
+    return swimmers.find((s) => {
+      const ms = getMonthlySchedule(s, monthKey());
+      if (!ms) return false;
+      if (ms.day === babyScheduleDay && ms.time === time && ms.coachId === coachId) return true;
+      const second = getDistinctSecondSession(ms);
+      return second?.day === babyScheduleDay && second?.time === time && second?.coachId === coachId;
+    });
+  };
+
+  return (
+    <div>
+      <div className="mb-4">
+        <select
+          value={babyScheduleDay}
+          onChange={(e) => setBabyScheduleDay(e.target.value)}
+          className="border border-slate-200 rounded-lg py-2 px-3 text-sm outline-none focus:border-sky-900 bg-white"
+        >
+          {DAY_GROUPS.map((d) => (
+            <option key={d.id} value={d.id}>{d.label}</option>
+          ))}
+        </select>
+      </div>
+
+      {babyCoaches.length === 0 ? (
+        <div className="text-center text-slate-400 py-16">
+          No coaches marked as "Baby coach" yet — edit a coach in the Coaches tab and check "Baby coach" to see them here.
+        </div>
+      ) : babyTimes.length === 0 ? (
+        <div className="text-center text-slate-400 py-16">
+          No Baby session times configured for this day yet — set them in Settings → Skills & Levels → Baby session times.
+        </div>
+      ) : (
+        <div className="overflow-x-auto border border-amber-200 rounded-xl">
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr className="bg-amber-50">
+                <th className="text-left px-3 py-2 font-semibold text-amber-800 sticky left-0 bg-amber-50 whitespace-nowrap">
+                  Baby coach
+                </th>
+                {babyTimes.map((t) => (
+                  <th key={t} className="px-2 py-2 font-semibold text-amber-800 whitespace-nowrap text-center">
+                    {t}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {babyCoaches.map((c) => (
+                <tr key={c.id} className="border-t border-amber-100">
+                  <td className="px-3 py-2 font-medium text-slate-800 sticky left-0 bg-white whitespace-nowrap">
+                    {c.name}
+                  </td>
+                  {babyTimes.map((t) => {
+                    const swimmer = bookingFor(c.id, t);
+                    if (!swimmer) {
+                      return (
+                        <td key={t} className="px-2 py-2 text-center text-slate-300">
+                          —
+                        </td>
+                      );
+                    }
+                    return (
+                      <td key={t} className="px-2 py-2 text-center">
+                        <div
+                          className="rounded px-1.5 py-1 text-[10px] leading-tight font-medium bg-amber-100 text-amber-800"
+                          title={`${swimmer.name}${swimmer.age != null ? ` — age ${swimmer.age}` : ""}`}
+                        >
+                          {swimmer.name}
+                          {swimmer.age != null && <div className="opacity-70">Age: {swimmer.age}</div>}
+                        </div>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
    Coach registration form (used for both add & edit)
    ============================================================ */
 function CoachForm({ initial, onSave, onCancel }) {
@@ -24928,6 +25226,7 @@ function CoachForm({ initial, onSave, onCancel }) {
   const [overtimeHourlyRate, setOvertimeHourlyRate] = useState(initial?.overtimeHourlyRate || "");
   const [showOwnSalary, setShowOwnSalary] = useState(initial?.showOwnSalary || false);
   const [canWriteWorkouts, setCanWriteWorkouts] = useState(initial?.canWriteWorkouts || false);
+  const [isBabyCoach, setIsBabyCoach] = useState(initial?.isBabyCoach || false);
   const [newOffSlotDay, setNewOffSlotDay] = useState(DAY_GROUPS[0].id);
   const [newOffSlotTime, setNewOffSlotTime] = useState("");
   const [error, setError] = useState("");
@@ -24964,6 +25263,7 @@ function CoachForm({ initial, onSave, onCancel }) {
         offDays,
         offSlots,
         canWriteWorkouts,
+        isBabyCoach,
         expectedStartTime: expectedStartTime || null,
         monthlySalary: monthlySalary ? Number(monthlySalary) : null,
         overtimeHourlyRate: overtimeHourlyRate ? Number(overtimeHourlyRate) : null,
@@ -25137,6 +25437,18 @@ function CoachForm({ initial, onSave, onCancel }) {
           />
           <label htmlFor="coach-can-write-workouts" className="text-sm text-slate-600">
             Let this coach write and print daily training plans (Warm up / Main set / Cool down)
+          </label>
+        </div>
+        <div className="sm:col-span-2 flex items-center gap-2 bg-amber-50 rounded-lg px-3 py-2.5">
+          <input
+            type="checkbox"
+            id="coach-is-baby-coach"
+            checked={isBabyCoach}
+            onChange={(e) => setIsBabyCoach(e.target.checked)}
+            className="w-4 h-4"
+          />
+          <label htmlFor="coach-is-baby-coach" className="text-sm text-slate-600">
+            Baby coach — teaches only Baby classes, shown on the separate Baby schedule instead of the regular one
           </label>
         </div>
       </div>
@@ -25942,7 +26254,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
       const inSlot = all
         .filter((s) => {
           if (BRANCHES.length > 1 && s.branch !== branch) return false;
-          if (effectiveLevel && s.level !== effectiveLevel) return false;
+          if (effectiveLevel && legacyCompatibleLevelOf(s) !== effectiveLevel) return false;
           const ms = getMonthlySchedule(s, thisMonth);
           if (!ms) return false;
           return (ms.day === dayGroup && ms.time === time) || (ms.day2 === dayGroup && ms.time2 === time);
@@ -27011,8 +27323,8 @@ function CoachView({ onExit, preAuthedCoach = null }) {
   const canEditAssessments = !!coachPermissions.editAssessments;
   const canFollowProgram = coachProgramAccess.length > 0 || coachLevelAccess.length > 0;
   const coachSwimmerInScope = useCallback((s) => {
-    if (coachLevelAccess.length && coachLevelAccess.includes(s.level)) return true;
-    if (coachProgramAccess.length) return coachProgramAccess.some((program) => levelBelongsToProgram(s.level, program));
+    if (coachLevelAccess.length && coachLevelAccess.includes(legacyCompatibleLevelOf(s))) return true;
+    if (coachProgramAccess.length) return coachProgramAccess.some((program) => levelBelongsToProgram(legacyCompatibleLevelOf(s), program));
     return false;
   }, [coachProgramAccess, coachLevelAccess]);
 
@@ -27052,7 +27364,7 @@ function CoachView({ onExit, preAuthedCoach = null }) {
       // currently teach (from their own swimmer roster), so reassigning
       // who runs a squad never leaves anyone looking at the wrong plan
       // or a blank one.
-      const myLevels = new Set(swimmers.map((s) => s.level).filter(Boolean));
+      const myLevels = new Set(swimmers.map((s) => trainingGroupOf(s)).filter(Boolean));
       // Only Published plans reach the coach — a Draft is still being
       // put together (or prepared ahead of time and deliberately not
       // announced yet). A plan saved before this status existed at all
@@ -27101,8 +27413,8 @@ function CoachView({ onExit, preAuthedCoach = null }) {
   // workout's level/date, rather than asked for again — the same data
   // already recorded when attendance was taken.
   const saveWorkoutReview = async (workout, reviewInput) => {
-    const presentCount = swimmers.filter((s) => s.level === workout.level && s.attendance?.[workout.date] === "present").length;
-    const totalCount = swimmers.filter((s) => s.level === workout.level).length;
+    const presentCount = swimmers.filter((s) => trainingGroupOf(s) === workout.level && s.attendance?.[workout.date] === "present").length;
+    const totalCount = swimmers.filter((s) => trainingGroupOf(s) === workout.level).length;
     const review = {
       actualVolume: Number(reviewInput.actualVolume) || 0,
       rpe: Number(reviewInput.rpe) || 0,
@@ -27142,7 +27454,7 @@ function CoachView({ onExit, preAuthedCoach = null }) {
     if (!authedCoach) return;
     (async () => {
       const all = await loadCollection(STORE_KEYS.weeklyVolumes);
-      const myLevels = new Set(swimmers.map((s) => s.level).filter(Boolean));
+      const myLevels = new Set(swimmers.map((s) => trainingGroupOf(s)).filter(Boolean));
       const todayKey = todayISO();
       const relevant = all.filter((w) => {
         if (!myLevels.has(w.level)) return false;
@@ -29578,7 +29890,7 @@ function ParentPortalView({ onRenew, onExit }) {
 
         <div className="bg-white rounded-2xl p-6 mb-4">
           <h2 className="text-2xl font-bold text-slate-900 tracking-tight">{s.name}</h2>
-          <p className="text-sm text-slate-500 mt-0.5">{s.age} yrs · {s.level}</p>
+          <p className="text-sm text-slate-500 mt-0.5">{s.age} yrs · {effectiveLevelLabel(s)}</p>
           {skillPct !== null && (
             <p className="text-sm text-slate-500 mt-1">⭐ {skillPct}% skills completed</p>
           )}
@@ -29604,7 +29916,7 @@ function ParentPortalView({ onRenew, onExit }) {
         </div>
 
         <div className="bg-slate-100 rounded-2xl p-6 mb-4">
-          <h3 className="font-bold text-slate-900 mb-1">Skill progress — {s.level}</h3>
+          <h3 className="font-bold text-slate-900 mb-1">Skill progress — {effectiveLevelLabel(s)}</h3>
           <p className="text-xs text-slate-400 mb-3">{mastered} / {skills.length} skills mastered</p>
           {skills.length > 0 && (
             <SkillTreePath skills={skills} ratings={getSkillRatingsForSwimmer(s) || {}} editable={false} />
