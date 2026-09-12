@@ -12057,20 +12057,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     setExportingCoachGrid(true);
     try {
       const daySections = DAY_GROUPS.map((dayGroup) => {
-        // Baby runs on its own separate set of times (BABY_TIME_SLOTS),
-        // not derived from the regular ones at all — merging both in
-        // here (unless specifically viewing "Baby only", which keeps
-        // just Baby's times as before) is what actually gives a Baby
-        // session a column to appear under. Without this, Baby sessions
-        // had no column at all in the normal "All levels" view and were
-        // simply invisible, even though they're real bookings.
-        const times = (
-          scheduleLevelIsBabyOnly
-            ? getTimeOptions(BRANCHES[0].id, dayGroup.id, "Baby")
-            : [...new Set([...getTimeOptions(BRANCHES[0].id, dayGroup.id, null), ...getTimeOptions(BRANCHES[0].id, dayGroup.id, "Baby")])]
-        )
-          .slice()
-          .sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
+        const regularTimes = getTimeOptions(BRANCHES[0].id, dayGroup.id, null).slice().sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
+        const babyTimes = getTimeOptions(BRANCHES[0].id, dayGroup.id, "Baby").slice().sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
+        // Baby runs on its own separate half-hour times, most of which
+        // don't land on a regular hourly column at all — adding them ALL
+        // as their own columns (an earlier attempt at this) made the
+        // whole table much wider for every coach, most of whom have no
+        // Baby bookings at all. Keeping the columns to the regular times
+        // and instead folding any Baby booking that falls BETWEEN two
+        // columns into the nearest cell (as an extra line, not a whole
+        // new column) keeps the table its normal width while still
+        // making an off-hour Baby booking visible instead of invisible.
+        const times = scheduleLevelIsBabyOnly ? babyTimes : regularTimes;
         if (times.length === 0) return "";
         const activeCoaches = coaches
           .filter((c) => !(c.offDays || []).includes(dayGroup.id))
@@ -12086,7 +12084,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         const bodyRows = activeCoaches
           .map((c) => {
             const cells = times
-              .map((t) => {
+              .map((t, ti) => {
                 if (isCoachClosedAt(c, dayGroup.id, t)) {
                   return `<td class="closed">Closed</td>`;
                 }
@@ -12099,7 +12097,23 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         if (filteredNames.length === 0) return null;
                         return { ...rawBooking, names: filteredNames, count: filteredNames.length, levels: [...new Set(filteredNames.map((n) => n.level))] };
                       })();
-                if (!booking) return `<td class="open">—</td>`;
+                // Any Baby time strictly between this column and the
+                // next one (or, for the last column, any Baby time after
+                // it) belongs visually inside THIS cell — it has nowhere
+                // else on this narrower grid to be shown.
+                let extraBabyLines = "";
+                if (!scheduleLevelIsBabyOnly) {
+                  const nextColMin = ti + 1 < times.length ? timeToMinutes(times[ti + 1]) : Infinity;
+                  const inBetweenBabyTimes = babyTimes.filter(
+                    (bt) => timeToMinutes(bt) > timeToMinutes(t) && timeToMinutes(bt) < nextColMin
+                  );
+                  extraBabyLines = inBetweenBabyTimes
+                    .map((bt) => (coachBookingsById[c.id] || []).find((b) => b.day === dayGroup.id && b.time === bt))
+                    .filter(Boolean)
+                    .map((b) => `<div class="baby-extra">${escapeHtml(b.time)}: ${b.count}/${effectiveSlotCapacity(b.sessionType, "Baby", c.id, dayGroup.id, b.time)} Baby — ${escapeHtml(b.names.map((n) => n.name).join(", "))}</div>`)
+                    .join("");
+                }
+                if (!booking) return extraBabyLines ? `<td class="hasroom">${extraBabyLines}</td>` : `<td class="open">—</td>`;
                 const specialLevel = booking.levels.find((lv) => ["Exp", "Exp 2", "Exp 3", ...TEAM_SQUAD_LEVELS].includes(lv));
                 // Representative program+level for this slot, so the
                 // displayed capacity matches what the booking form
@@ -12114,7 +12128,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   scheduleLevelIsBabyOnly
                     ? booking.names.map((n) => n.name).join(", ")
                     : [...booking.levels].join(", ");
-                return `<td class="${full ? "full" : "hasroom"}">${booking.count}/${capacity}<br><span class="lvl">${escapeHtml(secondLine)}</span></td>`;
+                return `<td class="${full ? "full" : "hasroom"}">${booking.count}/${capacity}<br><span class="lvl">${escapeHtml(secondLine)}</span>${extraBabyLines}</td>`;
               })
               .join("");
             return `<tr><td class="coachname">${escapeHtml(c.name)}</td>${cells}</tr>`;
@@ -12140,6 +12154,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           .hasroom { background: #f0fdf4; color: #15803d; font-weight: 600; }
           .full { background: #f1f5f9; color: #64748b; font-weight: 600; }
           .lvl { font-weight: 400; color: #94a3b8; font-size: 9px; }
+          .baby-extra { font-weight: 400; color: #b45309; font-size: 8px; margin-top: 3px; padding-top: 3px; border-top: 1px dashed #fde68a; }
           .day-block { page-break-inside: avoid; break-inside: avoid; }
           h1 { font-size: 18px; margin-bottom: 4px; }
           .sub { font-size: 12px; color: #64748b; margin-bottom: 20px; }
@@ -17227,25 +17242,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <div className="text-center text-slate-400 py-16">No coaches added yet</div>
           ) : (
             (scheduleDayFilter === "full-week" ? DAY_GROUPS : DAY_GROUPS.filter((d) => d.id === scheduleDayFilter)).map((dayGroup) => {
-              // Baby sessions run 30 minutes, half the length of a normal
-              // slot, so the "Baby only" view needs a column for every
-              // half-hour (getTimeOptions is the exact same expansion the
-              // registration form already uses to offer those extra
-              // half-hour times) — every other level keeps the plain
-              // hourly columns.
-              // Baby runs on its own separate set of times, not derived
-              // from the regular ones at all — merging both in here
-              // (unless specifically viewing "Baby only", which keeps
-              // just Baby's times as before) is what gives a Baby
-              // session an actual column to appear under, instead of
-              // being invisible in the normal "All levels" view.
-              const times = (
-                scheduleLevelIsBabyOnly
-                  ? getTimeOptions(BRANCHES[0].id, dayGroup.id, "Baby")
-                  : [...new Set([...getTimeOptions(BRANCHES[0].id, dayGroup.id, null), ...getTimeOptions(BRANCHES[0].id, dayGroup.id, "Baby")])]
-              )
-                .slice()
-                .sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
+              const regularTimes = getTimeOptions(BRANCHES[0].id, dayGroup.id, null).slice().sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
+              const babyTimes = getTimeOptions(BRANCHES[0].id, dayGroup.id, "Baby").slice().sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
+              // Baby runs on its own separate half-hour times, most of
+              // which don't land on a regular hourly column at all —
+              // adding them ALL as their own columns made the whole
+              // table much wider for every coach, most of whom have no
+              // Baby bookings at all. Keeping the columns to the regular
+              // times and instead folding any Baby booking that falls
+              // BETWEEN two columns into the nearest cell (as a small
+              // extra line, not a whole new column) keeps the table its
+              // normal width while still making an off-hour Baby booking
+              // visible instead of invisible.
+              const times = scheduleLevelIsBabyOnly ? babyTimes : regularTimes;
               if (times.length === 0) return null;
               return (
                 <div key={dayGroup.id} className="mb-8">
@@ -17282,7 +17291,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                             <td className="px-3 py-2 font-medium text-slate-800 sticky left-0 bg-white whitespace-nowrap">
                               {c.name}
                             </td>
-                            {times.map((t) => {
+                            {times.map((t, ti) => {
                               if (isCoachClosedAt(c, dayGroup.id, t)) {
                                 return (
                                   <td key={t} className="px-2 py-2 text-center">
@@ -17308,6 +17317,41 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                       if (filteredNames.length === 0) return null;
                                       return { ...rawBooking, names: filteredNames, count: filteredNames.length, levels: [...new Set(filteredNames.map((n) => n.level))] };
                                     })();
+                              // Any Baby time strictly between this column
+                              // and the next one belongs visually inside
+                              // THIS cell — it has nowhere else to be
+                              // shown on this narrower grid.
+                              const nextColMin = !scheduleLevelIsBabyOnly && ti + 1 < times.length ? timeToMinutes(times[ti + 1]) : Infinity;
+                              const inBetweenBabyBookings = scheduleLevelIsBabyOnly
+                                ? []
+                                : babyTimes
+                                    .filter((bt) => timeToMinutes(bt) > timeToMinutes(t) && timeToMinutes(bt) < nextColMin)
+                                    .map((bt) => ({ time: bt, booking: (coachBookingsById[c.id] || []).find((b) => b.day === dayGroup.id && b.time === bt) }))
+                                    .filter((x) => x.booking);
+                              const babyExtra = inBetweenBabyBookings.length > 0 && (
+                                <div className="mt-1 pt-1 border-t border-dashed border-amber-200 space-y-0.5">
+                                  {inBetweenBabyBookings.map(({ time: bt, booking: bb }) => (
+                                    <button
+                                      key={bt}
+                                      onClick={() =>
+                                        setSlotDetailModal({
+                                          coachName: c.name,
+                                          coachId: c.id,
+                                          day: dayGroup.label,
+                                          dayId: dayGroup.id,
+                                          time: bt,
+                                          booking: bb,
+                                          capacity: effectiveSlotCapacity(bb.sessionType, "Baby", c.id, dayGroup.id, bt),
+                                        })
+                                      }
+                                      className="block w-full text-[9px] leading-tight text-amber-700 hover:underline"
+                                      title={`Baby — ${bt}`}
+                                    >
+                                      {bt}: {bb.count}/{effectiveSlotCapacity(bb.sessionType, "Baby", c.id, dayGroup.id, bt)} Baby
+                                    </button>
+                                  ))}
+                                </div>
+                              );
                               const cellMakeups = upcomingMakeups.filter(
                                 (um) =>
                                   um.session.coachId === c.id &&
@@ -17330,7 +17374,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               if (!booking) {
                                 return (
                                   <td key={t} className="px-2 py-2 text-center text-slate-300">
-                                    —{makeupBadge}
+                                    —{makeupBadge}{babyExtra}
                                   </td>
                                 );
                               }
@@ -17359,6 +17403,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                     )}
                                   </button>
                                   {makeupBadge}
+                                  {babyExtra}
                                 </td>
                               );
                             })}
