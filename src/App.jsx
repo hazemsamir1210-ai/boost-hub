@@ -571,18 +571,14 @@ function inferPlanId(swimmer) {
   if (swimmer?.planId && PLAN_PRICES[swimmer.planId] != null) return swimmer.planId;
   // Only reached when a swimmer has no planId stored at all (rare — the
   // swimmer form always sets one on save, program-suggested or not).
-  // Checks the configured Programs-structure default first, so even this
-  // fallback path is program-aware rather than only ever falling back to
-  // the old level-based rules below.
-  if (swimmer?.program && swimmer?.programLevel) {
-    const configuredPlanId = PROGRAM_LEVEL_DEFAULT_PLAN[programLevelSkillsKey(swimmer.program, swimmer.programLevel)];
-    if (configuredPlanId && PLAN_PRICES[configuredPlanId] != null) return configuredPlanId;
-  }
-  // The direct replacement for the old built-in private/semi-private/
-  // group plans: whichever real plan the admin has configured for this
-  // session type (and, for group sessions, this specific level — e.g.
-  // Exp's own price) — configured in Settings, not guessed.
-  const sessionTypePlanId = planIdForSessionType(swimmer?.sessionType, swimmer?.level);
+  // Uses the same Program+Level-first, then sessionType+legacy-level
+  // priority as the live suggestions inside the swimmer form (see
+  // suggestedPlanId), so this fallback path never disagrees with what
+  // the form itself would have suggested.
+  const sessionTypePlanId = suggestedPlanId({
+    program: swimmer?.program, programLevel: swimmer?.programLevel,
+    sessionType: swimmer?.sessionType, level: swimmer?.level,
+  });
   if (sessionTypePlanId && PLAN_PRICES[sessionTypePlanId] != null) return sessionTypePlanId;
   // Nothing configured at all — falls back to whichever real plan
   // happens to be first, so the value returned always matches an actual
@@ -624,8 +620,17 @@ function getMonthlySchedule(swimmer, key) {
   return null;
 }
 
-function classIdForSchedule({ branch, level, day, time, sessionType, month }) {
-  return [month, branch || "", level || "", sessionType || "", day || "", time || ""].join("|");
+// A stable identity string for a specific class slot in a specific month
+// (branch + level + session type + day + time). When the swimmer is on
+// the new Programs structure, uses program::programLevel instead of the
+// frozen legacy level — otherwise two different programs that happen to
+// share a level name (e.g. Development "Star 1" and Competition "Star 1")
+// would resolve to the exact same classId despite being different classes.
+// Mirrors the same program-aware key scheme as programLevelSkillsKey /
+// skillsRatingKeyForSwimmer.
+function classIdForSchedule({ branch, level, program, programLevel, day, time, sessionType, month }) {
+  const levelPart = program && programLevel ? `${program}::${programLevel}` : (level || "");
+  return [month, branch || "", levelPart, sessionType || "", day || "", time || ""].join("|");
 }
 
 // A swimmer's "second session" (day2/time2) is only a genuine SECOND
@@ -878,11 +883,26 @@ const TEAM_SQUAD_LEVELS = ["Star 1", "Star 2", "Star 3", "Star 4", "Team"];
 // as the group to plan for — Level 7/8 (now part of Development team) and
 // Pre team's named teams had nowhere to select at all. This combines all
 // three into one list, computed fresh each call since Pre team's levels
-// are admin-editable.
+// are admin-editable. Each stage is deduped against everything already
+// added before it, so an admin-renamed Pre team level can never silently
+// collide with (and get treated as the same group as) an existing
+// Star/Team squad name or a Development team level.
 function getTrainingGroupOptions() {
   const devTeamExtra = (SWIM_PROGRAMS.find((p) => p.id === "development-team")?.levels || []).filter((l) => !TEAM_SQUAD_LEVELS.includes(l));
-  const preTeamLevels = SWIM_PROGRAMS.find((p) => p.id === "pre-team")?.levels || [];
-  return [...TEAM_SQUAD_LEVELS, ...devTeamExtra, ...preTeamLevels];
+  const usedSoFar = [...TEAM_SQUAD_LEVELS, ...devTeamExtra];
+  const preTeamLevels = (SWIM_PROGRAMS.find((p) => p.id === "pre-team")?.levels || []).filter((l) => !usedSoFar.includes(l));
+  return [...usedSoFar, ...preTeamLevels];
+}
+
+// Which training/squad group a swimmer currently belongs to, for matching
+// against a Training Plan/season's selected group name — their Program
+// Level if they've been migrated onto a Program (Development team/Pre
+// team), otherwise their old-style level. Checks only ONE of the two
+// fields, never level-OR-programLevel, so a migrated swimmer's frozen
+// legacy level (left over from before they moved into a Program) can
+// never wrongly re-match a squad group they've since moved out of.
+function trainingGroupOf(swimmer) {
+  return swimmer?.program ? swimmer?.programLevel : swimmer?.level;
 }
 
 // Star squads plan a session the traditional way (named blocks); Team
@@ -1112,16 +1132,51 @@ function applyCustomSessionTypeDefaultPlan(next) {
 
 // The plan to suggest for a given sessionType + level combo — checks
 // the level-specific override first (e.g. "group" + "Exp"), then falls
-// back to the plain sessionType default.
+// back to the plain sessionType default. Uses its own key-join
+// (sessionType::level) — a different namespace from programLevelSkillsKey
+// (program::programLevel) even though both just join two strings with
+// "::". Only ever reached via suggestedPlanId below AFTER a configured
+// Program+ProgramLevel plan has already been checked and found missing,
+// so this is genuinely the legacy/non-migrated fallback, not a
+// mistaken stand-in for the program key.
+function sessionTypeLevelPlanKey(sessionType, level) {
+  return `${sessionType}::${level || ""}`;
+}
 function planIdForSessionType(sessionType, level) {
   if (!sessionType) return null;
-  const levelKey = programLevelSkillsKey(sessionType, level || "");
+  const levelKey = sessionTypeLevelPlanKey(sessionType, level);
   if (SESSION_TYPE_DEFAULT_PLAN[levelKey]) return SESSION_TYPE_DEFAULT_PLAN[levelKey];
   return SESSION_TYPE_DEFAULT_PLAN[sessionType] || null;
 }
 
+// The single entry point every "what plan should I suggest now" spot in
+// the swimmer form should call — same priority order as inferPlanId
+// above: a configured Program + Program Level default plan wins first
+// (it's what the admin explicitly set for that program/level, regardless
+// of session type), and only when nothing's configured there does it
+// fall back to the plain sessionType (+ legacy level) rules. Before this,
+// the initial "pick a program" suggestion used the program+level default,
+// but changing Session Type afterwards silently re-suggested a plan from
+// the OLD level-based rules instead — so a migrated swimmer's plan could
+// drift back to a legacy price just from flipping session type.
+function suggestedPlanId({ program, programLevel, sessionType, level }) {
+  if (program && programLevel) {
+    const configuredPlanId = PROGRAM_LEVEL_DEFAULT_PLAN[programLevelSkillsKey(program, programLevel)];
+    if (configuredPlanId) return configuredPlanId;
+  }
+  return planIdForSessionType(sessionType, level);
+}
+
 
 function sessionCapacity(sessionType, level, program, programLevel) {
+  // Private and Semi-private are 1-on-1 / 2-on-1 by definition — that's
+  // never something a per-program/level Settings number should be able
+  // to override (a stray "0" typed into Settings for some unrelated
+  // group-sizing purpose would otherwise silently make a coach's Private
+  // slot un-bookable, exactly like it did for Baby swimmers when this
+  // guard didn't exist). Only Group sessions ever take the configured
+  // Programs-structure override below.
+  if (sessionType !== "group") return sessionTypeInfo(sessionType).capacity;
   // A configured Programs-structure capacity takes priority when both
   // program and programLevel are given and a number has actually been
   // set for that combo in Settings — this is the ENFORCEMENT half of the
@@ -1132,8 +1187,8 @@ function sessionCapacity(sessionType, level, program, programLevel) {
     const configured = PROGRAM_LEVEL_CAPACITIES[programLevelSkillsKey(program, programLevel)];
     if (configured != null) return configured;
   }
-  if (sessionType === "group" && ["Exp", "Exp 2", "Exp 3"].includes(level)) return 2;
-  if (sessionType === "group" && TEAM_SQUAD_LEVELS.includes(level)) return TEAM_SQUAD_CAPACITIES[level] || 20;
+  if (["Exp", "Exp 2", "Exp 3"].includes(level)) return 2;
+  if (TEAM_SQUAD_LEVELS.includes(level)) return TEAM_SQUAD_CAPACITIES[level] || 20;
   return sessionTypeInfo(sessionType).capacity;
 }
 
@@ -2814,6 +2869,32 @@ function getSkillsForSwimmer(swimmer) {
   return LEVEL_SKILLS[swimmer?.level] || [];
 }
 
+// The key a swimmer's skill RATINGS ({ skillName: 1-5 }) are filed under
+// inside swimmer.skills — resolved with the exact same priority as
+// getSkillsForSwimmer above, so ratings are always read from (and saved
+// to) whichever key the swimmer's skill list actually came from. Every
+// screen used to read swimmer.skills[swimmer.level] directly, which is
+// the OLD legacy level — for a migrated swimmer that field is frozen on
+// purpose (see effectiveLevelLabel below) and no longer matches the
+// program/level the skill list itself resolves to, so ratings appeared
+// to "reset" to empty after every promotion. Always go through this
+// resolver (or getSkillRatingsForSwimmer) instead of touching
+// swimmer.skills[...] with a raw level anywhere.
+function skillsRatingKeyForSwimmer(swimmer) {
+  if (swimmer?.program && swimmer?.programLevel) {
+    const key = programLevelSkillsKey(swimmer.program, swimmer.programLevel);
+    const programSkills = PROGRAM_LEVEL_SKILLS[key];
+    if (programSkills && programSkills.length > 0) return key;
+  }
+  return swimmer?.level;
+}
+
+// The ratings object to display/edit for a given swimmer — pairs with
+// getSkillsForSwimmer(swimmer) for the matching list of skill names.
+function getSkillRatingsForSwimmer(swimmer) {
+  return swimmer?.skills?.[skillsRatingKeyForSwimmer(swimmer)] || {};
+}
+
 // The level label to actually show for "where this swimmer currently
 // is" — a migrated swimmer's real standing is their program level
 // (level-up only ever advances that, never the old level field, which
@@ -3400,7 +3481,7 @@ function promotedIfDue(swimmer, currentMonthKey) {
     ...swimmer,
     day: day || "", time: time || "", sessionType: sessionType || "group", coachId: coachId || null,
     day2: day2 || "", time2: time2 || "", sessionType2: sessionType2 || "", coachId2: coachId2 || null,
-    classId: classId || classIdForSchedule({ branch: swimmer.branch, level: swimmer.level, day, time, sessionType, month: currentMonthKey }),
+    classId: classId || classIdForSchedule({ branch: swimmer.branch, level: swimmer.level, program: swimmer.program, programLevel: swimmer.programLevel, day, time, sessionType, month: currentMonthKey }),
     substituteCoachId: substituteCoachId || null, substituteDate: substituteDate || "",
     scheduleMonth: currentMonthKey,
     nextSchedule: null,
@@ -4572,7 +4653,7 @@ function computeCoachPerformance(swimmers = [], coachId, feedback = []) {
     const levelSkills = getSkillsForSwimmer(s);
     if (levelSkills.length > 0) {
       skillsTotal += levelSkills.length;
-      masteredTotal += levelSkills.filter((sk) => (s.skills?.[s.level]?.[sk] || 0) >= 5).length;
+      masteredTotal += levelSkills.filter((sk) => (getSkillRatingsForSwimmer(s)?.[sk] || 0) >= 5).length;
     }
     makeupCreditsOwed += Number(s.makeupCredits || 0);
   });
@@ -4735,7 +4816,7 @@ function calculateChurnRisk(swimmer) {
   // "active" (they're not just new).
   const levelSkills = getSkillsForSwimmer(swimmer);
   if (levelSkills.length > 0) {
-    const anyProgress = levelSkills.some((sk) => (swimmer.skills?.[swimmer.level]?.[sk] || 0) > 0);
+    const anyProgress = levelSkills.some((sk) => (getSkillRatingsForSwimmer(swimmer)?.[sk] || 0) > 0);
     const monthsSinceJoined = swimmer.createdAt
       ? Math.floor((today - new Date(swimmer.createdAt)) / (1000 * 60 * 60 * 24 * 30))
       : 0;
@@ -4919,7 +5000,7 @@ function SwimmerProfileModal({ swimmer: s, coaches, onClose, onEditSkill, canEdi
   const coachName = coaches.find((c) => c.id === s.coachId)?.name;
   const dayLabel = DAY_GROUPS.find((d) => d.id === s.day)?.label;
   const skills = getSkillsForSwimmer(s);
-  const mastered = skills.filter((sk) => (s.skills?.[s.level]?.[sk] || 0) >= 5).length;
+  const mastered = skills.filter((sk) => (getSkillRatingsForSwimmer(s)?.[sk] || 0) >= 5).length;
 
   const attendanceEntries = Object.entries(s.attendance || {}).sort((a, b) => b[0].localeCompare(a[0]));
   const presentCount = attendanceEntries.filter(([, status]) => status === "present").length;
@@ -5018,7 +5099,7 @@ function SwimmerProfileModal({ swimmer: s, coaches, onClose, onEditSkill, canEdi
             ) : (
               <SkillTreePath
                 skills={skills}
-                ratings={s.skills?.[s.level] || {}}
+                ratings={getSkillRatingsForSwimmer(s) || {}}
                 editable={canEditSkills}
                 onRate={(skill, n) => onEditSkill(s, skill, n)}
               />
@@ -6323,14 +6404,14 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
     // Baby classes are always 1-on-1, so the session type follows automatically.
     if (newLevel === "Baby") {
       setSessionType("private");
-      const suggested = planIdForSessionType("private", newLevel);
+      const suggested = suggestedPlanId({ program, programLevel, sessionType: "private", level: newLevel });
       if (suggested && PLAN_PRICES[suggested] != null) setPlanId(suggested);
     }
     // Exp / Exp 2 / Exp 3 are small groups — 2 swimmers max, not the usual
     // group size — so this also picks Group for them automatically.
     if (["Exp", "Exp 2", "Exp 3"].includes(newLevel)) {
       setSessionType("group");
-      const suggested = planIdForSessionType("group", newLevel);
+      const suggested = suggestedPlanId({ program, programLevel, sessionType: "group", level: newLevel });
       if (suggested && PLAN_PRICES[suggested] != null) setPlanId(suggested);
     }
   };
@@ -6457,7 +6538,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           planId,
           planName: PLANS.find((p) => p.id === planId)?.name || planId,
           planPrice: PLAN_PRICES[planId] || 0,
-          classId: classIdForSchedule({ branch, level, day, time, sessionType, month: scheduleMonth }),
+          classId: classIdForSchedule({ branch, level, program, programLevel, day, time, sessionType, month: scheduleMonth }),
           substituteCoachId: substituteCoachId || null,
           substituteDate: substituteDate || "",
           monthlySchedules: {
@@ -6465,7 +6546,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
             [scheduleMonth]: {
               day, time, sessionType, coachId: coachId || null, day2: hasSecondSlot ? day2 : "", time2: hasSecondSlot ? time2 : "",
               sessionType2: hasSecondSlot ? sessionType2 : "", coachId2: hasSecondSlot ? coachId2 || null : null,
-              classId: classIdForSchedule({ branch, level, day, time, sessionType, month: scheduleMonth }),
+              classId: classIdForSchedule({ branch, level, program, programLevel, day, time, sessionType, month: scheduleMonth }),
               substituteCoachId: substituteCoachId || null, substituteDate: substituteDate || "", scheduleMonth,
             },
           },
@@ -6505,7 +6586,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
             [scheduleMonth]: {
               day, time, sessionType, coachId: coachId || null, day2: hasSecondSlot ? day2 : "", time2: hasSecondSlot ? time2 : "",
               sessionType2: hasSecondSlot ? sessionType2 : "", coachId2: hasSecondSlot ? coachId2 || null : null,
-              classId: classIdForSchedule({ branch, level, day, time, sessionType, month: scheduleMonth }),
+              classId: classIdForSchedule({ branch, level, program, programLevel, day, time, sessionType, month: scheduleMonth }),
               substituteCoachId: substituteCoachId || null, substituteDate: substituteDate || "", scheduleMonth,
             },
           },
@@ -6515,7 +6596,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           nextSchedule: {
             day, time, sessionType, coachId: coachId || null, day2: hasSecondSlot ? day2 : "", time2: hasSecondSlot ? time2 : "",
             sessionType2: hasSecondSlot ? sessionType2 : "", coachId2: hasSecondSlot ? coachId2 || null : null,
-            classId: classIdForSchedule({ branch, level, day, time, sessionType, month: scheduleMonth }),
+            classId: classIdForSchedule({ branch, level, program, programLevel, day, time, sessionType, month: scheduleMonth }),
             substituteCoachId: substituteCoachId || null, substituteDate: substituteDate || "", scheduleMonth,
           },
         };
@@ -6586,6 +6667,19 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
               // option that doesn't actually exist for Baby (or vice versa).
               const newOptions = getTimeOptions(branch, day, level, newProgram);
               if (!newOptions.includes(time)) setTime(newOptions[0] || "");
+              // Baby classes are always 1-on-1 — same rule handleLevelChange
+              // already enforces for the old Baby level, applied here for
+              // the Program route too. Without this, a swimmer moved onto
+              // Program=Baby could keep whatever Session Type they had
+              // before (often Group), which then mismatches every actual
+              // Baby booking at that coach/slot (all Private) and makes
+              // the coach look wrongly "busy" — or, combined with a
+              // misconfigured capacity, wrongly "free" with a 0 capacity.
+              if (newProgram === "baby") {
+                setSessionType("private");
+                const suggested = suggestedPlanId({ program: newProgram, programLevel: "", sessionType: "private", level });
+                if (suggested && PLAN_PRICES[suggested] != null) setPlanId(suggested);
+              }
             }}
             className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
           >
@@ -6687,7 +6781,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
             onChange={(e) => {
               const newSessionType = e.target.value;
               setSessionType(newSessionType);
-              const suggested = planIdForSessionType(newSessionType, level);
+              const suggested = suggestedPlanId({ program, programLevel, sessionType: newSessionType, level });
               if (suggested && PLAN_PRICES[suggested] != null) setPlanId(suggested);
             }}
             className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
@@ -6902,23 +6996,31 @@ function calculateFamilyRetentionScore(family, allSwimmers) {
 // both stated as plain comparisons to the peer average, never phrased as
 // a verdict on the swimmer.
 function generateSwimmerProgressInsights(activeSwimmers) {
-  const byLevel = {};
+  // Grouped by the SAME resolved key skillsRatingKeyForSwimmer/getSkillsForSwimmer
+  // use — program::programLevel for a migrated swimmer, else the legacy
+  // level — never the raw s.level alone. Grouping by raw level would lump
+  // together swimmers from different programs who happen to share a level
+  // name (e.g. Development "Star 1" and Competition "Star 1"), compare
+  // them against each other's unrelated skill lists, and read ratings
+  // from the wrong bucket for anyone migrated.
+  const byGroup = {};
   activeSwimmers.forEach((s) => {
-    if (!byLevel[s.level]) byLevel[s.level] = [];
-    byLevel[s.level].push(s);
+    const key = skillsRatingKeyForSwimmer(s);
+    if (!byGroup[key]) byGroup[key] = { label: effectiveLevelLabel(s), swimmers: [] };
+    byGroup[key].swimmers.push(s);
   });
 
   const insights = [];
-  Object.entries(byLevel).forEach(([level, group]) => {
+  Object.values(byGroup).forEach(({ label, swimmers: group }) => {
     if (group.length < 3) return; // need enough peers for the comparison to mean anything
-    const levelSkills = LEVEL_SKILLS[level] || [];
+    const levelSkills = getSkillsForSwimmer(group[0]); // every member of this group resolves to the same skill list
     if (levelSkills.length === 0) return;
 
     const withProgress = group.map((s) => {
       const lastCert = (s.certificates || [])[(s.certificates || []).length - 1];
       const enteredAt = lastCert?.date || s.createdAt;
       const monthsInLevel = enteredAt ? Math.max(0, Math.floor((new Date() - new Date(enteredAt)) / (1000 * 60 * 60 * 24 * 30))) : 0;
-      const mastered = levelSkills.filter((sk) => (s.skills?.[level]?.[sk] || 0) >= 5).length;
+      const mastered = levelSkills.filter((sk) => (getSkillRatingsForSwimmer(s)?.[sk] || 0) >= 5).length;
       const masteryRate = mastered / levelSkills.length;
       return { swimmer: s, monthsInLevel, masteryRate };
     });
@@ -6931,13 +7033,13 @@ function generateSwimmerProgressInsights(activeSwimmers) {
         insights.push({
           swimmer: x.swimmer,
           type: "slower",
-          text: `${x.swimmer.name} has been in ${level} for ${x.monthsInLevel} months (peer average is ${Math.round(avgMonths)}) — might be worth extra practice or a check-in.`,
+          text: `${x.swimmer.name} has been in ${label} for ${x.monthsInLevel} months (peer average is ${Math.round(avgMonths)}) — might be worth extra practice or a check-in.`,
         });
       } else if (x.monthsInLevel >= 1 && x.masteryRate >= 0.8 && x.monthsInLevel < avgMonths * 0.7) {
         insights.push({
           swimmer: x.swimmer,
           type: "faster",
-          text: `${x.swimmer.name} mastered ${level} skills faster than peers (${x.monthsInLevel} months vs. average ${Math.round(avgMonths)}) — worth considering an early level-up.`,
+          text: `${x.swimmer.name} mastered ${label} skills faster than peers (${x.monthsInLevel} months vs. average ${Math.round(avgMonths)}) — worth considering an early level-up.`,
         });
       }
     });
@@ -13902,15 +14004,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
   };
 
-  // Skills are tracked per level, so a swimmer keeps their Level 3 ratings
-  // even after moving up to Level 4 with a fresh checklist of its own.
+  // Skills are tracked per program/level key (see skillsRatingKeyForSwimmer),
+  // so a swimmer keeps their old level's ratings even after moving up to a
+  // new one with a fresh checklist of its own.
   const setSkillRating = async (swimmer, skill, rating) => {
     try {
       const updated = await updateSwimmerById(swimmer.id, (s) => {
-        const level = s.level;
-        const levelSkills = { ...(s.skills?.[level] || {}) };
+        const key = skillsRatingKeyForSwimmer(s);
+        const levelSkills = { ...(s.skills?.[key] || {}) };
         levelSkills[skill] = rating;
-        return { ...s, skills: { ...(s.skills || {}), [level]: levelSkills } };
+        return { ...s, skills: { ...(s.skills || {}), [key]: levelSkills } };
       });
       // Star ratings get clicked rapidly in succession (5 stars × several
       // skills) — refetching the whole visible page from Supabase after
@@ -15684,7 +15787,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   </span>
                   {getSkillsForSwimmer(rowView).length > 0 && (() => {
                     const total = getSkillsForSwimmer(rowView).length;
-                    const mastered = getSkillsForSwimmer(rowView).filter((sk) => (s.skills?.[rowView.level]?.[sk] || 0) >= 5).length;
+                    const mastered = getSkillsForSwimmer(rowView).filter((sk) => (getSkillRatingsForSwimmer(rowView)?.[sk] || 0) >= 5).length;
                     return (
                       <>
                         <span className="text-slate-300">·</span>
@@ -16023,7 +16126,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       {getSkillsForSwimmer(s).length > 0 && (
                         <div className="text-xs text-slate-400 flex items-center gap-1">
                           <Star className="w-3 h-3" />
-                          {getSkillsForSwimmer(s).filter((sk) => (s.skills?.[s.level]?.[sk] || 0) >= 5).length} / {getSkillsForSwimmer(s).length} mastered
+                          {getSkillsForSwimmer(s).filter((sk) => (getSkillRatingsForSwimmer(s)?.[sk] || 0) >= 5).length} / {getSkillsForSwimmer(s).length} mastered
                         </div>
                       )}
                     </div>
@@ -16032,7 +16135,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     ) : (
                       <SkillTreePath
                         skills={getSkillsForSwimmer(s)}
-                        ratings={s.skills?.[s.level] || {}}
+                        ratings={getSkillRatingsForSwimmer(s) || {}}
                         editable={can("editAssessments") || canEditContent}
                         onRate={(skill, n) => setSkillRating(s, skill, n)}
                       />
@@ -16551,11 +16654,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           onClose={() => setProfileModalSwimmer(null)}
           onEditSkill={(swimmer, skill, n) => {
             setSkillRating(swimmer, skill, n);
-            setProfileModalSwimmer((prev) =>
-              prev && prev.id === swimmer.id
-                ? { ...prev, skills: { ...(prev.skills || {}), [swimmer.level]: { ...(prev.skills?.[swimmer.level] || {}), [skill]: n } } }
-                : prev
-            );
+            setProfileModalSwimmer((prev) => {
+              if (!prev || prev.id !== swimmer.id) return prev;
+              const key = skillsRatingKeyForSwimmer(prev);
+              return { ...prev, skills: { ...(prev.skills || {}), [key]: { ...(prev.skills?.[key] || {}), [skill]: n } } };
+            });
           }}
           canEditSkills={can("editAssessments") || canEditContent}
         />
@@ -19266,7 +19369,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                 </select>
                               </div>
                               <div className="flex items-center gap-1.5">
-                                <label className="text-xs text-slate-400" title="Recorded for later — not yet used to actually limit bookings">Capacity</label>
+                                <label className="text-xs text-slate-400" title="Max swimmers per coach for a GROUP session at this program level — actively enforced when saving/booking. Leave blank for the default group size; Private and Semi-private sessions always use their own fixed size and are never affected by this number.">Capacity (group)</label>
                                 <input
                                   type="number"
                                   min="0"
@@ -22716,10 +22819,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                 Individual adjustments — this week's squad plan stays the same for everyone; note anything a specific swimmer should do differently
                               </div>
                               <div className="space-y-1.5">
-                                {squadSwimmers.filter((s) => s.level === weeklyVolumeLevel || s.programLevel === weeklyVolumeLevel).length === 0 && (
+                                {squadSwimmers.filter((s) => trainingGroupOf(s) === weeklyVolumeLevel).length === 0 && (
                                   <div className="text-xs text-slate-400">No swimmers found for {weeklyVolumeLevel}.</div>
                                 )}
-                                {squadSwimmers.filter((s) => s.level === weeklyVolumeLevel || s.programLevel === weeklyVolumeLevel).map((s) => (
+                                {squadSwimmers.filter((s) => trainingGroupOf(s) === weeklyVolumeLevel).map((s) => (
                                   <div key={s.id} className="flex items-center gap-2 bg-white rounded-xl p-2.5">
                                     <span className="text-xs font-medium text-slate-600 w-28 shrink-0 truncate">{s.name}</span>
                                     <input
@@ -25965,10 +26068,10 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
 
   const setSkillRating = (swimmer, skill, rating) => {
     const applyEdit = (s) => {
-      const level = s.level;
-      const levelSkills = { ...(s.skills?.[level] || {}) };
+      const key = skillsRatingKeyForSwimmer(s);
+      const levelSkills = { ...(s.skills?.[key] || {}) };
       levelSkills[skill] = rating;
-      return { ...s, skills: { ...(s.skills || {}), [level]: levelSkills } };
+      return { ...s, skills: { ...(s.skills || {}), [key]: levelSkills } };
     };
     // Same instant-then-batched approach as markAttendance above — rating
     // several skills across several swimmers in a row shouldn't make each
@@ -26383,7 +26486,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
                   <div className="text-xs font-semibold text-slate-500 mb-2">Skill progression — {effectiveLevelLabel(s)}</div>
                   <SkillTreePath
                     skills={getSkillsForSwimmer(s)}
-                    ratings={s.skills?.[s.level] || {}}
+                    ratings={getSkillRatingsForSwimmer(s) || {}}
                     editable={canEditAssessments}
                     onRate={(skill, n) => setSkillRating(s, skill, n)}
                   />
@@ -27543,7 +27646,7 @@ function CoachView({ onExit, preAuthedCoach = null }) {
                             <div className="space-y-1.5">
                               <div className="text-xs font-semibold text-slate-400 mb-1">Skills (view only)</div>
                               {skillsForLevel.map((skill) => {
-                                const rating = s.skills?.[s.level]?.[skill] || 0;
+                                const rating = getSkillRatingsForSwimmer(s)?.[skill] || 0;
                                 return (
                                   <div key={skill} className="flex items-center justify-between gap-2 text-xs bg-white rounded-lg px-3 py-2">
                                     <span className={rating >= 5 ? "text-green-700 font-medium" : "text-slate-600"}>{skill}</span>
@@ -29429,7 +29532,7 @@ function ParentPortalView({ onRenew, onExit }) {
 
   const s = siblings.find((sw) => sw.id === selectedId) || siblings[0];
   const skills = getSkillsForSwimmer(s);
-  const mastered = skills.filter((sk) => (s.skills?.[s.level]?.[sk] || 0) >= 5).length;
+  const mastered = skills.filter((sk) => (getSkillRatingsForSwimmer(s)?.[sk] || 0) >= 5).length;
   const skillPct = skills.length > 0 ? Math.round((mastered / skills.length) * 100) : null;
   const paidMonths = (s.paidMonths || []).slice().sort().reverse();
   const paidThisMonth = (s.paidMonths || []).includes(monthKey());
@@ -29504,7 +29607,7 @@ function ParentPortalView({ onRenew, onExit }) {
           <h3 className="font-bold text-slate-900 mb-1">Skill progress — {s.level}</h3>
           <p className="text-xs text-slate-400 mb-3">{mastered} / {skills.length} skills mastered</p>
           {skills.length > 0 && (
-            <SkillTreePath skills={skills} ratings={s.skills?.[s.level] || {}} editable={false} />
+            <SkillTreePath skills={skills} ratings={getSkillRatingsForSwimmer(s) || {}} editable={false} />
           )}
         </div>
 
