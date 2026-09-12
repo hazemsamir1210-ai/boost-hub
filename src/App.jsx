@@ -12111,7 +12111,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     .map((bt) => (coachBookingsById[c.id] || []).find((b) => b.day === dayGroup.id && b.time === bt))
                     .filter(Boolean)
                     .map((b) => {
-                      const bCap = effectiveSlotCapacity(b.sessionType, "Baby", c.id, dayGroup.id, b.time);
+                      const bCap = 1; // a Baby class is always one swimmer, 1-on-1, by definition
                       const bFull = b.count >= bCap;
                       return `<div class="baby-extra ${bFull ? "baby-full" : ""}">Baby from ${escapeHtml(b.time)} · ${b.count}/${bCap}</div>`;
                     })
@@ -12123,9 +12123,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 // displayed capacity matches what the booking form
                 // actually enforces for these swimmers.
                 const specialProgramEntry = booking.names.find((n) => n.program);
-                const capacity = effectiveSlotCapacity(booking.sessionType, specialLevel, c.id, dayGroup.id, t, specialProgramEntry?.program, specialProgramEntry?.programLevel);
-                const full = booking.count >= capacity;
                 const isBabyBooking = booking.levels.includes("Baby") || booking.names.some((n) => n.program === "baby");
+                // A Baby class is always one swimmer, 1-on-1, by
+                // definition, regardless of whatever sessionType this
+                // particular booking happens to have stored.
+                const capacity = isBabyBooking
+                  ? 1
+                  : effectiveSlotCapacity(booking.sessionType, specialLevel, c.id, dayGroup.id, t, specialProgramEntry?.program, specialProgramEntry?.programLevel);
+                const full = booking.count >= capacity;
+                if (isBabyBooking) {
+                  return `<td class="${full ? "baby-full-cell" : "baby-cell"}">Baby from ${escapeHtml(t)} · ${booking.count}/${capacity}${extraBabyLines}</td>`;
+                }
                 // Every Baby swimmer is already private and level "Baby"
                 // by definition, so showing the level here is redundant —
                 // their names are the actually useful thing to see.
@@ -12133,9 +12141,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   scheduleLevelIsBabyOnly
                     ? booking.names.map((n) => n.name).join(", ")
                     : [...booking.levels].join(", ");
-                const cellClass = isBabyBooking ? (full ? "baby-full-cell" : "baby-cell") : full ? "full" : "hasroom";
-                const babyLabel = isBabyBooking ? `<div class="baby-label">Baby from ${escapeHtml(t)}</div>` : "";
-                return `<td class="${cellClass}">${babyLabel}${booking.count}/${capacity}<br><span class="lvl">${escapeHtml(secondLine)}</span>${extraBabyLines}</td>`;
+                return `<td class="${full ? "full" : "hasroom"}">${booking.count}/${capacity}<br><span class="lvl">${escapeHtml(secondLine)}</span>${extraBabyLines}</td>`;
               })
               .join("");
             return `<tr><td class="coachname">${escapeHtml(c.name)}</td>${cells}</tr>`;
@@ -17342,7 +17348,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               const babyExtra = inBetweenBabyBookings.length > 0 && (
                                 <div className="mt-1 pt-1 border-t border-dashed border-amber-200 space-y-0.5">
                                   {inBetweenBabyBookings.map(({ time: bt, booking: bb }) => {
-                                    const bbCapacity = effectiveSlotCapacity(bb.sessionType, "Baby", c.id, dayGroup.id, bt);
+                                    const bbCapacity = 1; // a Baby class is always one swimmer, 1-on-1, by definition
                                     const bbFull = bb.count >= bbCapacity;
                                     return (
                                       <button
@@ -17395,33 +17401,44 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               }
                               const specialLevel = booking.levels.find((lv) => ["Exp", "Exp 2", "Exp 3", ...TEAM_SQUAD_LEVELS].includes(lv));
                               const specialProgramEntry = booking.names.find((n) => n.program);
-                              const capacity = effectiveSlotCapacity(booking.sessionType, specialLevel, c.id, dayGroup.id, t, specialProgramEntry?.program, specialProgramEntry?.programLevel);
-                              const spotsLeft = capacity - booking.count;
-                              const agesLabel = booking.ages.length > 0 ? booking.ages.slice().sort((a, b) => a - b).join(", ") : "";
                               // A Baby class gets its own consistent look
                               // (same amber identity as the off-column
                               // "extra" line below) instead of the plain
-                              // green/gray regular styling — open vs full
-                              // still comes through as a color shade, the
-                              // same idea as the regular slots, just in
-                              // amber instead of green.
+                              // green/gray regular styling — and always a
+                              // capacity of 1, since a Baby class is
+                              // always one swimmer 1-on-1 by definition,
+                              // regardless of whatever sessionType this
+                              // particular booking happens to have stored.
                               const isBabyBooking = booking.levels.includes("Baby") || booking.names.some((n) => n.program === "baby");
+                              const capacity = isBabyBooking
+                                ? 1
+                                : effectiveSlotCapacity(booking.sessionType, specialLevel, c.id, dayGroup.id, t, specialProgramEntry?.program, specialProgramEntry?.programLevel);
+                              const spotsLeft = capacity - booking.count;
+                              const agesLabel = booking.ages.length > 0 ? booking.ages.slice().sort((a, b) => a - b).join(", ") : "";
+                              if (isBabyBooking) {
+                                return (
+                                  <td key={t} className="px-2 py-2 text-center">
+                                    <button
+                                      onClick={() => setSlotDetailModal({ coachName: c.name, coachId: c.id, day: dayGroup.label, dayId: dayGroup.id, time: t, booking, capacity })}
+                                      className={`block w-full rounded px-1 py-0.5 text-[9px] leading-tight font-medium ${spotsLeft > 0 ? "bg-amber-50 text-amber-700" : "bg-amber-100 text-amber-800"}`}
+                                      title={`Baby from ${t} — ${booking.count}/${capacity}${spotsLeft > 0 ? " — open" : " — full"}`}
+                                    >
+                                      Baby from {t} · {booking.count}/{capacity}
+                                    </button>
+                                    {makeupBadge}
+                                    {babyExtra}
+                                  </td>
+                                );
+                              }
                               return (
                                 <td key={t} className="px-2 py-2 text-center">
                                   <button
                                     onClick={() => setSlotDetailModal({ coachName: c.name, coachId: c.id, day: dayGroup.label, dayId: dayGroup.id, time: t, booking, capacity })}
-                                    className={`inline-block px-1.5 py-1 rounded font-medium leading-tight text-xs hover:ring-2 transition ${
-                                      isBabyBooking
-                                        ? spotsLeft > 0
-                                          ? "bg-amber-50 text-amber-700 hover:ring-amber-300"
-                                          : "bg-amber-100 text-amber-800 hover:ring-amber-300"
-                                        : spotsLeft > 0
-                                        ? "bg-green-50 text-green-700 hover:ring-sky-300"
-                                        : "bg-slate-100 text-slate-500 hover:ring-sky-300"
+                                    className={`inline-block px-1.5 py-1 rounded font-medium leading-tight text-xs hover:ring-2 hover:ring-sky-300 transition ${
+                                      spotsLeft > 0 ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-500"
                                     }`}
                                     title={`${sessionTypeInfo(booking.sessionType).label} — ${booking.count}/${capacity}${agesLabel ? ` — ages: ${agesLabel}` : ""} — click to see names`}
                                   >
-                                    {isBabyBooking && <div className="text-[9px] font-semibold">Baby from {t}</div>}
                                     <div>{booking.count}/{capacity}</div>
                                     <div>
                                       {scheduleLevelIsBabyOnly
