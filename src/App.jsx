@@ -3311,7 +3311,7 @@ function timeToMinutes(timeStr) {
 
 function scheduleLabel(swimmer) {
   if (!swimmer.day || !swimmer.time) return "—";
-  const duration = swimmer.level === "Baby" ? 30 : 60;
+  const duration = swimmer.level === "Baby" || swimmer.program === "baby" ? 30 : 60;
   const dayLabel = DAY_GROUPS.find((d) => d.id === swimmer.day)?.label || swimmer.day;
   const end = addMinutesToTime(swimmer.time, duration);
   return `${dayLabel} · ${swimmer.time} - ${end}`;
@@ -6667,13 +6667,13 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
         {!isNew && (
         <div>
           <label className="text-xs text-slate-500 mb-1 block">
-            Time {level === "Baby" && <span className="text-sky-900">(30 min class)</span>}
+            Time {(level === "Baby" || program === "baby") && <span className="text-sky-900">(30 min class)</span>}
           </label>
           <select value={time} onChange={(e) => setTime(e.target.value)} className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white">
             <option value="">Not scheduled yet</option>
             {timeOptions.map((t) => (
               <option key={t} value={t}>
-                {t} - {addMinutesToTime(t, level === "Baby" ? 30 : 60)}
+                {t} - {addMinutesToTime(t, level === "Baby" || program === "baby" ? 30 : 60)}
               </option>
             ))}
           </select>
@@ -12057,9 +12057,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     setExportingCoachGrid(true);
     try {
       const daySections = DAY_GROUPS.map((dayGroup) => {
-        // Same half-hour expansion as the on-screen grid when the
-        // export is generated while "Baby only" is selected.
-        const times = getTimeOptions(BRANCHES[0].id, dayGroup.id, scheduleLevelIsBabyOnly ? "Baby" : null)
+        // Baby runs on its own separate set of times (BABY_TIME_SLOTS),
+        // not derived from the regular ones at all — merging both in
+        // here (unless specifically viewing "Baby only", which keeps
+        // just Baby's times as before) is what actually gives a Baby
+        // session a column to appear under. Without this, Baby sessions
+        // had no column at all in the normal "All levels" view and were
+        // simply invisible, even though they're real bookings.
+        const times = (
+          scheduleLevelIsBabyOnly
+            ? getTimeOptions(BRANCHES[0].id, dayGroup.id, "Baby")
+            : [...new Set([...getTimeOptions(BRANCHES[0].id, dayGroup.id, null), ...getTimeOptions(BRANCHES[0].id, dayGroup.id, "Baby")])]
+        )
           .slice()
           .sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
         if (times.length === 0) return "";
@@ -15462,7 +15471,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-[160px]">
                     <div className="font-semibold text-slate-900 text-sm flex items-center gap-1.5">
-                      {rowView.level === "Baby" && <Baby className="w-3.5 h-3.5 text-amber-600 shrink-0" />}
+                      {(rowView.level === "Baby" || rowView.program === "baby") && <Baby className="w-3.5 h-3.5 text-amber-600 shrink-0" />}
                       <button
                         onClick={() => setProfileModalSwimmer(s)}
                         className="hover:text-sky-800 hover:underline text-left"
@@ -17224,7 +17233,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               // registration form already uses to offer those extra
               // half-hour times) — every other level keeps the plain
               // hourly columns.
-              const times = getTimeOptions(BRANCHES[0].id, dayGroup.id, scheduleLevelIsBabyOnly ? "Baby" : null)
+              // Baby runs on its own separate set of times, not derived
+              // from the regular ones at all — merging both in here
+              // (unless specifically viewing "Baby only", which keeps
+              // just Baby's times as before) is what gives a Baby
+              // session an actual column to appear under, instead of
+              // being invisible in the normal "All levels" view.
+              const times = (
+                scheduleLevelIsBabyOnly
+                  ? getTimeOptions(BRANCHES[0].id, dayGroup.id, "Baby")
+                  : [...new Set([...getTimeOptions(BRANCHES[0].id, dayGroup.id, null), ...getTimeOptions(BRANCHES[0].id, dayGroup.id, "Baby")])]
+              )
                 .slice()
                 .sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
               if (times.length === 0) return null;
@@ -27398,7 +27417,7 @@ function CoachView({ onExit, preAuthedCoach = null }) {
             ) : (
               <div className="space-y-2">
                 {d.sessions.map((s) => {
-                  const duration = s.level === "Baby" ? 30 : 60;
+                  const duration = s.level === "Baby" || s.program === "baby" ? 30 : 60;
                   const end = addMinutesToTime(s.time, duration);
                   const skillsForLevel = getSkillsForSwimmer(s);
                   const noteEntries = Object.entries(s.sessionNotes || {}).sort((a, b) => b[0].localeCompare(a[0]));
