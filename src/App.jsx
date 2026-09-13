@@ -4718,6 +4718,52 @@ function diffSwimmerUpdate(existing, imported) {
     changes.push({ field: "paidMonths", from: null, to: newlyPaid.map(monthLabel).join(", ") });
     patch.paidMonths = [...(existing.paidMonths || []), ...newlyPaid];
   }
+  // A day/time/coachId/sessionType change is a SCHEDULE change — needs
+  // recording into monthlySchedules, the same way every other part of
+  // the app tracks one, or the swimmer's real schedule for whichever
+  // month is CURRENT right now becomes unrecoverable the instant this
+  // patch overwrites the flat fields (nothing else remembers what it
+  // used to be).
+  const scheduleFieldsChanged = ["day", "time", "coachId", "sessionType"].some((f) => f in patch);
+  if (imported.monthlySchedules && Object.keys(imported.monthlySchedules).length > 0) {
+    // The month-by-month tracking sheet already built a complete,
+    // correctly-shaped per-month history (including the current one) —
+    // merge it in wholesale, keeping any existing months the sheet
+    // didn't cover rather than replacing the whole map.
+    const mergedSchedules = { ...(existing.monthlySchedules || {}), ...imported.monthlySchedules };
+    // Detects a NEW or DIFFERENT month even when every flat field above
+    // matched exactly (e.g. this swimmer's current schedule hasn't
+    // changed, but the file now also includes an entry for a month that
+    // wasn't recorded before) — without this, that case shows zero
+    // "changes" above and gets silently treated as an unchanged
+    // duplicate, so the new month's data is computed here but never
+    // actually gets saved.
+    const newMonthKeys = Object.keys(imported.monthlySchedules).filter(
+      (k) => JSON.stringify(imported.monthlySchedules[k]) !== JSON.stringify(existing.monthlySchedules?.[k])
+    );
+    if (newMonthKeys.length > 0) {
+      changes.push({ field: "monthlySchedules", from: null, to: `${newMonthKeys.length} month(s) added/updated: ${newMonthKeys.map(monthLabel).join(", ")}` });
+      patch.monthlySchedules = mergedSchedules;
+    }
+  } else if (scheduleFieldsChanged) {
+    // The simple single-row importer has no concept of monthlySchedules
+    // at all — stamps the NEW schedule into the current real month so
+    // this update is tracked exactly like a manual edit through the
+    // Swimmer Form would be, instead of only ever living in the flat
+    // fields with no month attached to it.
+    const key = monthKey();
+    patch.monthlySchedules = {
+      ...(existing.monthlySchedules || {}),
+      [key]: {
+        ...(existing.monthlySchedules?.[key] || {}),
+        day: patch.day ?? existing.day,
+        time: patch.time ?? existing.time,
+        coachId: patch.coachId ?? existing.coachId,
+        sessionType: patch.sessionType ?? existing.sessionType,
+        scheduleMonth: key,
+      },
+    };
+  }
   return { changes, patch };
 }
 
@@ -13355,9 +13401,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       ? all.map((s) => (s.id === finalRecord.id ? finalRecord : s))
       : [...all, finalRecord];
 
-    const res = await saveCollection(STORE_KEYS.swimmers, next);
+    const res = await saveCollection(STORE_KEYS.swimmers, next, { skipSwimmersSync: true });
     if (!res) throw new Error("Could not save the swimmer, please try again");
     logActivity(accountName, role, existing ? "Edited swimmer" : "Added swimmer", finalRecord.name);
+    syncSingleSwimmerToTableWithRetry(finalRecord); // fast path — only this one swimmer's row, not the whole roster
     syncSwimmerToCoreEngine(finalRecord); // best-effort, never blocks this save
     return finalRecord;
     };
@@ -15955,8 +16002,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500 border-t border-slate-100 mt-3 pt-2.5">
                   <span>{BRANCHES.find((b) => b.id === s.branch)?.name.split(" (")[0] || "No branch"}</span>
-                  <span className="text-slate-300">·</span>
-                  <span>{rowView.level}</span>
+                  {!(rowView.program && rowView.level === rowView.programLevel) && (
+                    <>
+                      <span className="text-slate-300">·</span>
+                      <span>{rowView.level}</span>
+                    </>
+                  )}
                   {rowView.program && (
                     <>
                       <span className="text-slate-300">·</span>
