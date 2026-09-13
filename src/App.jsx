@@ -1129,13 +1129,12 @@ async function saveCustomTeamSquadCapacities(next) {
 
 // Capacity numbers for the NEW Programs -> Levels structure (e.g. a
 // specific cap for "Pre team / Team A"), keyed the same way as
-// PROGRAM_LEVEL_SKILLS ("programId::levelName"). IMPORTANT: unlike
-// TEAM_SQUAD_CAPACITIES above, nothing reads this yet to actually block
-// or allow a booking — it's purely a place to record the numbers ahead
-// of time. Wiring it into the live "is this slot full" check (which
-// still runs entirely on the old level field today) is its own future
-// step, done separately and carefully since that check protects real
-// bookings from over-filling a slot.
+// PROGRAM_LEVEL_SKILLS ("programId::levelName"). This IS read by
+// sessionCapacity()/effectiveSlotCapacity() below, checked before the
+// old level-based TEAM_SQUAD_CAPACITIES fallback — a configured entry
+// here for a migrated swimmer's program+level takes priority. A
+// swimmer with no program/programLevel (a true legacy record) still
+// falls through to the old level-based capacity, unaffected by this.
 const PROGRAM_LEVEL_CAPACITIES_KEY = "program-level-capacities-custom";
 let PROGRAM_LEVEL_CAPACITIES = {}; // { "programId::levelName": number }
 
@@ -1158,14 +1157,24 @@ function applyCustomProgramLevelCapacities(next) {
 }
 
 // Which Plan (from PLANS/PLAN_PRICES) should be SUGGESTED when a swimmer
-// is set to a given program+level — e.g. "Pre team / Team A" -> the
-// Private plan. Keyed the same way as PROGRAM_LEVEL_SKILLS. Unlike the
-// capacity numbers above, this DOES get read live (by SwimmerForm) — but
-// only to pre-fill the Plan dropdown when the admin picks a program;
-// they can still change it before saving, and it never touches a
-// swimmer's price on its own without them choosing to save that change.
+// is set to a given program+level+sessionType — e.g. "Development team
+// / Star 2 / Group" -> a different plan than "Development team / Star 2
+// / Private". Keyed as "programId::levelName::sessionType" going
+// forward; a plain "programId::levelName" (no sessionType segment) is
+// the OLDER key shape from before session type was part of this, kept
+// working as a fallback so nothing configured under the old shape
+// silently stops suggesting anything — see suggestedPlanId below for
+// the exact lookup order. Unlike the capacity numbers above, this DOES
+// get read live (by SwimmerForm) — but only to pre-fill the Plan
+// dropdown when the admin picks a program/level/session type; they can
+// still change it before saving, and it never touches a swimmer's price
+// on its own without them choosing to save that change.
 const PROGRAM_LEVEL_DEFAULT_PLAN_KEY = "program-level-default-plan-custom";
-let PROGRAM_LEVEL_DEFAULT_PLAN = {}; // { "programId::levelName": planId }
+let PROGRAM_LEVEL_DEFAULT_PLAN = {}; // { "programId::levelName::sessionType" | "programId::levelName": planId }
+
+function programLevelSessionTypeKey(programId, levelName, sessionType) {
+  return `${programId}::${levelName}::${sessionType}`;
+}
 
 async function loadCustomProgramLevelDefaultPlan() {
   const res = await window.storage.get(PROGRAM_LEVEL_DEFAULT_PLAN_KEY);
@@ -1248,8 +1257,15 @@ function planIdForSessionType(sessionType, level) {
 // drift back to a legacy price just from flipping session type.
 function suggestedPlanId({ program, programLevel, sessionType, level }) {
   if (program && programLevel) {
-    const configuredPlanId = PROGRAM_LEVEL_DEFAULT_PLAN[programLevelSkillsKey(program, programLevel)];
-    if (configuredPlanId) return configuredPlanId;
+    if (sessionType) {
+      const specificPlanId = PROGRAM_LEVEL_DEFAULT_PLAN[programLevelSessionTypeKey(program, programLevel, sessionType)];
+      if (specificPlanId) return specificPlanId;
+    }
+    // Older key shape, from before session type was part of it — a
+    // plan configured this way still suggests the SAME plan regardless
+    // of session type, exactly as it always did.
+    const generalPlanId = PROGRAM_LEVEL_DEFAULT_PLAN[programLevelSkillsKey(program, programLevel)];
+    if (generalPlanId) return generalPlanId;
   }
   return planIdForSessionType(sessionType, level);
 }
@@ -6808,8 +6824,8 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
                 // below, but the admin can still pick a different plan
                 // before saving; this never changes a price on its own.
                 if (chosen) {
-                  const suggestedPlanId = PROGRAM_LEVEL_DEFAULT_PLAN[programLevelSkillsKey(program, chosen)];
-                  if (suggestedPlanId && PLANS.some((p) => p.id === suggestedPlanId)) setPlanId(suggestedPlanId);
+                  const suggested = suggestedPlanId({ program, programLevel: chosen, sessionType, level });
+                  if (suggested && PLANS.some((p) => p.id === suggested)) setPlanId(suggested);
                 }
               }}
               className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
@@ -8545,10 +8561,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   // Which Season Phase (from the Season Phases tab) a given date falls
   // in, for coloring the calendar view the same way phases are colored
-  // there — "all" level phases apply to every squad.
-  const phaseForDate = (level, dateStr) => {
+  // there — "all" level phases apply to every squad. groupKey may be
+  // either a bare legacy level or a disambiguated "program::level" key;
+  // trainingRecordMatchesGroup handles both against a plan's own
+  // (currently always bare) level field.
+  const phaseForDate = (groupKey, dateStr) => {
     for (const plan of trainingPlans) {
-      if (plan.level !== "all" && plan.level !== level) continue;
+      if (plan.level !== "all" && !trainingRecordMatchesGroup(plan, groupKey)) continue;
       for (const ph of plan.phases || []) {
         if (dateStr >= ph.startDate && dateStr <= ph.endDate) {
           return TRAINING_PHASE_TYPES.find((t) => t.id === ph.type) || null;
@@ -8570,7 +8589,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
   }, []);
 
-  const seasonsForLevel = seasons.filter((s) => s.level === weeklyVolumeLevel).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const seasonsForLevel = seasons.filter((s) => trainingRecordMatchesGroup(s, weeklyVolumeLevel)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
   // Whichever season was last opened for this level, or the most
   // recently created one if none was — never silently falls back to
@@ -8587,7 +8606,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const createSeason = async () => {
     const name = newSeasonName.trim();
     if (!name) return;
-    const record = { id: genId(), name, level: weeklyVolumeLevel, createdAt: new Date().toISOString() };
+    const record = { id: genId(), name, level: bareLevelFromGroupKey(weeklyVolumeLevel), groupKey: weeklyVolumeLevel, createdAt: new Date().toISOString() };
     const all = await loadCollection(STORE_KEYS.seasons);
     const next = [...all, record];
     await saveCollection(STORE_KEYS.seasons, next);
@@ -8607,16 +8626,16 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   }, []);
 
   const weeksForLevel = weeklyVolumes
-    .filter((w) => w.level === weeklyVolumeLevel && w.seasonId === activeSeasonId)
+    .filter((w) => trainingRecordMatchesGroup(w, weeklyVolumeLevel) && w.seasonId === activeSeasonId)
     .sort((a, b) => a.startDate.localeCompare(b.startDate));
 
   // Which planned week (for a given level) a date falls inside — lets
   // the Daily Workouts screen show "planned vs. logged so far" without
   // requiring the coach to be looking at that same season/week in the
   // Season Builder tab.
-  const findWeekForDate = (level, dateStr) => {
+  const findWeekForDate = (groupKey, dateStr) => {
     return weeklyVolumes.find((w) => {
-      if (w.level !== level || !w.startDate) return false;
+      if (!trainingRecordMatchesGroup(w, groupKey) || !w.startDate) return false;
       const start = new Date(w.startDate);
       const end = new Date(start.getTime() + 6 * 86400000);
       const d = new Date(dateStr);
@@ -8627,12 +8646,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   // Sum of each saved daily workout's computed total distance for every
   // day inside that week — only counts workouts built with the new Set
   // Builder (older, text-only plans have no totalDistance and count as 0).
-  const loggedDistanceForWeek = (level, week) => {
+  const loggedDistanceForWeek = (groupKey, week) => {
     if (!week) return 0;
     const start = new Date(week.startDate);
     const end = new Date(start.getTime() + 6 * 86400000);
     return dailyWorkouts
-      .filter((w) => w.level === level && new Date(w.date) >= start && new Date(w.date) <= end)
+      .filter((w) => trainingRecordMatchesGroup(w, groupKey) && new Date(w.date) >= start && new Date(w.date) <= end)
       .reduce((sum, w) => sum + (Number(w.totalDistance) || 0), 0);
   };
 
@@ -8640,12 +8659,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   // inside a week — only counts sessions a coach has actually filled a
   // post-session review for; unreviewed sessions contribute 0, same
   // caveat as loggedDistanceForWeek above for older/unreviewed plans.
-  const trainingLoadForWeek = (level, week) => {
+  const trainingLoadForWeek = (groupKey, week) => {
     if (!week) return 0;
     const start = new Date(week.startDate);
     const end = new Date(start.getTime() + 6 * 86400000);
     return dailyWorkouts
-      .filter((w) => w.level === level && new Date(w.date) >= start && new Date(w.date) <= end)
+      .filter((w) => trainingRecordMatchesGroup(w, groupKey) && new Date(w.date) >= start && new Date(w.date) <= end)
       .reduce((sum, w) => sum + (Number(w.review?.sessionLoad) || 0), 0);
   };
 
@@ -8657,7 +8676,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       : todayISO();
     const record = {
       id: genId(),
-      level: weeklyVolumeLevel,
+      level: bareLevelFromGroupKey(weeklyVolumeLevel),
+      groupKey: weeklyVolumeLevel,
       seasonId: activeSeasonId,
       weekLabel: `Week ${weeksForLevel.length + 1}`,
       startDate: nextStart,
@@ -8821,12 +8841,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
 
   const savePlan = async (record) => {
+    // groupKey mirrors level for now (the picker only offers bare level
+    // names, same as Daily Workout/Weekly Volume) — stamping it here
+    // keeps every training record consistent and ready if that picker
+    // is ever upgraded to offer disambiguated program+level groups.
+    const withGroupKey = { ...record, groupKey: record.level };
     const all = await loadCollection(STORE_KEYS.trainingPlans);
-    const exists = all.some((p) => p.id === record.id);
-    const next = exists ? all.map((p) => (p.id === record.id ? record : p)) : [...all, record];
+    const exists = all.some((p) => p.id === withGroupKey.id);
+    const next = exists ? all.map((p) => (p.id === withGroupKey.id ? withGroupKey : p)) : [...all, withGroupKey];
     await saveCollection(STORE_KEYS.trainingPlans, next);
     setTrainingPlans(next);
-    logActivity(accountName, role, exists ? "Edited training plan" : "Added training plan", record.name);
+    logActivity(accountName, role, exists ? "Edited training plan" : "Added training plan", withGroupKey.name);
     setPlanModal(null);
   };
 
@@ -10457,8 +10482,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
   };
 
-  const updateProgramLevelDefaultPlan = async (programId, levelName, planId) => {
-    const key = programLevelSkillsKey(programId, levelName);
+  const updateProgramLevelDefaultPlan = async (programId, levelName, planId, sessionType) => {
+    const key = sessionType ? programLevelSessionTypeKey(programId, levelName, sessionType) : programLevelSkillsKey(programId, levelName);
     const next = { ...customProgramLevelDefaultPlan };
     if (!planId) delete next[key];
     else next[key] = planId;
@@ -19562,6 +19587,26 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                   ))}
                                 </select>
                               </div>
+                              {SESSION_TYPES.map((st) => {
+                                const stKey = programLevelSessionTypeKey(program.id, levelName, st.id);
+                                return (
+                                  <div key={st.id} className="flex items-center gap-1.5">
+                                    <label className="text-xs text-slate-400" title={`Overrides "Suggests plan" above, but only for ${st.label} sessions at this program level — leave as None to just use the general suggestion for every session type`}>
+                                      {st.label} →
+                                    </label>
+                                    <select
+                                      value={customProgramLevelDefaultPlan[stKey] || ""}
+                                      onChange={(e) => updateProgramLevelDefaultPlan(program.id, levelName, e.target.value, st.id)}
+                                      className="border border-slate-200 rounded-lg py-1 px-1.5 text-xs outline-none focus:border-sky-900 bg-white"
+                                    >
+                                      <option value="">None</option>
+                                      {PLANS.map((p) => (
+                                        <option key={p.id} value={p.id}>{p.name} — {p.price} EGP</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                );
+                              })}
                               <div className="flex items-center gap-1.5">
                                 <label className="text-xs text-slate-400" title="Max swimmers per coach for a GROUP session at this program level — actively enforced when saving/booking. Leave blank for the default group size; Private and Semi-private sessions always use their own fixed size and are never affected by this number.">Capacity (group)</label>
                                 <input
@@ -22774,7 +22819,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <button
                     onClick={() =>
                       setSeasonPreviewHtml(
-                        buildSeasonPreviewHtml(seasonsForLevel.find((s) => s.id === activeSeasonId), weeklyVolumeLevel, weeksForLevel)
+                        buildSeasonPreviewHtml(seasonsForLevel.find((s) => s.id === activeSeasonId), trainingGroupLabel(weeklyVolumeLevel), weeksForLevel)
                       )
                     }
                     className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200"
@@ -22784,7 +22829,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                 )}
                 {weeksForLevel.length > 0 && (
                   <button
-                    onClick={() => exportSeasonPdf(seasonsForLevel.find((s) => s.id === activeSeasonId), weeklyVolumeLevel, weeksForLevel)}
+                    onClick={() => exportSeasonPdf(seasonsForLevel.find((s) => s.id === activeSeasonId), trainingGroupLabel(weeklyVolumeLevel), weeksForLevel)}
                     className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200"
                   >
                     <FileDown className="w-4 h-4" /> Export PDF
@@ -23013,10 +23058,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                                 Individual adjustments — this week's squad plan stays the same for everyone; note anything a specific swimmer should do differently
                               </div>
                               <div className="space-y-1.5">
-                                {squadSwimmers.filter((s) => trainingGroupOf(s) === weeklyVolumeLevel).length === 0 && (
+                                {squadSwimmers.filter((s) => trainingGroupKey(s) === weeklyVolumeLevel).length === 0 && (
                                   <div className="text-xs text-slate-400">No swimmers found for {weeklyVolumeLevel}.</div>
                                 )}
-                                {squadSwimmers.filter((s) => trainingGroupOf(s) === weeklyVolumeLevel).map((s) => (
+                                {squadSwimmers.filter((s) => trainingGroupKey(s) === weeklyVolumeLevel).map((s) => (
                                   <div key={s.id} className="flex items-center gap-2 bg-white rounded-xl p-2.5">
                                     <span className="text-xs font-medium text-slate-600 w-28 shrink-0 truncate">{s.name}</span>
                                     <input
@@ -23032,7 +23077,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
                             <div className="flex items-center justify-between mt-4">
                               <button
-                                onClick={() => exportWeekDayByDay(seasonsForLevel.find((s) => s.id === activeSeasonId), weeklyVolumeLevel, week)}
+                                onClick={() => exportWeekDayByDay(seasonsForLevel.find((s) => s.id === activeSeasonId), trainingGroupLabel(weeklyVolumeLevel), week)}
                                 className="text-xs text-sky-800 hover:text-sky-900 font-medium flex items-center gap-1"
                               >
                                 <FileDown className="w-3.5 h-3.5" /> View week day by day
@@ -23366,7 +23411,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                         <div>
                           <h3 className="font-bold text-slate-900">{plan.name}</h3>
                           <p className="text-xs text-slate-400">
-                            {plan.level === "all" ? "All levels" : plan.level} · {new Date(plan.startDate).toLocaleDateString("en-GB")} → {new Date(plan.endDate).toLocaleDateString("en-GB")}
+                            {plan.level === "all" ? "All levels" : trainingGroupLabel(plan.level)} · {new Date(plan.startDate).toLocaleDateString("en-GB")} → {new Date(plan.endDate).toLocaleDateString("en-GB")}
                           </p>
                         </div>
                         {can("manageTrainingPlans") && (
@@ -24686,7 +24731,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             </div>
             <div className="p-4 border-t border-slate-100 flex gap-2">
               <button
-                onClick={() => downloadSeasonPreviewHtml(seasonPreviewHtml, weeklyVolumeLevel)}
+                onClick={() => downloadSeasonPreviewHtml(seasonPreviewHtml, trainingGroupLabel(weeklyVolumeLevel))}
                 className="flex-1 py-2.5 rounded-lg bg-sky-950 text-white text-sm font-semibold hover:bg-sky-900 flex items-center justify-center gap-2"
               >
                 <FileDown className="w-4 h-4" /> Download / Print
@@ -25119,7 +25164,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
    Baby time.
    ============================================================ */
 function BabyScheduleView({ coaches, swimmers, babyScheduleDay, setBabyScheduleDay }) {
-  const babyCoaches = coaches.filter((c) => c.isBabyCoach);
+  const babyCoaches = coaches.filter((c) => c.isBabyCoach && !(c.offDays || []).includes(babyScheduleDay));
   const babyTimes = getTimeOptions(BRANCHES[0].id, babyScheduleDay, "Baby")
     .slice()
     .sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
@@ -25181,6 +25226,13 @@ function BabyScheduleView({ coaches, swimmers, babyScheduleDay, setBabyScheduleD
                     {c.name}
                   </td>
                   {babyTimes.map((t) => {
+                    if (isCoachClosedAt(c, babyScheduleDay, t)) {
+                      return (
+                        <td key={t} className="px-2 py-2 text-center">
+                          <span className="text-[9px] font-medium text-red-400">Closed</span>
+                        </td>
+                      );
+                    }
                     const swimmer = bookingFor(c.id, t);
                     if (!swimmer) {
                       return (
@@ -27364,17 +27416,19 @@ function CoachView({ onExit, preAuthedCoach = null }) {
       // currently teach (from their own swimmer roster), so reassigning
       // who runs a squad never leaves anyone looking at the wrong plan
       // or a blank one.
-      const myLevels = new Set(swimmers.map((s) => trainingGroupOf(s)).filter(Boolean));
+      const myGroupKeys = new Set(swimmers.map((s) => trainingGroupKey(s)).filter(Boolean));
       // Only Published plans reach the coach — a Draft is still being
       // put together (or prepared ahead of time and deliberately not
       // announced yet). A plan saved before this status existed at all
       // has no status field — treated as Published, not Draft, so
       // nothing that was already visible to a coach suddenly vanishes
       // the moment this feature ships.
-      const relevant = all.filter((w) => myLevels.has(w.level) && w.date === date && (w.status || "published") === "published");
+      const relevant = all.filter(
+        (w) => [...myGroupKeys].some((key) => trainingRecordMatchesGroup(w, key)) && w.date === date && (w.status || "published") === "published"
+      );
       setMyLevelWorkouts(relevant);
       const allWeeks = await loadCollection(STORE_KEYS.weeklyVolumes);
-      setMyWeeklyVolumes(allWeeks.filter((w) => myLevels.has(w.level)));
+      setMyWeeklyVolumes(allWeeks.filter((w) => [...myGroupKeys].some((key) => trainingRecordMatchesGroup(w, key))));
     },
     [authedCoach, swimmers]
   );
@@ -27454,10 +27508,10 @@ function CoachView({ onExit, preAuthedCoach = null }) {
     if (!authedCoach) return;
     (async () => {
       const all = await loadCollection(STORE_KEYS.weeklyVolumes);
-      const myLevels = new Set(swimmers.map((s) => trainingGroupOf(s)).filter(Boolean));
+      const myGroupKeys = new Set(swimmers.map((s) => trainingGroupKey(s)).filter(Boolean));
       const todayKey = todayISO();
       const relevant = all.filter((w) => {
-        if (!myLevels.has(w.level)) return false;
+        if (![...myGroupKeys].some((key) => trainingRecordMatchesGroup(w, key))) return false;
         const start = new Date(w.startDate);
         const end = new Date(start.getTime() + 7 * 86400000);
         const today = new Date(todayKey);
