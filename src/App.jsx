@@ -4752,14 +4752,25 @@ function diffSwimmerUpdate(existing, imported) {
     // Swimmer Form would be, instead of only ever living in the flat
     // fields with no month attached to it.
     const key = monthKey();
+    // Resolves the swimmer's ACTUAL current schedule the same way every
+    // other part of the app does (monthlySchedules first, then
+    // nextSchedule, then the flat fields) — critical here, because
+    // falling back straight to the flat existing.coachId/day/time/
+    // sessionType instead would silently reintroduce a STALE value the
+    // moment any ONE of these fields changed via import: e.g. a sheet
+    // that only updates the time, with no coach column at all, would
+    // otherwise overwrite a swimmer's genuinely current (but only
+    // monthlySchedules-recorded) coach with whatever old value happens
+    // to sit in the flat field.
+    const currentResolved = getMonthlySchedule(existing, key) || {};
     patch.monthlySchedules = {
       ...(existing.monthlySchedules || {}),
       [key]: {
         ...(existing.monthlySchedules?.[key] || {}),
-        day: patch.day ?? existing.day,
-        time: patch.time ?? existing.time,
-        coachId: patch.coachId ?? existing.coachId,
-        sessionType: patch.sessionType ?? existing.sessionType,
+        day: patch.day ?? currentResolved.day ?? existing.day,
+        time: patch.time ?? currentResolved.time ?? existing.time,
+        coachId: patch.coachId ?? currentResolved.coachId ?? existing.coachId,
+        sessionType: patch.sessionType ?? currentResolved.sessionType ?? existing.sessionType,
         scheduleMonth: key,
       },
     };
