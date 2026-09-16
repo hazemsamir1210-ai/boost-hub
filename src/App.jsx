@@ -1324,9 +1324,7 @@ function slotCapacityKey(coachId, day, time) {
 // Star/Team levels — a specific slot override wins if one's been set,
 // otherwise falls back to that level's own general cap.
 function effectiveSlotCapacity(sessionType, level, coachId, day, time, program, programLevel) {
-  const hasConfiguredProgramCapacity =
-    program && programLevel && PROGRAM_LEVEL_CAPACITIES[programLevelSkillsKey(program, programLevel)] != null;
-  if (sessionType === "group" && TEAM_SQUAD_LEVELS.includes(level) && !hasConfiguredProgramCapacity) {
+  if (sessionType === "group" && TEAM_SQUAD_LEVELS.includes(level)) {
     const override = SLOT_CAPACITY_OVERRIDES[slotCapacityKey(coachId, day, time)];
     if (override != null) return override;
   }
@@ -14497,13 +14495,20 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     swimmers.forEach((s) => {
       const ms = getMonthlySchedule(s, scheduleMonth);
       if (!ms) return;
-      addBooking(ms.coachId, ms.day, ms.time, ms.sessionType, s.level, s.age, s.name, s.id, s.program, s.programLevel);
+      // A migrated swimmer's real current level is their program level —
+      // promotions through the Programs structure only ever advance
+      // that, never the old level field (which stays frozen on
+      // purpose), so using it here for a migrated swimmer would show
+      // whatever level they were at BEFORE their most recent
+      // promotion(s), not their actual current one.
+      const displayLevel = s.program && s.programLevel ? s.programLevel : s.level;
+      addBooking(ms.coachId, ms.day, ms.time, ms.sessionType, displayLevel, s.age, s.name, s.id, s.program, s.programLevel);
       // A swimmer with a second weekly session (different coach or slot)
       // shows up under that booking too — same swimmer, two commitments.
       // Same day+time as the primary session isn't a real second
       // commitment — it's counted once already above.
       const second = getDistinctSecondSession(ms);
-      if (second) addBooking(second.coachId, second.day, second.time, second.sessionType, s.level, s.age, s.name, s.id, s.program, s.programLevel);
+      if (second) addBooking(second.coachId, second.day, second.time, second.sessionType, displayLevel, s.age, s.name, s.id, s.program, s.programLevel);
     });
     const bookingsById = {};
     Object.keys(bookingsMapById).forEach((coachId) => {
