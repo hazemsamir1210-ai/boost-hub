@@ -2495,7 +2495,7 @@ async function setStaffPasswordOverride(newPassword) {
    and any save right after that can fail with "Couldn't save...".
    Instead, each data type now lives as a single array under one key, so
    loading or saving a whole collection is exactly one storage call. */
-const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all", incidents: "incidents-all", registrations: "registrations-all", feedback: "parent-feedback-all", waitlist: "waitlist-all", courses: "coach-courses-all", coursePayments: "course-payments-all", courseStudents: "course-students-all", payrollAdjustments: "payroll-adjustments-all", trainingPlans: "training-plans-all", weeklyVolumes: "weekly-volumes-all", seasons: "training-seasons-all", testSets: "test-sets-all", workoutTemplates: "workout-templates-all", meets: "meets-all" };
+const STORE_KEYS = { subs: "subs-all", swimmers: "swimmers-all", coaches: "coaches-all", expenses: "expenses-all", accounts: "accounts-all", achievements: "achievements-all", staffAttendance: "staff-attendance-all", activityLog: "activity-log-all", workouts: "workouts-all", messages: "messages-all", incidents: "incidents-all", registrations: "registrations-all", feedback: "parent-feedback-all", waitlist: "waitlist-all", courses: "coach-courses-all", coursePayments: "course-payments-all", courseStudents: "course-students-all", payrollAdjustments: "payroll-adjustments-all", trainingPlans: "training-plans-all", weeklyVolumes: "weekly-volumes-all", seasons: "training-seasons-all", testSets: "test-sets-all", workoutTemplates: "workout-templates-all", meets: "meets-all", importUndoSnapshot: "import-undo-snapshot" };
 
 // Standard periodization phases used in competitive swimming training
 // (the same general model most swim federation coaching courses teach —
@@ -2883,6 +2883,51 @@ async function notifyAccountByPush(recipientName, { title, body, url }) {
 // and blow past the storage size cap. Never blocks or fails the action
 // it's logging — if writing the log itself fails, that's swallowed
 // silently rather than interrupting whatever the person was doing.
+// A one-step-back safety net for bulk import specifically — the
+// highest-blast-radius operation in the app, since it can touch many
+// swimmers' data in one save. Stores exactly what's needed to reverse
+// ONE import: each updated swimmer's full record as it was right
+// before this import touched it, plus the ids of any brand new
+// swimmers this import added (to be removed on undo). Overwrites any
+// previous snapshot — only the most recent import can be undone, and
+// only once; a snapshot is consumed (deleted) the moment it's used, so
+// undoing twice in a row can't accidentally reverse further back than
+// intended.
+async function saveImportUndoSnapshot(affectedSwimmers, newSwimmerIds) {
+  await storageSet(
+    STORE_KEYS.importUndoSnapshot,
+    JSON.stringify({ at: new Date().toISOString(), affectedSwimmers, newSwimmerIds }),
+    true
+  );
+}
+
+async function loadImportUndoSnapshot() {
+  try {
+    const res = await window.storage.get(STORE_KEYS.importUndoSnapshot, true);
+    return res ? JSON.parse(res.value) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Reverses the most recent import: restores every swimmer it updated
+// back to their exact pre-import state, and removes every swimmer it
+// newly added. Throws if there's nothing to undo (no snapshot, or it
+// was already used) — the caller shows that as a plain message rather
+// than a crash.
+async function undoLastImport() {
+  const snapshot = await loadImportUndoSnapshot();
+  if (!snapshot) throw new Error("No import to undo — either nothing was imported recently, or it was already undone.");
+  const all = await fetchAllSwimmers();
+  const restoredById = new Map(snapshot.affectedSwimmers.map((s) => [s.id, s]));
+  const newIds = new Set(snapshot.newSwimmerIds || []);
+  const restored = all.filter((s) => !newIds.has(s.id)).map((s) => restoredById.get(s.id) || s);
+  const res = await saveCollection(STORE_KEYS.swimmers, restored);
+  if (!res) throw new Error("Could not undo the import, please try again");
+  await window.storage.delete(STORE_KEYS.importUndoSnapshot, true).catch(() => {}); // one-time use — never leaves a stale snapshot behind to be undone twice
+  return snapshot;
+}
+
 async function logActivity(accountName, role, action, target) {
   try {
     const all = await loadCollection(STORE_KEYS.activityLog);
@@ -2897,6 +2942,14 @@ async function logActivity(accountName, role, action, target) {
     await saveCollection(STORE_KEYS.activityLog, all.slice(0, 500));
   } catch (e) {
     console.warn("logActivity failed", e);
+  }
+  // Notifies Admin of every meaningful logged action — never Admin's
+  // own actions, so acting as Admin doesn't spam Admin's own device.
+  // Fire-and-forget: notifyAccountByPush already swallows its own
+  // errors, so a notification failure can never affect the action just
+  // logged.
+  if ((accountName || "Admin") !== "Admin") {
+    notifyAccountByPush("Admin", { title: action, body: `${accountName || "Someone"}: ${target || ""}`, url: "/" });
   }
 }
 
@@ -4700,17 +4753,68 @@ function parseImportedSwimmerRow(row, coaches) {
 // re-importing a file that only reflects this month's payment status can
 // never accidentally erase a swimmer's payment history from an earlier
 // month that just isn't in this particular sheet.
-function diffSwimmerUpdate(existing, imported) {
+// Finds the existing swimmer a freshly-imported row should update, if
+// any. Tries an exact phone+name match first (the safest possible
+// match). If that fails, falls back to matching by name ALONE — but
+// only when exactly one existing swimmer has that exact name; two (or
+// more) different real people sharing a name must never be silently
+// merged just because one row's phone doesn't match either of them.
+// The name-only path is exactly for "same person, phone number
+// corrected/changed" — diffSwimmerUpdate flags a resulting phone
+// change as critical so the admin still sees and confirms it before
+// anything is saved.
+function findExistingSwimmerMatch(existingAll, record) {
+  const exact = existingAll.find((s) => s.phone === record.phone && s.name.trim().toLowerCase() === record.name.trim().toLowerCase());
+  if (exact) return exact;
+  const nameMatches = existingAll.filter((s) => s.name.trim().toLowerCase() === record.name.trim().toLowerCase());
+  if (nameMatches.length === 1 && nameMatches[0].phone !== record.phone) return nameMatches[0];
+  return null;
+}
+
+function diffSwimmerUpdate(existing, imported, coaches = []) {
   const changes = [];
-  const fieldsToSync = ["day", "time", "level", "coachId", "sessionType", "branch", "age"];
+  const fieldsToSync = ["day", "time", "level", "coachId", "sessionType", "branch", "age", "phone"];
   const patch = {};
+  const coachName = (id) => (id ? coaches.find((c) => c.id === id)?.name || id : "— no coach —");
+  const dayLabel = (id) => DAY_GROUPS.find((d) => d.id === id)?.label || id;
   fieldsToSync.forEach((f) => {
     const newVal = imported[f];
     if (newVal !== undefined && newVal !== "" && newVal !== null && newVal !== existing[f]) {
-      changes.push({ field: f, from: existing[f] ?? "—", to: newVal });
+      if (f === "coachId") {
+        // The single most consequential field to get wrong silently —
+        // shown with real names (not raw ids) and flagged critical so
+        // the review screen can make it impossible to miss, instead of
+        // reading like any other minor field change in the list.
+        changes.push({ field: "Coach", from: coachName(existing[f]), to: coachName(newVal), critical: true });
+      } else if (f === "day") {
+        changes.push({ field: f, from: dayLabel(existing[f]), to: dayLabel(newVal) });
+      } else if (f === "phone") {
+        // Also flagged critical — a phone change is exactly what lets
+        // this swimmer get matched by name alone (see the matching
+        // logic above) instead of the usual exact phone+name match, so
+        // it needs the same "make sure this is really the same person"
+        // visibility before the admin confirms.
+        changes.push({ field: "Phone", from: existing[f] || "—", to: newVal, critical: true });
+      } else {
+        changes.push({ field: f, from: existing[f] ?? "—", to: newVal });
+      }
       patch[f] = newVal;
     }
   });
+  // A day/time change means the swimmer's OLD coach may not even work
+  // the NEW slot at all — so unless the sheet itself explicitly says
+  // who the new coach is (a real "coachId" value it provided, not just
+  // an absent/blank column), the coach is cleared here rather than
+  // silently carried over from the old slot. This is the opposite of
+  // "preserve whatever isn't mentioned": a schedule change is treated
+  // as needing a fresh, deliberate coach assignment, not an assumption
+  // that the same coach still applies.
+  const dayOrTimeChanged = ["day", "time"].some((f) => f in patch);
+  const coachExplicitlyProvided = "coachId" in patch;
+  if (dayOrTimeChanged && !coachExplicitlyProvided && existing.coachId) {
+    patch.coachId = "";
+    changes.push({ field: "Coach", from: coachName(existing.coachId), to: "— cleared, needs reassigning —", critical: true });
+  }
   const newlyPaid = (imported.paidMonths || []).filter((m) => !(existing.paidMonths || []).includes(m));
   if (newlyPaid.length > 0) {
     changes.push({ field: "paidMonths", from: null, to: newlyPaid.map(monthLabel).join(", ") });
@@ -6621,15 +6725,33 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           return;
         }
         const all = (data || []).map((r) => r.data).filter((s) => s.id !== initial?.id);
+        // Duration-aware overlap check — Baby sessions are 30 minutes,
+        // every other session is 60, so two sessions can genuinely NOT
+        // conflict even while one starts partway through the other's
+        // slot (a Baby class ending at 7:30 doesn't conflict with
+        // something else starting at 7:30). Comparing bare start-time
+        // strings for equality missed this entirely: it either flagged
+        // a false conflict for two sessions that don't actually overlap
+        // in time, or silently missed a real one that starts at a
+        // different minute but still overlaps.
+        const thisStart = timeToMinutes(time);
+        const thisDuration = level === "Baby" || program === "baby" ? 30 : 60;
+        const thisEnd = thisStart + thisDuration;
         // Only count swimmers actually competing for the SAME month we're
         // scheduling into — checked against their live schedule if that's
         // the month in question, or their pending nextSchedule if it's the
         // month ahead. A record saved before scheduleMonth existed is
         // treated as "this month" (the only month there used to be).
+        const overlaps = (otherTime, otherLevel, otherProgram) => {
+          const otherStart = timeToMinutes(otherTime);
+          const otherDuration = otherLevel === "Baby" || otherProgram === "baby" ? 30 : 60;
+          const otherEnd = otherStart + otherDuration;
+          return thisStart < otherEnd && otherStart < thisEnd;
+        };
         const matches = all.filter((s) => {
           const ms = getMonthlySchedule(s, scheduleMonth);
-          if (ms && ms.coachId === coachId && ms.day === day && ms.time === time) return true;
-          if (!ms && s.coachId === coachId && s.day === day && s.time === time && (s.scheduleMonth || monthKey()) === scheduleMonth) return true;
+          if (ms && ms.coachId === coachId && ms.day === day && overlaps(ms.time, s.level, s.program)) return true;
+          if (!ms && s.coachId === coachId && s.day === day && overlaps(s.time, s.level, s.program) && (s.scheduleMonth || monthKey()) === scheduleMonth) return true;
           return false;
         });
         setSlotUsage(matches);
@@ -9265,6 +9387,24 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const [coachDiagTime, setCoachDiagTime] = useState("");
   const [coachDiagRunning, setCoachDiagRunning] = useState(false);
   const [coachDiagResults, setCoachDiagResults] = useState(null);
+  const [undoImportRunning, setUndoImportRunning] = useState(false);
+  const [undoImportResult, setUndoImportResult] = useState(null); // { ok: true, message } | { ok: false, message }
+  const handleUndoLastImport = async () => {
+    setUndoImportRunning(true);
+    setUndoImportResult(null);
+    try {
+      const snapshot = await undoLastImport();
+      setUndoImportResult({
+        ok: true,
+        message: `Undone — restored ${snapshot.affectedSwimmers.length} updated swimmer(s) and removed ${snapshot.newSwimmerIds.length} newly-added one(s) from the import made at ${new Date(snapshot.at).toLocaleString()}.`,
+      });
+      logActivity(accountName, role, "Undid last import", `${snapshot.affectedSwimmers.length} restored, ${snapshot.newSwimmerIds.length} removed`);
+    } catch (e) {
+      setUndoImportResult({ ok: false, message: e?.message || "Could not undo the import, please try again." });
+    } finally {
+      setUndoImportRunning(false);
+    }
+  };
   const runCoachFilterDiagnostic = async () => {
     if (!coachDiagCoachId || !coachDiagDay || !coachDiagTime) return;
     setCoachDiagRunning(true);
@@ -13004,6 +13144,24 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   // storage diagnostics
   const [diagResult, setDiagResult] = useState(null);
   const [diagRunning, setDiagRunning] = useState(false);
+  const [adminPushSubscribed, setAdminPushSubscribed] = useState(false);
+  const [adminPushSubscribing, setAdminPushSubscribing] = useState(false);
+  const [adminPushError, setAdminPushError] = useState("");
+  useEffect(() => {
+    isPushSubscribed().then(setAdminPushSubscribed);
+  }, []);
+  const enableAdminNotifications = async () => {
+    setAdminPushError("");
+    setAdminPushSubscribing(true);
+    try {
+      await subscribeToPushNotifications("Admin");
+      setAdminPushSubscribed(true);
+    } catch (e) {
+      setAdminPushError(e?.message || "Could not enable notifications");
+    } finally {
+      setAdminPushSubscribing(false);
+    }
+  };
 
   // staff accounts (admin only)
   const [accounts, setAccounts] = useState([]);
@@ -13415,6 +13573,20 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     logActivity(accountName, role, existing ? "Edited swimmer" : "Added swimmer", finalRecord.name);
     syncSingleSwimmerToTableWithRetry(finalRecord); // fast path — only this one swimmer's row, not the whole roster
     syncSwimmerToCoreEngine(finalRecord); // best-effort, never blocks this save
+    // Notifies the coach when a swimmer becomes newly THEIRS — a brand
+    // new swimmer assigned to them, or an existing swimmer whose coach
+    // just changed to them. Never fires just because something else
+    // about the swimmer changed while their coach stayed the same.
+    if (finalRecord.coachId && finalRecord.coachId !== existing?.coachId) {
+      const assignedCoach = coaches.find((c) => c.id === finalRecord.coachId);
+      if (assignedCoach) {
+        notifyAccountByPush(assignedCoach.name, {
+          title: "New swimmer assigned to you",
+          body: finalRecord.name,
+          url: "/",
+        });
+      }
+    }
     return finalRecord;
     };
     const queued = swimmerUpdateQueue.catch(() => {}).then(run);
@@ -13605,9 +13777,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         const updates = [];
         const seenPhones = new Set();
         fullHistory.swimmers.forEach((record, i) => {
-          const existing = existingAll.find((s) => s.phone === record.phone && s.name.trim().toLowerCase() === record.name.trim().toLowerCase());
+          const existing = findExistingSwimmerMatch(existingAll, record);
           if (existing) {
-            const { changes, patch } = diffSwimmerUpdate(existing, record);
+            const { changes, patch } = diffSwimmerUpdate(existing, record, coaches);
             if (changes.length > 0) {
               updates.push({ row: i + 3, existing, changes, patch });
             } else {
@@ -13653,9 +13825,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           return;
         }
         const { record, warnings } = result;
-        const existing = existingAll.find((s) => s.phone === record.phone && s.name.trim().toLowerCase() === record.name.trim().toLowerCase());
+        const existing = findExistingSwimmerMatch(existingAll, record);
         if (existing) {
-          const { changes, patch } = diffSwimmerUpdate(existing, record);
+          const { changes, patch } = diffSwimmerUpdate(existing, record, coaches);
           if (changes.length > 0) {
             updates.push({ row: i + 2, existing, changes, patch });
           } else {
@@ -13694,6 +13866,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       const updatesById = new Map((importPreview.updates || []).map((u) => [u.existing.id, u.patch]));
       const merged = all.map((s) => (updatesById.has(s.id) ? { ...s, ...updatesById.get(s.id) } : s));
       const newRecords = importPreview.valid.map((v) => v.record);
+      // Snapshot BEFORE applying anything — u.existing is already each
+      // updated swimmer's exact pre-import state, and newRecords' ids
+      // are exactly what a later undo needs to remove.
+      await saveImportUndoSnapshot(
+        (importPreview.updates || []).map((u) => u.existing),
+        newRecords.map((r) => r.id)
+      );
       const next = [...merged, ...newRecords];
       const res = await saveCollection(STORE_KEYS.swimmers, next);
       if (!res) throw new Error("Could not save the imported swimmers, please try again");
@@ -13703,6 +13882,27 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         "Imported swimmers",
         `${newRecords.length} new, ${updatesById.size} updated`
       );
+      // Same coach-assignment notification the Swimmer Form gives on a
+      // single save — a bulk import assigning (not clearing) a coach is
+      // just as real an assignment as doing it one swimmer at a time,
+      // and shouldn't need the coach to notice by chance instead.
+      (importPreview.updates || []).forEach((u) => {
+        const newCoachId = u.patch.coachId;
+        if (newCoachId && newCoachId !== u.existing.coachId) {
+          const assignedCoach = coaches.find((c) => c.id === newCoachId);
+          if (assignedCoach) {
+            notifyAccountByPush(assignedCoach.name, { title: "New swimmer assigned to you", body: u.existing.name, url: "/" });
+          }
+        }
+      });
+      newRecords.forEach((record) => {
+        if (record.coachId) {
+          const assignedCoach = coaches.find((c) => c.id === record.coachId);
+          if (assignedCoach) {
+            notifyAccountByPush(assignedCoach.name, { title: "New swimmer assigned to you", body: record.name, url: "/" });
+          }
+        }
+      });
       loadSwimmersPage({ offset: 0 }); // refresh the visible page to reflect this change
       setImportPreview(null);
     } catch (e) {
@@ -14721,6 +14921,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               Test storage
             </button>
           )}
+          {canEdit && !adminPushSubscribed && (
+            <button
+              onClick={enableAdminNotifications}
+              disabled={adminPushSubscribing}
+              className="text-xs px-3 py-2 rounded-lg hover:bg-slate-100 text-slate-500 disabled:opacity-60 flex items-center gap-1.5 whitespace-nowrap"
+              title="Get a notification on this device whenever something meaningful happens on the site"
+            >
+              🔔 {adminPushSubscribing ? "Enabling..." : "Enable notifications"}
+            </button>
+          )}
+          {adminPushError && <span className="text-xs text-red-500 max-w-[160px] truncate">{adminPushError}</span>}
           <button
             onClick={() => setLang(lang === "en" ? "ar" : "en")}
             className="text-xs px-3 py-2 rounded-lg hover:bg-slate-100 text-slate-500 font-semibold whitespace-nowrap"
@@ -22427,6 +22638,23 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               )}
             </div>
 
+            <h3 className="font-bold text-slate-900 mb-1 mt-6">Undo last import</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              One step back if the last bulk import (Swimmers → Import from Excel) did something unexpected — restores every swimmer it updated to exactly how they were right before, and removes any brand new swimmers it added. Only reverses the SINGLE most recent import, and only works once.
+            </p>
+            <div className="bg-slate-50 rounded-2xl p-5">
+              <button
+                onClick={handleUndoLastImport}
+                disabled={undoImportRunning}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-red-600 text-white text-sm font-semibold hover:bg-red-700 disabled:opacity-60"
+              >
+                <RefreshCw className={`w-4 h-4 ${undoImportRunning ? "animate-spin" : ""}`} /> {undoImportRunning ? "Undoing..." : "Undo last import"}
+              </button>
+              {undoImportResult && (
+                <p className={`text-xs mt-2 ${undoImportResult.ok ? "text-green-700" : "text-red-500"}`}>{undoImportResult.message}</p>
+              )}
+            </div>
+
             <h3 className="font-bold text-slate-900 mb-1 mt-6">Coach filter diagnostic (exact mismatch finder)</h3>
             <p className="text-sm text-slate-500 mb-4">
               Pick a coach, day, and time — shows exactly who SHOULD match (computed the same way the Schedule tab does) versus who the live Swimmers tab query actually returns for those same three things, so any gap points straight at where it's really coming from.
@@ -25113,6 +25341,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 px-4" onClick={() => setImportPreview(null)}>
           <div className="bg-white rounded-2xl p-5 max-w-lg w-full shadow-xl max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-bold text-slate-900 mb-1">Import swimmers</h3>
+            {(importPreview.updates || []).some((u) => u.changes.some((c) => c.critical)) && (
+              <div className="text-sm font-semibold rounded-lg px-3 py-2.5 mb-3 bg-red-50 text-red-700 border border-red-200 flex items-center gap-2">
+                ⚠️ This file will change the assigned coach for {importPreview.updates.filter((u) => u.changes.some((c) => c.critical)).length} swimmer(s) — check the highlighted rows below carefully before confirming.
+              </div>
+            )}
             {importPreview.fullHistoryNote && (
               <div className={`text-xs rounded-lg px-3 py-2 mb-3 ${importPreview.fullHistoryNote.startsWith("No month") ? "bg-amber-50 text-amber-800" : "bg-sky-50 text-sky-800"}`}>{importPreview.fullHistoryNote}</div>
             )}
@@ -25149,16 +25382,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <div className="mb-4">
                 <div className="text-xs font-semibold text-slate-500 mb-1.5">Already registered — will update with the new info below</div>
                 <div className="space-y-1.5 max-h-56 overflow-y-auto">
-                  {importPreview.updates.map((u, i) => (
-                    <div key={i} className="text-xs bg-sky-50 rounded-lg px-3 py-2">
-                      <div className="font-medium text-slate-800 mb-1">{u.existing.name}</div>
-                      {u.changes.map((c, j) => (
-                        <div key={j} className="text-sky-800">
-                          {c.field}: <span className="text-slate-500">{String(c.from)}</span> → <span className="font-medium">{String(c.to)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ))}
+                  {importPreview.updates.map((u, i) => {
+                    const hasCritical = u.changes.some((c) => c.critical);
+                    return (
+                      <div key={i} className={`text-xs rounded-lg px-3 py-2 ${hasCritical ? "bg-red-50 border border-red-200" : "bg-sky-50"}`}>
+                        <div className="font-medium text-slate-800 mb-1">{u.existing.name}</div>
+                        {u.changes.map((c, j) => (
+                          <div key={j} className={c.critical ? "text-red-700 font-semibold flex items-center gap-1" : "text-sky-800"}>
+                            {c.critical && "⚠️ "}{c.field}: <span className={c.critical ? "text-red-500" : "text-slate-500"}>{String(c.from)}</span> → <span className="font-medium">{String(c.to)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
