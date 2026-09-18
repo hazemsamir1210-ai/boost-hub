@@ -4801,20 +4801,6 @@ function diffSwimmerUpdate(existing, imported, coaches = []) {
       patch[f] = newVal;
     }
   });
-  // A day/time change means the swimmer's OLD coach may not even work
-  // the NEW slot at all — so unless the sheet itself explicitly says
-  // who the new coach is (a real "coachId" value it provided, not just
-  // an absent/blank column), the coach is cleared here rather than
-  // silently carried over from the old slot. This is the opposite of
-  // "preserve whatever isn't mentioned": a schedule change is treated
-  // as needing a fresh, deliberate coach assignment, not an assumption
-  // that the same coach still applies.
-  const dayOrTimeChanged = ["day", "time"].some((f) => f in patch);
-  const coachExplicitlyProvided = "coachId" in patch;
-  if (dayOrTimeChanged && !coachExplicitlyProvided && existing.coachId) {
-    patch.coachId = "";
-    changes.push({ field: "Coach", from: coachName(existing.coachId), to: "— cleared, needs reassigning —", critical: true });
-  }
   const newlyPaid = (imported.paidMonths || []).filter((m) => !(existing.paidMonths || []).includes(m));
   if (newlyPaid.length > 0) {
     changes.push({ field: "paidMonths", from: null, to: newlyPaid.map(monthLabel).join(", ") });
@@ -4865,13 +4851,29 @@ function diffSwimmerUpdate(existing, imported, coaches = []) {
     // monthlySchedules-recorded) coach with whatever old value happens
     // to sit in the flat field.
     const currentResolved = getMonthlySchedule(existing, key) || {};
+    // A day/time change via THIS simple sheet means the old coach may
+    // not even work the new slot at all — so unless the sheet itself
+    // explicitly provides a coach, the coach is cleared rather than
+    // carried over, needing a fresh, deliberate reassignment. Scoped
+    // ONLY to this branch (the sheet had no monthlySchedules of its
+    // own) — the full-history sheet above never reaches here, so a
+    // stale flat day/time on a swimmer who's simply getting monthly
+    // history recorded for the first time can never trigger this.
+    const dayOrTimeChanged = ["day", "time"].some((f) => f in patch);
+    const coachExplicitlyProvided = "coachId" in patch;
+    const currentCoachId = currentResolved.coachId || existing.coachId;
+    const shouldClearCoach = dayOrTimeChanged && !coachExplicitlyProvided && currentCoachId;
+    if (shouldClearCoach) {
+      patch.coachId = "";
+      changes.push({ field: "Coach", from: coachName(currentCoachId), to: "— cleared, needs reassigning —", critical: true });
+    }
     patch.monthlySchedules = {
       ...(existing.monthlySchedules || {}),
       [key]: {
         ...(existing.monthlySchedules?.[key] || {}),
         day: patch.day ?? currentResolved.day ?? existing.day,
         time: patch.time ?? currentResolved.time ?? existing.time,
-        coachId: patch.coachId ?? currentResolved.coachId ?? existing.coachId,
+        coachId: shouldClearCoach ? "" : patch.coachId ?? currentResolved.coachId ?? existing.coachId,
         sessionType: patch.sessionType ?? currentResolved.sessionType ?? existing.sessionType,
         scheduleMonth: key,
       },
