@@ -4815,10 +4815,22 @@ function diffSwimmerUpdate(existing, imported, coaches = []) {
   const scheduleFieldsChanged = ["day", "time", "coachId", "sessionType"].some((f) => f in patch);
   if (imported.monthlySchedules && Object.keys(imported.monthlySchedules).length > 0) {
     // The month-by-month tracking sheet already built a complete,
-    // correctly-shaped per-month history (including the current one) —
-    // merge it in wholesale, keeping any existing months the sheet
-    // didn't cover rather than replacing the whole map.
-    const mergedSchedules = { ...(existing.monthlySchedules || {}), ...imported.monthlySchedules };
+    // correctly-shaped per-month history — merged in per FIELD, per
+    // month, not by wholesale-replacing each month's whole object. A
+    // sheet with no coach column (this admin's sheet, and many real
+    // academy sheets) builds every month's entry with coachId
+    // EXPLICITLY set to null — replacing the whole month object with
+    // that wholesale would silently wipe out a real, already-recorded
+    // coach for that month even though nothing about the coach
+    // actually changed. Falls back to the existing month's coachId
+    // whenever the imported month doesn't provide a real one, and
+    // keeps any existing months the sheet didn't cover at all.
+    const mergedSchedules = { ...(existing.monthlySchedules || {}) };
+    Object.keys(imported.monthlySchedules).forEach((mk) => {
+      const importedMonth = imported.monthlySchedules[mk];
+      const existingMonth = existing.monthlySchedules?.[mk] || {};
+      mergedSchedules[mk] = { ...existingMonth, ...importedMonth, coachId: importedMonth.coachId || existingMonth.coachId || null };
+    });
     // Detects a NEW or DIFFERENT month even when every flat field above
     // matched exactly (e.g. this swimmer's current schedule hasn't
     // changed, but the file now also includes an entry for a month that
@@ -4827,7 +4839,7 @@ function diffSwimmerUpdate(existing, imported, coaches = []) {
     // duplicate, so the new month's data is computed here but never
     // actually gets saved.
     const newMonthKeys = Object.keys(imported.monthlySchedules).filter(
-      (k) => JSON.stringify(imported.monthlySchedules[k]) !== JSON.stringify(existing.monthlySchedules?.[k])
+      (k) => JSON.stringify(mergedSchedules[k]) !== JSON.stringify(existing.monthlySchedules?.[k])
     );
     if (newMonthKeys.length > 0) {
       changes.push({ field: "monthlySchedules", from: null, to: `${newMonthKeys.length} month(s) added/updated: ${newMonthKeys.map(monthLabel).join(", ")}` });
