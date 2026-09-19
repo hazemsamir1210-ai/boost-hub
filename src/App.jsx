@@ -4472,7 +4472,15 @@ function parseFullHistorySheet(sheet, coaches = [], XLSX) {
   };
   const blockOffsets = blocks.map((b) => detectSubColumns(b.startCol));
 
-  const latestBlock = blocks[blocks.length - 1];
+  // The latest month is the one with the highest year+month VALUE, not
+  // whichever block happens to sit in the rightmost column — a sheet
+  // with columns out of chronological order (e.g. Jan, Feb, Sep, Aug
+  // left to right) must still treat September as latest, not August.
+  const latestBlockIndex = blocks.reduce(
+    (bestIdx, b, i) => (b.year * 12 + b.month > blocks[bestIdx].year * 12 + blocks[bestIdx].month ? i : bestIdx),
+    0
+  );
+  const latestBlock = blocks[latestBlockIndex];
   const latestKey = `${latestBlock.year}-${String(latestBlock.month).padStart(2, "0")}`;
 
   const swimmers = [];
@@ -4538,7 +4546,7 @@ function parseFullHistorySheet(sheet, coaches = [], XLSX) {
 
       const day = IMPORT_DAY_MAP[dayRaw.trim()];
       const time = importMapTime(timeRaw, day);
-      const baseSlot = { sessionType: matchedSessionType || "group", coachId: matchedCoach?.id || null, scheduleMonth: monthKeyStr };
+      const baseSlot = { sessionType: matchedSessionType || null, coachId: matchedCoach?.id || null, scheduleMonth: monthKeyStr };
       if (day && time) {
         scheduleHistory.push({ day, time, date: monthDate });
         monthlySchedules[monthKeyStr] = { ...baseSlot, day, time };
@@ -4552,7 +4560,7 @@ function parseFullHistorySheet(sheet, coaches = [], XLSX) {
           monthlySchedules[monthKeyStr] = {
             ...baseSlot,
             day: "mon-wed", time: "7:30 PM",
-            day2: "fri-sat", time2: "3:00 PM", sessionType2: matchedSessionType || "group",
+            day2: "fri-sat", time2: "3:00 PM", sessionType2: matchedSessionType || null,
           };
         } else if (blob.includes("ladies") || blob.includes("laides")) {
           scheduleHistory.push({ day: "fri-sat", time: "8:30 AM", date: monthDate });
@@ -4591,8 +4599,8 @@ function parseFullHistorySheet(sheet, coaches = [], XLSX) {
       time: latestMonthSlot?.time || "",
       day2: latestMonthSlot?.day2 || "",
       time2: latestMonthSlot?.time2 || "",
-      sessionType: latestMonthSlot?.sessionType || "group",
-      sessionType2: latestMonthSlot?.day2 ? latestMonthSlot?.sessionType2 || "group" : "",
+      sessionType: latestMonthSlot?.sessionType || null,
+      sessionType2: latestMonthSlot?.day2 ? latestMonthSlot?.sessionType2 || null : "",
       coachId: latestMonthSlot?.coachId || null,
       coachId2: null,
       scheduleMonth: latestMonthSlot ? latestKey : undefined,
@@ -4700,7 +4708,13 @@ function parseImportedSwimmerRow(row, coaches) {
   const sessionRaw = get("session type", "sessiontype", "type", "نوع الحصة").toLowerCase();
   const sessionMatch = SESSION_TYPES.find((t) => t.id.toLowerCase() === sessionRaw || t.label.toLowerCase() === sessionRaw);
   if (sessionRaw && !sessionMatch) warnings.push(`session type "${get("session type", "نوع الحصة")}" not recognized — set to Group`);
-  const sessionType = sessionMatch ? sessionMatch.id : "group";
+  // No column / no value at all -> null, so an existing swimmer's real
+  // sessionType (Private/Semi-Private) is preserved instead of silently
+  // overwritten with a "Group" that only ever existed as a fallback
+  // default, not anything the sheet actually said. A recognized value
+  // still applies normally; an unrecognized-but-present value still
+  // falls back to "group" (the warning above covers that case).
+  const sessionType = sessionMatch ? sessionMatch.id : sessionRaw ? "group" : null;
 
   const timeRaw = get("time", "start time", "الوقت", "الساعة");
   let time = "";
@@ -4758,42 +4772,51 @@ function parseImportedSwimmerRow(row, coaches) {
 // match). If that fails, falls back to matching by name ALONE — but
 // only when exactly one existing swimmer has that exact name; two (or
 // more) different real people sharing a name must never be silently
-// merged just because one row's phone doesn't match either of them.
+// merged just because one row's phone doesn't match either of them —
+// that case comes back as ambiguous: true instead, for the caller to
+// flag as needing human review rather than guessing which one it is.
 // The name-only path is exactly for "same person, phone number
 // corrected/changed" — diffSwimmerUpdate flags a resulting phone
 // change as critical so the admin still sees and confirms it before
 // anything is saved.
 function findExistingSwimmerMatch(existingAll, record) {
   const exact = existingAll.find((s) => s.phone === record.phone && s.name.trim().toLowerCase() === record.name.trim().toLowerCase());
-  if (exact) return exact;
+  if (exact) return { match: exact, ambiguous: false };
   const nameMatches = existingAll.filter((s) => s.name.trim().toLowerCase() === record.name.trim().toLowerCase());
-  if (nameMatches.length === 1 && nameMatches[0].phone !== record.phone) return nameMatches[0];
-  return null;
+  if (nameMatches.length === 1 && nameMatches[0].phone !== record.phone) return { match: nameMatches[0], ambiguous: false };
+  if (nameMatches.length > 1) return { match: null, ambiguous: true };
+  return { match: null, ambiguous: false };
 }
+
+// Fields Excel is always allowed to update on an EXISTING swimmer —
+// identity, level/program placement, and schedule slot. Everything
+// else the app tracks about a swimmer (attendance, skills, technical
+// evaluations, training data, freeze data, parentPin, id, old
+// history) is simply never part of `imported` in the first place, so
+// it can't be touched here no matter what the sheet contains.
+const EXCEL_CONTROLLED_FIELDS = ["name", "phone", "age", "level", "program", "programLevel", "branch", "day", "time", "day2", "time2", "notes"];
 
 function diffSwimmerUpdate(existing, imported, coaches = []) {
   const changes = [];
-  const fieldsToSync = ["day", "time", "level", "coachId", "sessionType", "branch", "age", "phone"];
   const patch = {};
   const coachName = (id) => (id ? coaches.find((c) => c.id === id)?.name || id : "— no coach —");
   const dayLabel = (id) => DAY_GROUPS.find((d) => d.id === id)?.label || id;
-  fieldsToSync.forEach((f) => {
+  const sessionTypeName = (id) => (id ? SESSION_TYPES.find((t) => t.id === id)?.label || id : "— none —");
+
+  // 1. EXCEL-CONTROLLED FIELDS — synced normally. Coach and session
+  // type are deliberately excluded from this list (see step 3) even
+  // though the app tracks them on the swimmer record — Excel is never
+  // allowed to move them here.
+  EXCEL_CONTROLLED_FIELDS.forEach((f) => {
     const newVal = imported[f];
     if (newVal !== undefined && newVal !== "" && newVal !== null && newVal !== existing[f]) {
-      if (f === "coachId") {
-        // The single most consequential field to get wrong silently —
-        // shown with real names (not raw ids) and flagged critical so
-        // the review screen can make it impossible to miss, instead of
-        // reading like any other minor field change in the list.
-        changes.push({ field: "Coach", from: coachName(existing[f]), to: coachName(newVal), critical: true });
-      } else if (f === "day") {
+      if (f === "day" || f === "day2") {
         changes.push({ field: f, from: dayLabel(existing[f]), to: dayLabel(newVal) });
       } else if (f === "phone") {
-        // Also flagged critical — a phone change is exactly what lets
-        // this swimmer get matched by name alone (see the matching
-        // logic above) instead of the usual exact phone+name match, so
-        // it needs the same "make sure this is really the same person"
-        // visibility before the admin confirms.
+        // Flagged critical — a phone change is exactly what lets this
+        // swimmer get matched by name alone instead of the usual exact
+        // phone+name match, so it needs "make sure this is really the
+        // same person" visibility before the admin confirms.
         changes.push({ field: "Phone", from: existing[f] || "—", to: newVal, critical: true });
       } else {
         changes.push({ field: f, from: existing[f] ?? "—", to: newVal });
@@ -4801,41 +4824,82 @@ function diffSwimmerUpdate(existing, imported, coaches = []) {
       patch[f] = newVal;
     }
   });
+
+  // 2. PAID MONTHS — union merge, never replace. A month recorded as
+  // paid in the system stays paid even if this particular file doesn't
+  // mention it.
   const newlyPaid = (imported.paidMonths || []).filter((m) => !(existing.paidMonths || []).includes(m));
   if (newlyPaid.length > 0) {
     changes.push({ field: "paidMonths", from: null, to: newlyPaid.map(monthLabel).join(", ") });
     patch.paidMonths = [...(existing.paidMonths || []), ...newlyPaid];
   }
-  // A day/time/coachId/sessionType change is a SCHEDULE change — needs
-  // recording into monthlySchedules, the same way every other part of
-  // the app tracks one, or the swimmer's real schedule for whichever
-  // month is CURRENT right now becomes unrecoverable the instant this
-  // patch overwrites the flat fields (nothing else remembers what it
-  // used to be).
-  const scheduleFieldsChanged = ["day", "time", "coachId", "sessionType"].some((f) => f in patch);
+
+  // 3. COACH / SESSION TYPE — system-controlled operational data.
+  // Excel providing a genuinely DIFFERENT value for either is never
+  // auto-applied for an existing swimmer, no matter how the rest of
+  // the row looks: it's surfaced as a pending change that needs its
+  // own separate, deliberate confirmation (see the Coach/Session Type
+  // review panel), never bundled into the bulk Import action itself.
+  if (imported.coachId && imported.coachId !== existing.coachId) {
+    changes.push({ field: "Coach — pending review", from: coachName(existing.coachId), to: coachName(imported.coachId), critical: true, pending: true });
+    patch.pendingCoachChange = { from: existing.coachId || null, to: imported.coachId, detectedAt: new Date().toISOString() };
+  }
+  if (imported.sessionType && imported.sessionType !== existing.sessionType) {
+    changes.push({ field: "Session Type — pending review", from: sessionTypeName(existing.sessionType), to: sessionTypeName(imported.sessionType), critical: true, pending: true });
+    patch.pendingSessionTypeChange = { from: existing.sessionType || null, to: imported.sessionType, detectedAt: new Date().toISOString() };
+  }
+  if (imported.coachId2 && imported.coachId2 !== existing.coachId2) {
+    changes.push({ field: "2nd session Coach — pending review", from: coachName(existing.coachId2), to: coachName(imported.coachId2), critical: true, pending: true });
+    patch.pendingCoachChange2 = { from: existing.coachId2 || null, to: imported.coachId2, detectedAt: new Date().toISOString() };
+  }
+
+  // 4. DAY/TIME CHANGE + COACH COMPATIBILITY — a schedule change is
+  // never allowed to silently clear the coach OR silently assume the
+  // same coach still works the new slot. Checked against the coach's
+  // OWN real offDays/offSlots (the same data isCoachClosedAt uses
+  // everywhere else in the app) — never a new rule invented here. If
+  // the sheet already flagged an explicit coach change above, that
+  // takes priority and this check is skipped entirely (no point
+  // asking "is the OLD coach compatible" when a different coach is
+  // already pending review).
+  const dayOrTimeChanged = ["day", "time"].some((f) => f in patch);
+  if (dayOrTimeChanged && existing.coachId && !patch.pendingCoachChange) {
+    const coach = coaches.find((c) => c.id === existing.coachId);
+    const newDay = patch.day ?? existing.day;
+    const newTime = patch.time ?? existing.time;
+    if (coach && isCoachClosedAt(coach, newDay, newTime)) {
+      changes.push({ field: "Coach", from: coachName(existing.coachId), to: "⚠ needs reassignment — not available at the new time", critical: true });
+      patch.needsCoachAssignment = true;
+    }
+    // Not flagged closed -> the existing coach is kept exactly as-is;
+    // no change logged, because nothing about the coach changed.
+  }
+
+  // 5. MONTHLY SCHEDULES — deep per-field merge, never a month-level
+  // replace. A sheet with no coach/session-type column builds every
+  // month's entry with those fields explicitly null — merging the
+  // whole month object wholesale would silently wipe out a real,
+  // already-recorded coach or session type for that month even though
+  // nothing about them actually changed. Existing months the sheet
+  // doesn't cover at all are kept untouched.
+  const protectFields = (importedMonth, existingMonth) => ({
+    ...existingMonth,
+    ...importedMonth,
+    coachId: importedMonth.coachId || existingMonth.coachId || null,
+    coachId2: importedMonth.coachId2 || existingMonth.coachId2 || null,
+    sessionType: importedMonth.sessionType || existingMonth.sessionType || null,
+    sessionType2: importedMonth.sessionType2 || existingMonth.sessionType2 || null,
+  });
   if (imported.monthlySchedules && Object.keys(imported.monthlySchedules).length > 0) {
-    // The month-by-month tracking sheet already built a complete,
-    // correctly-shaped per-month history — merged in per FIELD, per
-    // month, not by wholesale-replacing each month's whole object. A
-    // sheet with no coach column (this admin's sheet, and many real
-    // academy sheets) builds every month's entry with coachId
-    // EXPLICITLY set to null — replacing the whole month object with
-    // that wholesale would silently wipe out a real, already-recorded
-    // coach for that month even though nothing about the coach
-    // actually changed. Falls back to the existing month's coachId
-    // whenever the imported month doesn't provide a real one, and
-    // keeps any existing months the sheet didn't cover at all.
     const mergedSchedules = { ...(existing.monthlySchedules || {}) };
     Object.keys(imported.monthlySchedules).forEach((mk) => {
-      const importedMonth = imported.monthlySchedules[mk];
-      const existingMonth = existing.monthlySchedules?.[mk] || {};
-      mergedSchedules[mk] = { ...existingMonth, ...importedMonth, coachId: importedMonth.coachId || existingMonth.coachId || null };
+      mergedSchedules[mk] = protectFields(imported.monthlySchedules[mk], existing.monthlySchedules?.[mk] || {});
     });
     // Detects a NEW or DIFFERENT month even when every flat field above
     // matched exactly (e.g. this swimmer's current schedule hasn't
-    // changed, but the file now also includes an entry for a month that
-    // wasn't recorded before) — without this, that case shows zero
-    // "changes" above and gets silently treated as an unchanged
+    // changed, but the file now also includes an entry for a month
+    // that wasn't recorded before) — without this, that case shows
+    // zero "changes" above and gets silently treated as an unchanged
     // duplicate, so the new month's data is computed here but never
     // actually gets saved.
     const newMonthKeys = Object.keys(imported.monthlySchedules).filter(
@@ -4845,52 +4909,31 @@ function diffSwimmerUpdate(existing, imported, coaches = []) {
       changes.push({ field: "monthlySchedules", from: null, to: `${newMonthKeys.length} month(s) added/updated: ${newMonthKeys.map(monthLabel).join(", ")}` });
       patch.monthlySchedules = mergedSchedules;
     }
-  } else if (scheduleFieldsChanged) {
+  } else if (dayOrTimeChanged) {
     // The simple single-row importer has no concept of monthlySchedules
-    // at all — stamps the NEW schedule into the current real month so
+    // at all — stamps the NEW day/time into the current real month so
     // this update is tracked exactly like a manual edit through the
     // Swimmer Form would be, instead of only ever living in the flat
-    // fields with no month attached to it.
+    // fields with no month attached to it. Coach/session type in this
+    // stamped entry always come from the swimmer's own current
+    // resolved schedule (never from `imported`, which never carries
+    // real coach/sessionType values into this branch — those are
+    // handled entirely by steps 3 and 4 above).
     const key = monthKey();
-    // Resolves the swimmer's ACTUAL current schedule the same way every
-    // other part of the app does (monthlySchedules first, then
-    // nextSchedule, then the flat fields) — critical here, because
-    // falling back straight to the flat existing.coachId/day/time/
-    // sessionType instead would silently reintroduce a STALE value the
-    // moment any ONE of these fields changed via import: e.g. a sheet
-    // that only updates the time, with no coach column at all, would
-    // otherwise overwrite a swimmer's genuinely current (but only
-    // monthlySchedules-recorded) coach with whatever old value happens
-    // to sit in the flat field.
     const currentResolved = getMonthlySchedule(existing, key) || {};
-    // A day/time change via THIS simple sheet means the old coach may
-    // not even work the new slot at all — so unless the sheet itself
-    // explicitly provides a coach, the coach is cleared rather than
-    // carried over, needing a fresh, deliberate reassignment. Scoped
-    // ONLY to this branch (the sheet had no monthlySchedules of its
-    // own) — the full-history sheet above never reaches here, so a
-    // stale flat day/time on a swimmer who's simply getting monthly
-    // history recorded for the first time can never trigger this.
-    const dayOrTimeChanged = ["day", "time"].some((f) => f in patch);
-    const coachExplicitlyProvided = "coachId" in patch;
-    const currentCoachId = currentResolved.coachId || existing.coachId;
-    const shouldClearCoach = dayOrTimeChanged && !coachExplicitlyProvided && currentCoachId;
-    if (shouldClearCoach) {
-      patch.coachId = "";
-      changes.push({ field: "Coach", from: coachName(currentCoachId), to: "— cleared, needs reassigning —", critical: true });
-    }
     patch.monthlySchedules = {
       ...(existing.monthlySchedules || {}),
       [key]: {
         ...(existing.monthlySchedules?.[key] || {}),
         day: patch.day ?? currentResolved.day ?? existing.day,
         time: patch.time ?? currentResolved.time ?? existing.time,
-        coachId: shouldClearCoach ? "" : patch.coachId ?? currentResolved.coachId ?? existing.coachId,
-        sessionType: patch.sessionType ?? currentResolved.sessionType ?? existing.sessionType,
+        coachId: currentResolved.coachId ?? existing.coachId,
+        sessionType: currentResolved.sessionType ?? existing.sessionType,
         scheduleMonth: key,
       },
     };
   }
+
   return { changes, patch };
 }
 
@@ -13550,6 +13593,56 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
   };
 
+  const [pendingChangesSwimmers, setPendingChangesSwimmers] = useState(null); // null = not loaded yet
+  const [pendingChangesLoading, setPendingChangesLoading] = useState(false);
+  const loadPendingChanges = async () => {
+    setPendingChangesLoading(true);
+    try {
+      const all = await fetchAllSwimmers();
+      setPendingChangesSwimmers(
+        all.filter((s) => s.pendingCoachChange || s.pendingCoachChange2 || s.pendingSessionTypeChange || s.needsCoachAssignment)
+      );
+    } finally {
+      setPendingChangesLoading(false);
+    }
+  };
+  // Applying is the "clear, deliberate action" the pending change was
+  // waiting for — moves the reviewed value onto the real field and
+  // clears the pending flag in the SAME save, using the same
+  // single-swimmer fast path as any other swimmer edit (never touches
+  // the rest of the roster).
+  const applyPendingChange = async (swimmer, kind) => {
+    const patch = {};
+    if (kind === "coach") { patch.coachId = swimmer.pendingCoachChange.to; patch.pendingCoachChange = null; }
+    if (kind === "coach2") { patch.coachId2 = swimmer.pendingCoachChange2.to; patch.pendingCoachChange2 = null; }
+    if (kind === "sessionType") { patch.sessionType = swimmer.pendingSessionTypeChange.to; patch.pendingSessionTypeChange = null; }
+    if (kind === "needsCoachAssignment") { patch.needsCoachAssignment = null; } // acknowledged — coachId itself is set separately, from the Swimmer Form
+    const finalRecord = { ...swimmer, ...patch };
+    const all = await fetchAllSwimmers();
+    const next = all.map((s) => (s.id === swimmer.id ? finalRecord : s));
+    const res = await saveCollection(STORE_KEYS.swimmers, next, { skipSwimmersSync: true });
+    if (res) {
+      syncSingleSwimmerToTableWithRetry(finalRecord);
+      if (kind === "coach" || kind === "coach2") {
+        const assignedCoach = coaches.find((c) => c.id === (kind === "coach" ? patch.coachId : patch.coachId2));
+        if (assignedCoach) notifyAccountByPush(assignedCoach.name, { title: "New swimmer assigned to you", body: swimmer.name, url: "/" });
+      }
+    }
+    loadPendingChanges();
+  };
+  const dismissPendingChange = async (swimmer, kind) => {
+    const patch = {};
+    if (kind === "coach") patch.pendingCoachChange = null;
+    if (kind === "coach2") patch.pendingCoachChange2 = null;
+    if (kind === "sessionType") patch.pendingSessionTypeChange = null;
+    if (kind === "needsCoachAssignment") patch.needsCoachAssignment = null;
+    const finalRecord = { ...swimmer, ...patch };
+    const all = await fetchAllSwimmers();
+    const next = all.map((s) => (s.id === swimmer.id ? finalRecord : s));
+    await saveCollection(STORE_KEYS.swimmers, next, { skipSwimmersSync: true });
+    syncSingleSwimmerToTableWithRetry(finalRecord);
+    loadPendingChanges();
+  };
   const saveSwimmer = async (record) => {
     // Same save-queue protection as updateSwimmerById — this is the
     // fetch-everyone/change-one/save-everyone cycle the Swimmer Form
@@ -13789,9 +13882,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         const valid = [];
         const duplicates = [];
         const updates = [];
+        const needsReview = [];
         const seenPhones = new Set();
         fullHistory.swimmers.forEach((record, i) => {
-          const existing = findExistingSwimmerMatch(existingAll, record);
+          const { match: existing, ambiguous } = findExistingSwimmerMatch(existingAll, record);
+          if (ambiguous) {
+            needsReview.push({ row: i + 3, record, reason: "Multiple existing swimmers share this exact name — couldn't tell which one this row belongs to" });
+            return;
+          }
           if (existing) {
             const { changes, patch } = diffSwimmerUpdate(existing, record, coaches);
             if (changes.length > 0) {
@@ -13815,6 +13913,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           valid,
           updates,
           duplicates,
+          needsReview,
           errors: [],
           fullHistoryNote: `Full history sheet detected — ${fullHistory.monthsFound} months read, current schedule taken from ${fullHistory.latestMonthLabel}.`,
         });
@@ -13831,6 +13930,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       const duplicates = [];
       const errors = [];
       const updates = [];
+      const needsReview = [];
       const seenPhones = new Set(); // catches duplicates within the file itself, not just against existing swimmers
       rows.forEach((row, i) => {
         const result = parseImportedSwimmerRow(row, coaches);
@@ -13839,7 +13939,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
           return;
         }
         const { record, warnings } = result;
-        const existing = findExistingSwimmerMatch(existingAll, record);
+        const { match: existing, ambiguous } = findExistingSwimmerMatch(existingAll, record);
+        if (ambiguous) {
+          needsReview.push({ row: i + 2, record, reason: "Multiple existing swimmers share this exact name — couldn't tell which one this row belongs to" });
+          return;
+        }
         if (existing) {
           const { changes, patch } = diffSwimmerUpdate(existing, record, coaches);
           if (changes.length > 0) {
@@ -13860,6 +13964,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         valid,
         updates,
         duplicates,
+        needsReview,
         errors,
         fullHistoryNote: wb.SheetNames.length > 1
           ? "No month-by-month sheet detected in this file (checked every tab) — importing as a simple one-row-per-swimmer list instead. Current schedule/level only, no history."
@@ -13896,19 +14001,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         "Imported swimmers",
         `${newRecords.length} new, ${updatesById.size} updated`
       );
-      // Same coach-assignment notification the Swimmer Form gives on a
-      // single save — a bulk import assigning (not clearing) a coach is
-      // just as real an assignment as doing it one swimmer at a time,
-      // and shouldn't need the coach to notice by chance instead.
-      (importPreview.updates || []).forEach((u) => {
-        const newCoachId = u.patch.coachId;
-        if (newCoachId && newCoachId !== u.existing.coachId) {
-          const assignedCoach = coaches.find((c) => c.id === newCoachId);
-          if (assignedCoach) {
-            notifyAccountByPush(assignedCoach.name, { title: "New swimmer assigned to you", body: u.existing.name, url: "/" });
-          }
-        }
-      });
+      // New swimmers can take their coach directly from the sheet (no
+      // existing assignment to protect) — notify same as a single save.
+      // Existing swimmers' coach changes are never applied directly
+      // here anymore (see diffSwimmerUpdate) — they're stored as a
+      // pendingCoachChange and only notify once separately confirmed.
       newRecords.forEach((record) => {
         if (record.coachId) {
           const assignedCoach = coaches.find((c) => c.id === record.coachId);
@@ -22669,6 +22766,65 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               )}
             </div>
 
+            <h3 className="font-bold text-slate-900 mb-1 mt-6">Pending coach / session type changes</h3>
+            <p className="text-sm text-slate-500 mb-4">
+              Coach and Session Type are never changed automatically by an Excel import — a genuinely different value from the sheet lands here instead, for you to review and apply (or dismiss) one at a time. A swimmer flagged "needs reassignment" had their day/time changed to a slot their current coach doesn't work; their coach isn't touched until you reassign them yourself in the Swimmer Form.
+            </p>
+            <div className="bg-slate-50 rounded-2xl p-5">
+              <button
+                onClick={loadPendingChanges}
+                disabled={pendingChangesLoading}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-slate-700 text-white text-sm font-semibold hover:bg-slate-800 disabled:opacity-60 mb-3"
+              >
+                <RefreshCw className={`w-4 h-4 ${pendingChangesLoading ? "animate-spin" : ""}`} /> {pendingChangesLoading ? "Loading..." : "Check for pending changes"}
+              </button>
+              {pendingChangesSwimmers && pendingChangesSwimmers.length === 0 && (
+                <p className="text-sm text-slate-500">Nothing pending right now.</p>
+              )}
+              {pendingChangesSwimmers && pendingChangesSwimmers.length > 0 && (
+                <div className="space-y-2 max-h-80 overflow-y-auto">
+                  {pendingChangesSwimmers.map((s) => (
+                    <div key={s.id} className="bg-white rounded-lg px-3 py-2.5 border border-slate-200">
+                      <div className="font-medium text-slate-800 text-sm mb-1.5">{s.name}</div>
+                      {s.pendingCoachChange && (
+                        <div className="flex items-center justify-between gap-2 text-xs mb-1">
+                          <span>Coach: <span className="text-slate-500">{coaches.find((c) => c.id === s.pendingCoachChange.from)?.name || "— none —"}</span> → <span className="font-medium">{coaches.find((c) => c.id === s.pendingCoachChange.to)?.name || "—"}</span></span>
+                          <span className="flex gap-1 shrink-0">
+                            <button onClick={() => applyPendingChange(s, "coach")} className="px-2 py-1 rounded bg-green-600 text-white text-xs">Apply</button>
+                            <button onClick={() => dismissPendingChange(s, "coach")} className="px-2 py-1 rounded bg-slate-200 text-slate-700 text-xs">Dismiss</button>
+                          </span>
+                        </div>
+                      )}
+                      {s.pendingCoachChange2 && (
+                        <div className="flex items-center justify-between gap-2 text-xs mb-1">
+                          <span>2nd session coach: <span className="text-slate-500">{coaches.find((c) => c.id === s.pendingCoachChange2.from)?.name || "— none —"}</span> → <span className="font-medium">{coaches.find((c) => c.id === s.pendingCoachChange2.to)?.name || "—"}</span></span>
+                          <span className="flex gap-1 shrink-0">
+                            <button onClick={() => applyPendingChange(s, "coach2")} className="px-2 py-1 rounded bg-green-600 text-white text-xs">Apply</button>
+                            <button onClick={() => dismissPendingChange(s, "coach2")} className="px-2 py-1 rounded bg-slate-200 text-slate-700 text-xs">Dismiss</button>
+                          </span>
+                        </div>
+                      )}
+                      {s.pendingSessionTypeChange && (
+                        <div className="flex items-center justify-between gap-2 text-xs mb-1">
+                          <span>Session Type: <span className="text-slate-500">{SESSION_TYPES.find((t) => t.id === s.pendingSessionTypeChange.from)?.label || "— none —"}</span> → <span className="font-medium">{SESSION_TYPES.find((t) => t.id === s.pendingSessionTypeChange.to)?.label || "—"}</span></span>
+                          <span className="flex gap-1 shrink-0">
+                            <button onClick={() => applyPendingChange(s, "sessionType")} className="px-2 py-1 rounded bg-green-600 text-white text-xs">Apply</button>
+                            <button onClick={() => dismissPendingChange(s, "sessionType")} className="px-2 py-1 rounded bg-slate-200 text-slate-700 text-xs">Dismiss</button>
+                          </span>
+                        </div>
+                      )}
+                      {s.needsCoachAssignment && (
+                        <div className="flex items-center justify-between gap-2 text-xs">
+                          <span className="text-red-600">⚠ Needs reassignment — new schedule conflicts with current coach's availability</span>
+                          <button onClick={() => dismissPendingChange(s, "needsCoachAssignment")} className="px-2 py-1 rounded bg-slate-200 text-slate-700 text-xs shrink-0">Acknowledge</button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <h3 className="font-bold text-slate-900 mb-1 mt-6">Coach filter diagnostic (exact mismatch finder)</h3>
             <p className="text-sm text-slate-500 mb-4">
               Pick a coach, day, and time — shows exactly who SHOULD match (computed the same way the Schedule tab does) versus who the live Swimmers tab query actually returns for those same three things, so any gap points straight at where it's really coming from.
@@ -25355,17 +25511,22 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 px-4" onClick={() => setImportPreview(null)}>
           <div className="bg-white rounded-2xl p-5 max-w-lg w-full shadow-xl max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-bold text-slate-900 mb-1">Import swimmers</h3>
-            {(importPreview.updates || []).some((u) => u.changes.some((c) => c.critical)) && (
+            {(importPreview.updates || []).some((u) => u.changes.some((c) => c.critical && c.field !== "Phone")) && (
               <div className="text-sm font-semibold rounded-lg px-3 py-2.5 mb-3 bg-red-50 text-red-700 border border-red-200 flex items-center gap-2">
-                ⚠️ This file will change the assigned coach for {importPreview.updates.filter((u) => u.changes.some((c) => c.critical)).length} swimmer(s) — check the highlighted rows below carefully before confirming.
+                ⚠️ {importPreview.updates.filter((u) => u.changes.some((c) => c.critical && c.field !== "Phone")).length} swimmer(s) have a coach, session type, or schedule change that needs your attention — check the highlighted rows below carefully before confirming. Coach and Session Type changes are never applied automatically; they're saved as a pending review for you to confirm separately afterward.
+              </div>
+            )}
+            {(importPreview.needsReview || []).length > 0 && (
+              <div className="text-sm font-semibold rounded-lg px-3 py-2.5 mb-3 bg-amber-50 text-amber-800 border border-amber-200">
+                ⚠️ {importPreview.needsReview.length} row(s) matched more than one existing swimmer with the exact same name — skipped rather than guessing which one. See "Needs review" below.
               </div>
             )}
             {importPreview.fullHistoryNote && (
               <div className={`text-xs rounded-lg px-3 py-2 mb-3 ${importPreview.fullHistoryNote.startsWith("No month") ? "bg-amber-50 text-amber-800" : "bg-sky-50 text-sky-800"}`}>{importPreview.fullHistoryNote}</div>
             )}
             <p className="text-sm text-slate-500 mb-4">
-              Found {importPreview.valid.length + (importPreview.updates || []).length + importPreview.duplicates.length + importPreview.errors.length} row
-              {importPreview.valid.length + (importPreview.updates || []).length + importPreview.duplicates.length + importPreview.errors.length === 1 ? "" : "s"} —{" "}
+              Found {importPreview.valid.length + (importPreview.updates || []).length + importPreview.duplicates.length + importPreview.errors.length + (importPreview.needsReview || []).length} row
+              {importPreview.valid.length + (importPreview.updates || []).length + importPreview.duplicates.length + importPreview.errors.length + (importPreview.needsReview || []).length === 1 ? "" : "s"} —{" "}
               <span className="text-green-700 font-medium">{importPreview.valid.length} new</span>
               {(importPreview.updates || []).length > 0 && (
                 <>, <span className="text-sky-700 font-medium">{importPreview.updates.length} to update</span></>
@@ -25373,11 +25534,27 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               {importPreview.duplicates.length > 0 && (
                 <>, <span className="text-amber-600 font-medium">{importPreview.duplicates.length} unchanged</span></>
               )}
+              {(importPreview.needsReview || []).length > 0 && (
+                <>, <span className="text-amber-700 font-medium">{importPreview.needsReview.length} need review</span></>
+              )}
               {importPreview.errors.length > 0 && (
                 <>, <span className="text-red-500 font-medium">{importPreview.errors.length} skipped</span></>
               )}
               .
             </p>
+
+            {(importPreview.needsReview || []).length > 0 && (
+              <div className="mb-4">
+                <div className="text-xs font-semibold text-slate-500 mb-1.5">Needs review — ambiguous name match</div>
+                <div className="space-y-1 max-h-28 overflow-y-auto">
+                  {importPreview.needsReview.map((e, i) => (
+                    <div key={i} className="text-xs bg-amber-50 text-amber-800 rounded-lg px-3 py-1.5">
+                      Row {e.row} ({e.record.name}): {e.reason}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {importPreview.errors.length > 0 && (
               <div className="mb-4">
