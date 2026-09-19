@@ -645,7 +645,7 @@ function classIdForSchedule({ branch, level, program, programLevel, day, time, s
 function getDistinctSecondSession(ms) {
   if (!ms?.day2 || !ms?.time2) return null;
   if (ms.day2 === ms.day && ms.time2 === ms.time) return null;
-  return { day: ms.day2, time: ms.time2, coachId: ms.coachId2, sessionType: ms.sessionType2, classId: ms.classId };
+  return { day: ms.day2, time: ms.time2, coachId: ms.coachId2, sessionType: ms.sessionType2, classId: ms.classId, attendsOnlyWeekday2: ms.attendsOnlyWeekday2 ?? null };
 }
 
 // Whether a resolved month's schedule (from getMonthlySchedule) counts as
@@ -6667,6 +6667,16 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
   const [time, setTime] = useState(initialSchedule.time || initial?.time || "");
   const [sessionType, setSessionType] = useState(initialSchedule.sessionType || initial?.sessionType || "group");
   const [coachId, setCoachId] = useState(initialSchedule.coachId || initial?.coachId || "");
+  // For a swimmer whose day is a two-day group (e.g. Sun & Tue) but who
+  // in reality only shows up on ONE of those two days — null means
+  // "attends both, as normal" (the default for everyone); a specific
+  // weekday number (0-6, JS Date.getDay() convention, matching
+  // DAY_GROUP_WEEKDAYS_LOOKUP) means "only ever expected on this one".
+  // Purely a display/roster filter — never changes capacity, coach
+  // assignment, or billing, which still treat the pair as one slot.
+  const [attendsOnlyWeekday, setAttendsOnlyWeekday] = useState(
+    initialSchedule.attendsOnlyWeekday ?? initial?.attendsOnlyWeekday ?? null
+  );
   // Which calendar month this day/time/coach is actually for — lets the
   // admin pre-book NEXT month's slot while THIS month is still running,
   // without that slot getting confused with (or blocked by) this month's
@@ -6685,6 +6695,9 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
   const [time2, setTime2] = useState(initial?.time2 || "");
   const [sessionType2, setSessionType2] = useState(initial?.sessionType2 || "group");
   const [coachId2, setCoachId2] = useState(initial?.coachId2 || "");
+  const [attendsOnlyWeekday2, setAttendsOnlyWeekday2] = useState(
+    initialSchedule.attendsOnlyWeekday2 ?? initial?.attendsOnlyWeekday2 ?? null
+  );
   const timeOptions2 = getTimeOptions(branch, day2, level, program);
 
   // Switching the month this schedule is for is really "start a fresh
@@ -6703,15 +6716,20 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
       setHasSecondSlot(!!(saved.day2 && saved.time2));
       setSubstituteCoachId(saved.substituteCoachId || "");
       setSubstituteDate(saved.substituteDate || "");
+      setAttendsOnlyWeekday(saved.attendsOnlyWeekday ?? null);
+      setAttendsOnlyWeekday2(saved.attendsOnlyWeekday2 ?? null);
     } else {
       setDay(""); setTime(""); setCoachId(""); setDay2(""); setTime2(""); setCoachId2("");
       setSessionType(initial?.planId === "private" ? "private" : initial?.planId === "semi-private" ? "semi-private" : "group");
       setSessionType2("group"); setHasSecondSlot(false); setSubstituteCoachId(""); setSubstituteDate("");
+      setAttendsOnlyWeekday(null);
+      setAttendsOnlyWeekday2(null);
     }
   };
 
   const handleDay2Change = (newDay) => {
     setDay2(newDay);
+    setAttendsOnlyWeekday2(null);
     const newOptions = getTimeOptions(branch, newDay, level, program);
     if (!newOptions.includes(time2)) setTime2(newOptions[0]);
     if (coachId2 && isCoachClosedAt((coaches || []).find((c) => c.id === coachId2), newDay, time2)) setCoachId2("");
@@ -6729,6 +6747,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
 
   const handleDayChange = (newDay) => {
     setDay(newDay);
+    setAttendsOnlyWeekday(null);
     const newOptions = getTimeOptions(branch, newDay, level, program);
     if (!newOptions.includes(time)) setTime(newOptions[0]);
     // clear the assigned coach if they're off on the newly picked day
@@ -6882,6 +6901,8 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           programLevel: program ? programLevel || null : null,
           day,
           time,
+          attendsOnlyWeekday,
+          attendsOnlyWeekday2,
           scheduleMonth,
           scheduleHistory: oldScheduleHistory,
           sessionType,
@@ -6903,7 +6924,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
               day, time, sessionType, coachId: coachId || null, day2: hasSecondSlot ? day2 : "", time2: hasSecondSlot ? time2 : "",
               sessionType2: hasSecondSlot ? sessionType2 : "", coachId2: hasSecondSlot ? coachId2 || null : null,
               classId: classIdForSchedule({ branch, level, program, programLevel, day, time, sessionType, month: scheduleMonth }),
-              substituteCoachId: substituteCoachId || null, substituteDate: substituteDate || "", scheduleMonth,
+              substituteCoachId: substituteCoachId || null, substituteDate: substituteDate || "", scheduleMonth, attendsOnlyWeekday, attendsOnlyWeekday2,
             },
           },
           paidMonths: initial?.paidMonths || [],
@@ -6943,7 +6964,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
               day, time, sessionType, coachId: coachId || null, day2: hasSecondSlot ? day2 : "", time2: hasSecondSlot ? time2 : "",
               sessionType2: hasSecondSlot ? sessionType2 : "", coachId2: hasSecondSlot ? coachId2 || null : null,
               classId: classIdForSchedule({ branch, level, program, programLevel, day, time, sessionType, month: scheduleMonth }),
-              substituteCoachId: substituteCoachId || null, substituteDate: substituteDate || "", scheduleMonth,
+              substituteCoachId: substituteCoachId || null, substituteDate: substituteDate || "", scheduleMonth, attendsOnlyWeekday, attendsOnlyWeekday2,
             },
           },
           planId,
@@ -6953,7 +6974,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
             day, time, sessionType, coachId: coachId || null, day2: hasSecondSlot ? day2 : "", time2: hasSecondSlot ? time2 : "",
             sessionType2: hasSecondSlot ? sessionType2 : "", coachId2: hasSecondSlot ? coachId2 || null : null,
             classId: classIdForSchedule({ branch, level, program, programLevel, day, time, sessionType, month: scheduleMonth }),
-            substituteCoachId: substituteCoachId || null, substituteDate: substituteDate || "", scheduleMonth,
+            substituteCoachId: substituteCoachId || null, substituteDate: substituteDate || "", scheduleMonth, attendsOnlyWeekday, attendsOnlyWeekday2,
           },
         };
 
@@ -7114,6 +7135,24 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           </select>
         </div>
         )}
+        {!isNew && day && DAY_GROUP_WEEKDAYS_LOOKUP[day] && (
+        <div>
+          <label className="text-xs text-slate-500 mb-1 block">Actually attends</label>
+          <select
+            value={attendsOnlyWeekday ?? "both"}
+            onChange={(e) => setAttendsOnlyWeekday(e.target.value === "both" ? null : Number(e.target.value))}
+            className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
+          >
+            <option value="both">Both days (default)</option>
+            {DAY_GROUP_WEEKDAYS_LOOKUP[day].map((wd) => (
+              <option key={wd} value={wd}>{WEEKDAY_NAMES[wd]} only</option>
+            ))}
+          </select>
+          <p className="text-xs text-slate-400 mt-1">
+            Doesn't change their booked slot, coach, or billing — just hides them from the roster on the day they don't actually come.
+          </p>
+        </div>
+        )}
         {!isNew && (
         <div>
           <label className="text-xs text-slate-500 mb-1 block">
@@ -7261,6 +7300,21 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
               </select>
             </div>
           </div>
+          {day2 && DAY_GROUP_WEEKDAYS_LOOKUP[day2] && (
+            <div className="mb-3">
+              <label className="text-xs text-slate-500 mb-1 block">Actually attends (2nd session)</label>
+              <select
+                value={attendsOnlyWeekday2 ?? "both"}
+                onChange={(e) => setAttendsOnlyWeekday2(e.target.value === "both" ? null : Number(e.target.value))}
+                className="w-full border border-slate-200 rounded-lg py-2.5 px-3 outline-none focus:border-sky-900 bg-white"
+              >
+                <option value="both">Both days (default)</option>
+                {DAY_GROUP_WEEKDAYS_LOOKUP[day2].map((wd) => (
+                  <option key={wd} value={wd}>{WEEKDAY_NAMES[wd]} only</option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="text-xs text-slate-400">
             Note: coach capacity is only checked automatically for the first session above — double-check this coach isn't already full at this day/time.
           </div>
@@ -12724,11 +12778,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         const ms = getMonthlySchedule(s, scheduleMonth);
         if (!ms) return;
         if (ms.day === scheduleDayFilter && (scheduleTimeFilter === "all" || ms.time === scheduleTimeFilter)) {
-          inSessionAll.push({ swimmer: s, time: ms.time, coachId: ms.coachId, sessionType: ms.sessionType, classId: ms.classId, substituteCoachId: ms.substituteCoachId, substituteDate: ms.substituteDate });
+          inSessionAll.push({ swimmer: s, time: ms.time, coachId: ms.coachId, sessionType: ms.sessionType, classId: ms.classId, substituteCoachId: ms.substituteCoachId, substituteDate: ms.substituteDate, attendsOnlyWeekday: ms.attendsOnlyWeekday ?? null });
         }
         const second = getDistinctSecondSession(ms);
         if (second && second.day === scheduleDayFilter && (scheduleTimeFilter === "all" || second.time === scheduleTimeFilter)) {
-          inSessionAll.push({ swimmer: s, time: second.time, coachId: second.coachId, sessionType: second.sessionType, classId: second.classId, substituteCoachId: ms.substituteCoachId, substituteDate: ms.substituteDate });
+          inSessionAll.push({ swimmer: s, time: second.time, coachId: second.coachId, sessionType: second.sessionType, classId: second.classId, substituteCoachId: ms.substituteCoachId, substituteDate: ms.substituteDate, attendsOnlyWeekday: second.attendsOnlyWeekday2 ?? null });
         }
       });
       // Respects the same "All levels" / "Baby only" / etc. filter as the
@@ -12742,9 +12796,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         byCoach[key].push(entry);
       });
       const dateHeaderCells = sessionDates.map((d) => `<th>${d.slice(8)}</th>`).join("");
-      const attCellsFor = (s) =>
+      const attCellsFor = (s, attendsOnlyWeekday) =>
         sessionDates
           .map((d) => {
+            if (attendsOnlyWeekday != null && new Date(d + "T00:00:00").getDay() !== attendsOnlyWeekday) {
+              return `<td style="text-align:center;color:#cbd5e1">n/a</td>`;
+            }
             const att = s?.attendance?.[d];
             const mark = att === "present" ? '<span class="green">P</span>' : att === "absent" ? '<span class="red">A</span>' : "—";
             return `<td style="text-align:center">${mark}</td>`;
@@ -12798,8 +12855,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               const capacity = Math.max(...group.map((g) => effectiveSlotCapacity(sessionType, g.swimmer.level, coachId, scheduleDayFilter, time, g.swimmer.program, g.swimmer.programLevel)));
               const filledRows = group
                 .map(
-                  ({ swimmer: s }) =>
-                    `<tr><td>${escapeHtml(s.name)}</td><td style="text-align:center">${displayAge(s.age)}</td><td>${escapeHtml(s.level)}</td>${attCellsFor(s)}<td class="notes-cell">${notesCellFor(s)}</td></tr>`
+                  ({ swimmer: s, attendsOnlyWeekday }) =>
+                    `<tr><td>${escapeHtml(s.name)}</td><td style="text-align:center">${displayAge(s.age)}</td><td>${escapeHtml(s.level)}</td>${attCellsFor(s, attendsOnlyWeekday)}<td class="notes-cell">${notesCellFor(s)}</td></tr>`
                 )
                 .join("");
               // A few blank rows leave room to handwrite a late addition
@@ -14786,7 +14843,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   const { coachLoadById, coachBookingsById } = React.useMemo(() => {
     const loadById = {};
     const bookingsMapById = {};
-    const addBooking = (coachId, day, time, sessionType, level, age, swimmerName, swimmerId, program, programLevel) => {
+    const addBooking = (coachId, day, time, sessionType, level, age, swimmerName, swimmerId, program, programLevel, attendsOnlyWeekday) => {
       if (!coachId || !day || !time) return;
       loadById[coachId] = (loadById[coachId] || 0) + 1;
       if (!bookingsMapById[coachId]) bookingsMapById[coachId] = {};
@@ -14796,7 +14853,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       bucket[key].count += 1;
       if (level) bucket[key].levels.add(level);
       if (age != null && age !== "") bucket[key].ages.push(Number(age));
-      bucket[key].names.push({ name: swimmerName, id: swimmerId, level, program, programLevel });
+      bucket[key].names.push({ name: swimmerName, id: swimmerId, level, program, programLevel, attendsOnlyWeekday });
     };
     // Uses the exact same month resolver as the PDF export (getMonthlySchedule)
     // instead of separately checking top-level fields AND nextSchedule as if
@@ -14813,13 +14870,13 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       // whatever level they were at BEFORE their most recent
       // promotion(s), not their actual current one.
       const displayLevel = s.program && s.programLevel ? s.programLevel : s.level;
-      addBooking(ms.coachId, ms.day, ms.time, ms.sessionType, displayLevel, s.age, s.name, s.id, s.program, s.programLevel);
+      addBooking(ms.coachId, ms.day, ms.time, ms.sessionType, displayLevel, s.age, s.name, s.id, s.program, s.programLevel, ms.attendsOnlyWeekday);
       // A swimmer with a second weekly session (different coach or slot)
       // shows up under that booking too — same swimmer, two commitments.
       // Same day+time as the primary session isn't a real second
       // commitment — it's counted once already above.
       const second = getDistinctSecondSession(ms);
-      if (second) addBooking(second.coachId, second.day, second.time, second.sessionType, displayLevel, s.age, s.name, s.id, s.program, s.programLevel);
+      if (second) addBooking(second.coachId, second.day, second.time, second.sessionType, displayLevel, s.age, s.name, s.id, s.program, s.programLevel, second.attendsOnlyWeekday2);
     });
     const bookingsById = {};
     Object.keys(bookingsMapById).forEach((coachId) => {
@@ -18190,7 +18247,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             <div className="space-y-1.5">
               {slotDetailModal.booking.names.map((n, i) => (
                 <div key={i} className="flex items-center justify-between text-sm border-b border-slate-50 pb-1.5">
-                  <span className="text-slate-800">{n.name}</span>
+                  <span className="text-slate-800">
+                    {n.name}
+                    {n.attendsOnlyWeekday != null && (
+                      <span className="text-amber-600 text-xs ml-1.5">({WEEKDAY_NAMES[n.attendsOnlyWeekday]} only)</span>
+                    )}
+                  </span>
                   <span className="text-xs text-slate-400">{n.level}</span>
                 </div>
               ))}
