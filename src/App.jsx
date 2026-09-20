@@ -27958,6 +27958,14 @@ function CoachView({ onExit, preAuthedCoach = null }) {
   const [swimmers, setSwimmers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [expandedSwimmerId, setExpandedSwimmerId] = useState(null);
+  // Drill-down navigation for the weekly schedule: null selectedScheduleDay
+  // shows the list of days; picking one shows that day's time slots;
+  // picking a time shows the swimmers in that exact slot. Resets to the
+  // day list whenever the coach's own session data changes underneath
+  // (a day or time that no longer has sessions shouldn't leave the view
+  // stuck showing an empty screen).
+  const [selectedScheduleDay, setSelectedScheduleDay] = useState(null);
+  const [selectedScheduleTime, setSelectedScheduleTime] = useState(null);
   const [upcomingMakeups, setUpcomingMakeups] = useState([]);
   const [myAttendanceToday, setMyAttendanceToday] = useState(null);
   const [checkingInOut, setCheckingInOut] = useState(false);
@@ -28280,7 +28288,7 @@ function CoachView({ onExit, preAuthedCoach = null }) {
   const mySwimmers = [...new Set(mySessions.map((e) => e.swimmer))];
   const todaysGroup = dayGroupForToday();
 
-  const byDay = DAY_GROUPS.map((d) => ({
+  const byDay = DAY_GROUPS.filter((d) => !(authedCoach.offDays || []).includes(d.id)).map((d) => ({
     ...d,
     isToday: d.id === todaysGroup,
     sessions: mySessions
@@ -28288,6 +28296,16 @@ function CoachView({ onExit, preAuthedCoach = null }) {
       .map((e) => ({ ...e.swimmer, time: e.time }))
       .sort((a, b) => timeToMinutes(a.time) - timeToMinutes(b.time)),
   }));
+  // Distinct time slots for whichever day is currently selected, each
+  // with its own swimmer list — the middle step of days -> times ->
+  // swimmers.
+  const selectedDayObj = byDay.find((d) => d.id === selectedScheduleDay) || null;
+  const byTime = selectedDayObj
+    ? [...new Set(selectedDayObj.sessions.map((s) => s.time))]
+        .filter((t) => !isCoachClosedAt(authedCoach, selectedScheduleDay, t))
+        .sort((a, b) => timeToMinutes(a) - timeToMinutes(b))
+        .map((t) => ({ time: t, swimmers: selectedDayObj.sessions.filter((s) => s.time === t) }))
+    : [];
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
@@ -28517,89 +28535,131 @@ function CoachView({ onExit, preAuthedCoach = null }) {
         <div className="text-center text-slate-400 py-16">No swimmers assigned to you yet</div>
       )}
 
-      <div className="space-y-5 mt-5">
-        {byDay.map((d) => (
-          <div
-            key={d.id}
-            className={`rounded-2xl border p-4 ${d.isToday ? "border-sky-900 bg-sky-50/40" : "border-slate-200 bg-white"}`}
-          >
-            <div className="flex items-center gap-2 mb-3">
-              <CalendarDays className="w-4 h-4 text-sky-900" />
-              <div className="font-semibold text-slate-900">{d.label}</div>
-              {d.isToday && <span className="text-xs bg-sky-900 text-white px-2 py-0.5 rounded-full">Today</span>}
-              <span className="text-xs text-slate-400 ml-auto">
-                {d.sessions.length} session{d.sessions.length === 1 ? "" : "s"}
-              </span>
-            </div>
-            {d.sessions.length === 0 ? (
+      <div className="mt-5">
+        {/* Level 1: pick a day */}
+        {!selectedScheduleDay && (
+          <div className="space-y-2">
+            {byDay.map((d) => (
+              <button
+                key={d.id}
+                onClick={() => setSelectedScheduleDay(d.id)}
+                className={`w-full flex items-center gap-3 rounded-2xl border p-4 text-left ${d.isToday ? "border-sky-900 bg-sky-50/40" : "border-slate-200 bg-white"}`}
+              >
+                <CalendarDays className="w-5 h-5 text-sky-900 shrink-0" />
+                <div className="flex-1">
+                  <div className="font-semibold text-slate-900">{d.label}</div>
+                  <div className="text-xs text-slate-400">
+                    {d.sessions.length} session{d.sessions.length === 1 ? "" : "s"}
+                  </div>
+                </div>
+                {d.isToday && <span className="text-xs bg-sky-900 text-white px-2 py-0.5 rounded-full shrink-0">Today</span>}
+                <ChevronLeft className="w-4 h-4 text-slate-400 rotate-180 shrink-0" />
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Level 2: pick a time within the chosen day */}
+        {selectedScheduleDay && !selectedScheduleTime && (
+          <div>
+            <button onClick={() => setSelectedScheduleDay(null)} className="flex items-center gap-1.5 text-sm text-sky-900 font-medium mb-3">
+              <ChevronLeft className="w-4 h-4 rotate-180" /> All days
+            </button>
+            <div className="font-semibold text-slate-900 mb-3">{selectedDayObj?.label}</div>
+            {byTime.length === 0 ? (
               <div className="text-sm text-slate-400">No sessions</div>
             ) : (
               <div className="space-y-2">
-                {d.sessions.map((s) => {
-                  const duration = s.level === "Baby" || s.program === "baby" ? 30 : 60;
-                  const end = addMinutesToTime(s.time, duration);
-                  const skillsForLevel = getSkillsForSwimmer(s);
-                  const noteEntries = Object.entries(s.sessionNotes || {}).sort((a, b) => b[0].localeCompare(a[0]));
-                  const isOpen = expandedSwimmerId === s.id;
-                  const canExpand = skillsForLevel.length > 0 || noteEntries.length > 0;
-                  return (
-                    <div key={s.id} className="bg-slate-50 rounded-xl overflow-hidden">
-                      <button
-                        onClick={() => canExpand && setExpandedSwimmerId(isOpen ? null : s.id)}
-                        className="w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left"
-                      >
-                        <div>
-                          <div className="font-medium text-slate-900 text-sm">{s.name}</div>
-                          <div className="text-xs text-slate-400">
-                            {s.level} · {sessionTypeInfo(s.sessionType).label} ·{" "}
-                            {BRANCHES.find((b) => b.id === s.branch)?.name || s.branch}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <div className="text-sm font-semibold text-sky-900 whitespace-nowrap">
-                            {s.time} - {end}
-                          </div>
-                          {canExpand && (
-                            <ChevronLeft className={`w-4 h-4 text-slate-400 transition-transform ${isOpen ? "-rotate-90" : "rotate-180"}`} />
-                          )}
-                        </div>
-                      </button>
-                      {isOpen && (
-                        <div className="px-3 pb-3 space-y-3">
-                          {skillsForLevel.length > 0 && (
-                            <div className="space-y-1.5">
-                              <div className="text-xs font-semibold text-slate-400 mb-1">Skills (view only)</div>
-                              {skillsForLevel.map((skill) => {
-                                const rating = getSkillRatingsForSwimmer(s)?.[skill] || 0;
-                                return (
-                                  <div key={skill} className="flex items-center justify-between gap-2 text-xs bg-white rounded-lg px-3 py-2">
-                                    <span className={rating >= 5 ? "text-green-700 font-medium" : "text-slate-600"}>{skill}</span>
-                                    <StarsDisplay value={rating} />
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                          {noteEntries.length > 0 && (
-                            <div className="space-y-1.5">
-                              <div className="text-xs font-semibold text-slate-400 mb-1">Session notes (view only)</div>
-                              {noteEntries.map(([date, note]) => (
-                                <div key={date} className="text-xs bg-white rounded-lg px-3 py-2">
-                                  <div className="text-slate-400 mb-0.5">{dateLabel(date)}</div>
-                                  <div className="text-slate-700">{note}</div>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )}
+                {byTime.map((t) => (
+                  <button
+                    key={t.time}
+                    onClick={() => setSelectedScheduleTime(t.time)}
+                    className="w-full flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-left"
+                  >
+                    <div className="text-sm font-semibold text-sky-900 shrink-0">{t.time}</div>
+                    <div className="flex-1 text-xs text-slate-400">
+                      {t.swimmers.length} swimmer{t.swimmers.length === 1 ? "" : "s"}
                     </div>
-                  );
-                })}
+                    <ChevronLeft className="w-4 h-4 text-slate-400 rotate-180 shrink-0" />
+                  </button>
+                ))}
               </div>
             )}
           </div>
-        ))}
+        )}
+
+        {/* Level 3: swimmers in the chosen day + time */}
+        {selectedScheduleDay && selectedScheduleTime && (
+          <div>
+            <button onClick={() => setSelectedScheduleTime(null)} className="flex items-center gap-1.5 text-sm text-sky-900 font-medium mb-3">
+              <ChevronLeft className="w-4 h-4 rotate-180" /> {selectedDayObj?.label}
+            </button>
+            <div className="font-semibold text-slate-900 mb-3">{selectedScheduleTime}</div>
+            <div className="space-y-2">
+              {(byTime.find((t) => t.time === selectedScheduleTime)?.swimmers || []).map((s) => {
+                const duration = s.level === "Baby" || s.program === "baby" ? 30 : 60;
+                const end = addMinutesToTime(s.time, duration);
+                const skillsForLevel = getSkillsForSwimmer(s);
+                const noteEntries = Object.entries(s.sessionNotes || {}).sort((a, b) => b[0].localeCompare(a[0]));
+                const isOpen = expandedSwimmerId === s.id;
+                const canExpand = skillsForLevel.length > 0 || noteEntries.length > 0;
+                return (
+                  <div key={s.id} className="bg-slate-50 rounded-xl overflow-hidden">
+                    <button
+                      onClick={() => canExpand && setExpandedSwimmerId(isOpen ? null : s.id)}
+                      className="w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left"
+                    >
+                      <div>
+                        <div className="font-medium text-slate-900 text-sm">{s.name}</div>
+                        <div className="text-xs text-slate-400">
+                          {s.level} · {sessionTypeInfo(s.sessionType).label} ·{" "}
+                          {BRANCHES.find((b) => b.id === s.branch)?.name || s.branch}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm font-semibold text-sky-900 whitespace-nowrap">
+                          {s.time} - {end}
+                        </div>
+                        {canExpand && (
+                          <ChevronLeft className={`w-4 h-4 text-slate-400 transition-transform ${isOpen ? "-rotate-90" : "rotate-180"}`} />
+                        )}
+                      </div>
+                    </button>
+                    {isOpen && (
+                      <div className="px-3 pb-3 space-y-3">
+                        {skillsForLevel.length > 0 && (
+                          <div className="space-y-1.5">
+                            <div className="text-xs font-semibold text-slate-400 mb-1">Skills (view only)</div>
+                            {skillsForLevel.map((skill) => {
+                              const rating = getSkillRatingsForSwimmer(s)?.[skill] || 0;
+                              return (
+                                <div key={skill} className="flex items-center justify-between gap-2 text-xs bg-white rounded-lg px-3 py-2">
+                                  <span className={rating >= 5 ? "text-green-700 font-medium" : "text-slate-600"}>{skill}</span>
+                                  <StarsDisplay value={rating} />
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                        {noteEntries.length > 0 && (
+                          <div className="space-y-1.5">
+                            <div className="text-xs font-semibold text-slate-400 mb-1">Session notes (view only)</div>
+                            {noteEntries.map(([date, note]) => (
+                              <div key={date} className="text-xs bg-white rounded-lg px-3 py-2">
+                                <div className="text-slate-400 mb-0.5">{dateLabel(date)}</div>
+                                <div className="text-slate-700">{note}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
