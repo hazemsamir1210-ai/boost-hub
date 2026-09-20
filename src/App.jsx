@@ -6790,17 +6790,15 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
     // competing swimmer might hold this exact slot as an advance booking
     // in nextSchedule under a DIFFERENT coach than their current one —
     // matching both current and pending schedules happens in JS below.
-    supabase
-      .from("swimmers")
-      .select("data")
-      .eq("academy_id", window.__academy?.id)
-      .then(({ data, error }) => {
+    // Uses fetchAllSwimmers() (fully paginated) rather than a raw query —
+    // an unpaginated fetch here could silently miss a real conflict for
+    // any competing swimmer whose row falls beyond the platform's
+    // default row limit, exactly the double-booking this check exists
+    // to catch.
+    fetchAllSwimmers()
+      .then((all0) => {
         if (cancelled) return;
-        if (error) {
-          setSlotUsage([]);
-          return;
-        }
-        const all = (data || []).map((r) => r.data).filter((s) => s.id !== initial?.id);
+        const all = all0.filter((s) => s.id !== initial?.id);
         // Duration-aware overlap check — Baby sessions are 30 minutes,
         // every other session is 60, so two sessions can genuinely NOT
         // conflict even while one starts partway through the other's
@@ -6831,6 +6829,9 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           return false;
         });
         setSlotUsage(matches);
+      })
+      .catch(() => {
+        if (!cancelled) setSlotUsage([]);
       });
     return () => {
       cancelled = true;
@@ -28173,12 +28174,13 @@ function CoachView({ onExit, preAuthedCoach = null }) {
       // Normal coach accounts see their own roster. A coach with explicit
       // Program/Level access also sees those swimmers for technical follow-up,
       // even when another coach owns the class.
-      const { data, error } = await supabase
-        .from("swimmers")
-        .select("data")
-        .eq("academy_id", window.__academy?.id);
-      if (error) throw error;
-      const all = (data || []).map((r) => r.data);
+      // Uses the same fully-paginated canonical source as every other
+      // "get every swimmer" need in the app (imports, undo, pending
+      // changes review) — a raw, unpaginated Supabase query here was
+      // silently capped at the platform's default row limit, dropping
+      // any swimmer beyond it from a coach's own roster regardless of
+      // how correctly their coachId was actually set.
+      const all = await fetchAllSwimmers();
       // Same month-aware resolver used everywhere else — a swimmer whose
       // current coach lives in monthlySchedules (booked ahead, or
       // reassigned for this specific month) rather than the top-level
