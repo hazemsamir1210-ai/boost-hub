@@ -2262,14 +2262,14 @@ function exportWeekDayByDay(season, level, week) {
 // print time avoids both an unreliable auto-transliteration and a
 // separate "English name" field every swimmer would need filled in.
 // Cancelling the prompt aborts the print entirely.
-async function printCertificateWithNamePrompt({ swimmerName, level, date }) {
+async function printCertificateWithNamePrompt({ swimmerName, level, date, coachName }) {
   const entered = window.prompt("Swimmer's name in English (as it should print on the certificate):", swimmerName || "");
   if (entered === null) return; // cancelled
   if (!entered.trim()) return;
-  await printCertificate({ swimmerName: entered.trim(), level, date });
+  await printCertificate({ swimmerName: entered.trim(), level, date, coachName });
 }
 
-async function printCertificate({ swimmerName, level, date }) {
+async function printCertificate({ swimmerName, level, date, coachName }) {
   const template = await loadCertTemplate();
 
   // Fully custom mode — a background image the admin uploaded, with just
@@ -2289,6 +2289,7 @@ async function printCertificate({ swimmerName, level, date }) {
       : `for accomplishing ${level}`;
     const mascotPos = template.positions?.mascot || { x: 50, y: 34 };
     const mascotSize = template.positions?.mascotSize ?? 13;
+    const coachNamePos = template.positions?.coachName || { x: 16, y: 76 };
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Certificate</title>
 <style>
   * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
@@ -2299,6 +2300,7 @@ async function printCertificate({ swimmerName, level, date }) {
   .name { font-size: 11mm; font-weight: 700; color: ${template.textColor || "#0b1e3a"}; }
   .level { font-size: 7mm; font-weight: 700; color: ${template.textColor || "#0b1e3a"}; white-space: nowrap; }
   .date { font-size: 5mm; color: ${template.textColor || "#0b1e3a"}; }
+  .coach-name { font-size: 4.5mm; font-weight: 600; color: ${template.textColor || "#0b1e3a"}; white-space: nowrap; }
   .sig img { max-width: 40mm; max-height: 16mm; object-fit: contain; }
   .mascot img { width: ${mascotSize}vw; height: auto; object-fit: contain; }
   @media print { .cert { box-shadow: none; } }
@@ -2308,6 +2310,7 @@ async function printCertificate({ swimmerName, level, date }) {
     <div class="name" style="${pos(template.positions?.name || { x: 50, y: 45 })}">${escapeHtml(swimmerName)}</div>
     <div class="level" style="${pos(template.positions?.level || { x: 50, y: 66 })}">${escapeHtml(accomplishmentText)}</div>
     <div class="date" style="${pos(template.positions?.date || { x: 50, y: 60 })}">${escapeHtml(date)}</div>
+    ${coachName ? `<div class="coach-name" style="${pos(coachNamePos)}">${escapeHtml(coachName)}</div>` : ""}
     ${CONFIG.signatureDataUri ? `<div class="sig" style="${pos(template.positions?.signature || { x: 16, y: 81 })}"><img src="${CONFIG.signatureDataUri}" /></div>` : ""}
   </div>
 <script>window.onload = () => setTimeout(() => window.print(), 300);</script>
@@ -10914,7 +10917,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       if (!window.confirm(`Print ${matches.length} certificate${matches.length === 1 ? "" : "s"} for ${level}?`)) return;
       for (const s of matches) {
         const cert = [...s.certificates].reverse().find((c) => c.level === level);
-        await printCertificate({ swimmerName: s.name, level: cert.level, date: cert.date });
+        await printCertificate({ swimmerName: s.name, level: cert.level, date: cert.date, coachName: coaches.find((c) => c.id === s.coachId)?.name });
         await new Promise((r) => setTimeout(r, 600));
       }
       logActivity(accountName, role, "Bulk printed certificates", `${level} — ${matches.length} swimmers`);
@@ -16713,7 +16716,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               <span className="text-slate-400"> · {new Date(cert.date).toLocaleDateString("en-GB")}</span>
                             </div>
                             <button
-                              onClick={() => printCertificateWithNamePrompt({ swimmerName: s.name, level: cert.level, date: cert.date })}
+                              onClick={() => printCertificateWithNamePrompt({ swimmerName: s.name, level: cert.level, date: cert.date, coachName: coaches.find((c) => c.id === s.coachId)?.name })}
                               className="text-sky-900 hover:underline font-medium"
                             >
                               Print
@@ -22015,6 +22018,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       { key: "mascot", label: "Level mascot/logo position" },
                       { key: "level", label: "Level sentence position" },
                       { key: "date", label: "Date position" },
+                      { key: "coachName", label: "Coach name position" },
                       { key: "signature", label: "Signature position" },
                     ].map((f) => (
                       <div key={f.key}>
@@ -27407,7 +27411,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
                   <button
                     onClick={() => {
                       const latest = s.certificates[s.certificates.length - 1];
-                      printCertificateWithNamePrompt({ swimmerName: s.name, level: latest.level, date: latest.date });
+                      printCertificateWithNamePrompt({ swimmerName: s.name, level: latest.level, date: latest.date, coachName: coaches.find((c) => c.id === s.coachId)?.name });
                     }}
                     className="px-3 py-1.5 rounded-full text-xs font-semibold bg-sky-50 text-sky-800 hover:bg-sky-100 whitespace-nowrap"
                     title="Print their latest certificate"
@@ -30674,7 +30678,7 @@ function ParentPortalView({ onRenew, onExit }) {
                     <span className="text-slate-400"> · {new Date(cert.date).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}</span>
                   </div>
                   <button
-                    onClick={() => printCertificateWithNamePrompt({ swimmerName: s.name, level: cert.level, date: cert.date })}
+                    onClick={() => printCertificateWithNamePrompt({ swimmerName: s.name, level: cert.level, date: cert.date, coachName: portalCoaches.find((c) => c.id === s.coachId)?.name })}
                     className="text-sky-900 hover:underline font-medium text-xs shrink-0"
                   >
                     Download
