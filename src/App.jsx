@@ -2257,13 +2257,38 @@ function exportWeekDayByDay(season, level, week) {
    a swimmer is moved up to the next level, for the level they just
    finished. Logo, academy name, swimmer name, level, date, and the
    signature (if one's been uploaded in Settings). Always in English. */
+// Certificates need the swimmer's name in English for printing, but names
+// are stored however the academy entered them (often Arabic) — asking at
+// print time avoids both an unreliable auto-transliteration and a
+// separate "English name" field every swimmer would need filled in.
+// Cancelling the prompt aborts the print entirely.
+async function printCertificateWithNamePrompt({ swimmerName, level, date }) {
+  const entered = window.prompt("Swimmer's name in English (as it should print on the certificate):", swimmerName || "");
+  if (entered === null) return; // cancelled
+  if (!entered.trim()) return;
+  await printCertificate({ swimmerName: entered.trim(), level, date });
+}
+
 async function printCertificate({ swimmerName, level, date }) {
   const template = await loadCertTemplate();
 
   // Fully custom mode — a background image the admin uploaded, with just
-  // the dynamic text overlaid at whatever positions were set for it.
+  // the dynamic text (and optionally a per-level mascot/logo) overlaid
+  // at whatever positions were set for it.
   if (template && template.imageDataUri) {
     const pos = (p, extra = "") => `position:absolute; left:${p.x}%; top:${p.y}%; transform:translate(-50%,-50%); text-align:center; ${extra}`;
+    const levelLogos = await loadLevelLogos();
+    const levelLogo = levelLogos[level];
+    const nextLevel = nextLevelOf(level);
+    // Matches a design where the level info reads as a sentence ("for
+    // accomplishing Level 3 and entering Level 4") rather than a bare
+    // label — falls back to just naming the level for whichever
+    // swimmer is already at the top with no next level to enter.
+    const accomplishmentText = nextLevel
+      ? `for accomplishing ${level} and entering ${nextLevel}`
+      : `for accomplishing ${level}`;
+    const mascotPos = template.positions?.mascot || { x: 50, y: 34 };
+    const mascotSize = template.positions?.mascotSize ?? 13;
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Certificate</title>
 <style>
   * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
@@ -2272,16 +2297,18 @@ async function printCertificate({ swimmerName, level, date }) {
   body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; padding: 0; margin: 0; }
   .cert { width: 297mm; height: 210mm; position: relative; background-image: url('${template.imageDataUri}'); background-size: cover; background-position: center; }
   .name { font-size: 11mm; font-weight: 700; color: ${template.textColor || "#0b1e3a"}; }
-  .level { font-size: 7mm; font-weight: 700; color: ${template.textColor || "#0b1e3a"}; }
+  .level { font-size: 7mm; font-weight: 700; color: ${template.textColor || "#0b1e3a"}; white-space: nowrap; }
   .date { font-size: 5mm; color: ${template.textColor || "#0b1e3a"}; }
   .sig img { max-width: 40mm; max-height: 16mm; object-fit: contain; }
+  .mascot img { width: ${mascotSize}vw; height: auto; object-fit: contain; }
   @media print { .cert { box-shadow: none; } }
 </style></head><body>
   <div class="cert">
+    ${levelLogo ? `<div class="mascot" style="${pos(mascotPos)}"><img src="${levelLogo}" /></div>` : ""}
     <div class="name" style="${pos(template.positions?.name || { x: 50, y: 45 })}">${escapeHtml(swimmerName)}</div>
-    <div class="level" style="${pos(template.positions?.level || { x: 50, y: 58 })}">${escapeHtml(level)}</div>
-    <div class="date" style="${pos(template.positions?.date || { x: 25, y: 85 })}">${escapeHtml(date)}</div>
-    ${CONFIG.signatureDataUri ? `<div class="sig" style="${pos(template.positions?.signature || { x: 75, y: 85 })}"><img src="${CONFIG.signatureDataUri}" /></div>` : ""}
+    <div class="level" style="${pos(template.positions?.level || { x: 50, y: 66 })}">${escapeHtml(accomplishmentText)}</div>
+    <div class="date" style="${pos(template.positions?.date || { x: 50, y: 60 })}">${escapeHtml(date)}</div>
+    ${CONFIG.signatureDataUri ? `<div class="sig" style="${pos(template.positions?.signature || { x: 16, y: 81 })}"><img src="${CONFIG.signatureDataUri}" /></div>` : ""}
   </div>
 <script>window.onload = () => setTimeout(() => window.print(), 300);</script>
 </body></html>`;
@@ -11839,10 +11866,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         imageDataUri: uri,
         textColor: certTemplate?.textColor || "#0b1e3a",
         positions: certTemplate?.positions || {
-          name: { x: 50, y: 45 },
-          level: { x: 50, y: 58 },
-          date: { x: 25, y: 85 },
-          signature: { x: 75, y: 85 },
+          mascot: { x: 50, y: 34 },
+          name: { x: 50, y: 51 },
+          level: { x: 50, y: 66 },
+          date: { x: 50, y: 60 },
+          signature: { x: 16, y: 81 },
         },
       });
     });
@@ -16685,7 +16713,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               <span className="text-slate-400"> · {new Date(cert.date).toLocaleDateString("en-GB")}</span>
                             </div>
                             <button
-                              onClick={() => printCertificate({ swimmerName: s.name, level: cert.level, date: cert.date })}
+                              onClick={() => printCertificateWithNamePrompt({ swimmerName: s.name, level: cert.level, date: cert.date })}
                               className="text-sky-900 hover:underline font-medium"
                             >
                               Print
@@ -21984,7 +22012,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   <div className="grid sm:grid-cols-2 gap-4 mb-4">
                     {[
                       { key: "name", label: "Swimmer name position" },
-                      { key: "level", label: "Level position" },
+                      { key: "mascot", label: "Level mascot/logo position" },
+                      { key: "level", label: "Level sentence position" },
                       { key: "date", label: "Date position" },
                       { key: "signature", label: "Signature position" },
                     ].map((f) => (
@@ -27378,7 +27407,7 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
                   <button
                     onClick={() => {
                       const latest = s.certificates[s.certificates.length - 1];
-                      printCertificate({ swimmerName: s.name, level: latest.level, date: latest.date });
+                      printCertificateWithNamePrompt({ swimmerName: s.name, level: latest.level, date: latest.date });
                     }}
                     className="px-3 py-1.5 rounded-full text-xs font-semibold bg-sky-50 text-sky-800 hover:bg-sky-100 whitespace-nowrap"
                     title="Print their latest certificate"
@@ -30645,7 +30674,7 @@ function ParentPortalView({ onRenew, onExit }) {
                     <span className="text-slate-400"> · {new Date(cert.date).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}</span>
                   </div>
                   <button
-                    onClick={() => printCertificate({ swimmerName: s.name, level: cert.level, date: cert.date })}
+                    onClick={() => printCertificateWithNamePrompt({ swimmerName: s.name, level: cert.level, date: cert.date })}
                     className="text-sky-900 hover:underline font-medium text-xs shrink-0"
                   >
                     Download
