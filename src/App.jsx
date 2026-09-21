@@ -11867,7 +11867,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     compressImage(file, 1400, 0.9).then((uri) => {
       saveTemplate({
         imageDataUri: uri,
-        textColor: certTemplate?.textColor || "#0b1e3a",
+        textColor: certTemplate?.textColor || "#0f799d",
         positions: certTemplate?.positions || {
           mascot: { x: 50, y: 34 },
           name: { x: 50, y: 51 },
@@ -20212,9 +20212,9 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               const isCustomized = customLevelSkills[level] != null;
               return (
                 <div key={level} className="bg-slate-50 rounded-2xl p-4">
-                  <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center justify-between flex-wrap gap-y-2 mb-2">
                     <h4 className="font-semibold text-slate-800">{level}</h4>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center flex-wrap gap-2">
                       {levelLogos[level] && (
                         <>
                           <img src={levelLogos[level]} alt="" className="w-6 h-6 rounded object-contain border border-slate-100" />
@@ -20232,14 +20232,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       />
                       <label
                         htmlFor={`level-logo-${level}`}
-                        className="cursor-pointer text-xs px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200"
+                        className="cursor-pointer text-xs px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200 whitespace-nowrap"
                       >
                         {levelLogos[level] ? "Change logo" : "Add certificate logo"}
                       </label>
                       {isCustomized && (
                         <button
                           onClick={() => resetLevelSkills(level)}
-                          className="text-xs text-slate-400 hover:text-slate-600 underline"
+                          className="text-xs text-slate-400 hover:text-slate-600 underline whitespace-nowrap"
                         >
                           Reset to default
                         </button>
@@ -20247,7 +20247,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       <button
                         onClick={() => printCertificatesForLevel(level)}
                         disabled={bulkCertLevel === level}
-                        className="text-xs px-2.5 py-1 rounded-lg bg-sky-50 text-sky-800 font-medium hover:bg-sky-100 disabled:opacity-60"
+                        className="text-xs px-2.5 py-1 rounded-lg bg-sky-50 text-sky-800 font-medium hover:bg-sky-100 disabled:opacity-60 whitespace-nowrap"
                       >
                         {bulkCertLevel === level ? "Printing..." : "Print all certificates"}
                       </button>
@@ -22054,7 +22054,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     <label className="text-xs text-slate-500">Text color</label>
                     <input
                       type="color"
-                      value={certTemplate.textColor || "#0b1e3a"}
+                      value={certTemplate.textColor || "#0f799d"}
                       onChange={(e) => saveTemplate({ ...certTemplate, textColor: e.target.value })}
                       className="w-9 h-9 rounded-lg border border-slate-200 cursor-pointer"
                     />
