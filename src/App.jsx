@@ -26710,6 +26710,14 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
   const [time, setTime] = useState(
     getTimeOptions(BRANCHES[0].id, dayGroupForToday() || DAY_GROUPS[0].id, levelRestriction || null)[0]
   );
+  // Drill-down: null shows the list of coaches teaching this exact
+  // day/time; picking one shows just their swimmers. Reset whenever the
+  // day, time, or branch changes so switching sessions never leaves a
+  // stale coach selected with nothing behind it.
+  const [selectedTechCoachId, setSelectedTechCoachId] = useState(null);
+  useEffect(() => {
+    setSelectedTechCoachId(null);
+  }, [dayGroup, time, branch]);
   const [noteDraft, setNoteDraft] = useState({}); // swimmerId -> draft text
   const [noteStatus, setNoteStatus] = useState({}); // swimmerId -> "saving" | "saved" | "error"
   const [makeupToday, setMakeupToday] = useState([]); // [{ swimmer, session }] for today, this branch
@@ -27305,8 +27313,30 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
       )}
 
       <div className="space-y-6">
-        {swimmersByCoachGroup.map((group) => (
+        {!selectedTechCoachId ? (
+          swimmersByCoachGroup.map((group) => (
+            <button
+              key={group.coachId}
+              onClick={() => setSelectedTechCoachId(group.coachId)}
+              className="w-full flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-left"
+            >
+              <div className="flex-1">
+                <h3 className="font-bold text-slate-800 text-sm">{group.coachName}</h3>
+                <span className="text-xs text-slate-400">
+                  {group.list.length} swimmer{group.list.length === 1 ? "" : "s"}
+                </span>
+              </div>
+              <ChevronLeft className="w-4 h-4 text-slate-400 rotate-180 shrink-0" />
+            </button>
+          ))
+        ) : (() => {
+          const group = swimmersByCoachGroup.find((g) => g.coachId === selectedTechCoachId);
+          if (!group) return null;
+          return (
           <div key={group.coachId}>
+            <button onClick={() => setSelectedTechCoachId(null)} className="flex items-center gap-1.5 text-sm text-sky-900 font-medium mb-3">
+              <ChevronLeft className="w-4 h-4 rotate-180" /> All coaches
+            </button>
             <div className="flex items-center gap-2 mb-3">
               <h3 className="font-bold text-slate-800 text-sm">{group.coachName}</h3>
               <span className="text-xs text-slate-400">({group.list.length})</span>
@@ -27418,7 +27448,8 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
               })}
             </div>
           </div>
-        ))}
+          );
+        })()}
       </div>
     </div>
   );
