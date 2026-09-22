@@ -4180,7 +4180,23 @@ function computePayroll(account, records, monthKeyStr, payrollSettings, adjustme
 }
 
 
+// Used only as a fallback when LEVELS itself is empty — an academy that
+// went straight to the newer Programs→Levels structure may never have
+// populated the legacy custom-levels list at all, which would otherwise
+// silently break anything relying on a known level order (certificates'
+// "entering the next level" text, the certificate-mascot upload list).
+const FALLBACK_LEVEL_ORDER = ["Level 1", "Level 2", "Level 3", "Level 4", "Level 5", "Level 6", "Level 7", "Level 8"];
+
 function nextLevelOf(level) {
+  // Standard "Level N" naming is checked first and always resolves the
+  // same way, regardless of whatever the admin-configurable LEVELS list
+  // currently holds (including empty, e.g. an academy that cleared it
+  // after fully moving to the newer Programs structure) — certificates
+  // need this to work unconditionally. A genuinely custom level name
+  // still falls through to LEVELS, if the academy has defined its own
+  // order there.
+  const stdIndex = FALLBACK_LEVEL_ORDER.indexOf(level);
+  if (stdIndex !== -1) return stdIndex === FALLBACK_LEVEL_ORDER.length - 1 ? null : FALLBACK_LEVEL_ORDER[stdIndex + 1];
   const i = LEVELS.indexOf(level);
   if (i === -1 || i === LEVELS.length - 1) return null; // unknown level, or already at the top
   return LEVELS[i + 1];
@@ -19958,7 +19974,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               Upload the small image that prints on a swimmer's certificate for each level (e.g. the turtle for Level 1). Kept up here since the full level list below is a long scroll.
             </p>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {LEVELS.map((level) => (
+              {FALLBACK_LEVEL_ORDER.map((level) => (
                 <div key={level} className="bg-white rounded-xl border border-slate-200 p-2.5 flex flex-col items-center gap-1.5">
                   <div className="text-xs font-medium text-slate-700">{level}</div>
                   {levelLogos[level] ? (
