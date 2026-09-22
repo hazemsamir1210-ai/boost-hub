@@ -2291,16 +2291,19 @@ async function printCertificate({ swimmerName, level, date, coachName }) {
     const mascotSize = template.positions?.mascotSize ?? 13;
     const coachNamePos = template.positions?.coachName || { x: 16, y: 76 };
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Certificate</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,500;0,600;0,700;1,500&display=swap" rel="stylesheet">
 <style>
   * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
   @page { size: A4 landscape; margin: 0; }
   html, body { width: 297mm; height: 210mm; }
-  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; padding: 0; margin: 0; }
+  body { font-family: "Poppins", -apple-system, Segoe UI, Roboto, Arial, sans-serif; padding: 0; margin: 0; }
   .cert { width: 297mm; height: 210mm; position: relative; background-image: url('${template.imageDataUri}'); background-size: cover; background-position: center; }
-  .name { font-size: 11mm; font-weight: 700; color: ${template.textColor || "#0b1e3a"}; }
-  .level { font-size: 7mm; font-weight: 700; color: ${template.textColor || "#0b1e3a"}; white-space: nowrap; }
-  .date { font-size: 5mm; color: ${template.textColor || "#0b1e3a"}; }
-  .coach-name { font-size: 4.5mm; font-weight: 600; color: ${template.textColor || "#0b1e3a"}; white-space: nowrap; }
+  .name { font-size: 11mm; font-weight: 600; color: ${template.textColor || "#0f799d"}; }
+  .level { font-size: 6mm; font-weight: 700; color: ${template.textColor || "#0f799d"}; white-space: nowrap; }
+  .date { font-size: 5mm; font-weight: 500; color: ${template.textColor || "#0f799d"}; }
+  .coach-name { font-size: 4.5mm; font-weight: 600; color: ${template.textColor || "#0f799d"}; white-space: nowrap; }
   .sig img { max-width: 40mm; max-height: 16mm; object-fit: contain; }
   .mascot img { width: ${mascotSize}vw; height: auto; object-fit: contain; }
   @media print { .cert { box-shadow: none; } }
@@ -22111,6 +22114,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       onChange={(e) => saveTemplate({ ...certTemplate, textColor: e.target.value })}
                       className="w-9 h-9 rounded-lg border border-slate-200 cursor-pointer"
                     />
+                    <button
+                      onClick={() => saveTemplate({ ...certTemplate, textColor: "#0f799d" })}
+                      className="text-xs px-2.5 py-1.5 rounded-lg bg-sky-50 text-sky-800 font-medium hover:bg-sky-100"
+                    >
+                      Use design's color
+                    </button>
                   </div>
                   {certTemplateSaving && <div className="text-xs text-slate-400 mb-2">Saving...</div>}
                   <div className="flex gap-2">
