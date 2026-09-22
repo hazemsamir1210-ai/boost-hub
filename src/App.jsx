@@ -19952,6 +19952,43 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             These are the skills shown (and starred) on each swimmer's progress card, per level. Add, remove, or reset to the built-in defaults — changes apply everywhere immediately.
           </p>
 
+          <div className="bg-amber-50 rounded-2xl border border-amber-200 p-4 mb-5">
+            <h4 className="font-semibold text-slate-800 text-sm mb-1">Certificate mascot/logo per level</h4>
+            <p className="text-xs text-slate-500 mb-3">
+              Upload the small image that prints on a swimmer's certificate for each level (e.g. the turtle for Level 1). Kept up here since the full level list below is a long scroll.
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {LEVELS.map((level) => (
+                <div key={level} className="bg-white rounded-xl border border-slate-200 p-2.5 flex flex-col items-center gap-1.5">
+                  <div className="text-xs font-medium text-slate-700">{level}</div>
+                  {levelLogos[level] ? (
+                    <img src={levelLogos[level]} alt="" className="w-10 h-10 rounded object-contain" />
+                  ) : (
+                    <div className="w-10 h-10 rounded bg-slate-50 border border-dashed border-slate-200" />
+                  )}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    id={`level-logo-top-${level}`}
+                    className="hidden"
+                    onChange={(e) => uploadLevelLogo(level, e.target.files?.[0])}
+                  />
+                  <label
+                    htmlFor={`level-logo-top-${level}`}
+                    className="cursor-pointer text-xs px-2 py-1 rounded-lg bg-slate-100 text-slate-600 font-medium hover:bg-slate-200 whitespace-nowrap"
+                  >
+                    {levelLogos[level] ? "Change" : "Upload"}
+                  </label>
+                  {levelLogos[level] && (
+                    <button onClick={() => removeLevelLogo(level)} className="text-xs text-red-400 hover:text-red-600">
+                      Remove
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4 mb-5">
             <h4 className="font-semibold text-slate-800 text-sm mb-1">Programs & their levels</h4>
             <p className="text-xs text-slate-400 mb-3">
