@@ -2263,10 +2263,12 @@ function exportWeekDayByDay(season, level, week) {
 // separate "English name" field every swimmer would need filled in.
 // Cancelling the prompt aborts the print entirely.
 async function printCertificateWithNamePrompt({ swimmerName, level, date, coachName }) {
-  const entered = window.prompt("Swimmer's name in English (as it should print on the certificate):", swimmerName || "");
-  if (entered === null) return; // cancelled
-  if (!entered.trim()) return;
-  await printCertificate({ swimmerName: entered.trim(), level, date, coachName });
+  const enteredSwimmer = window.prompt("Swimmer's name in English (as it should print on the certificate):", swimmerName || "");
+  if (enteredSwimmer === null) return; // cancelled
+  if (!enteredSwimmer.trim()) return;
+  const enteredCoach = window.prompt("Coach's name in English (as it should print on the certificate):", coachName || "");
+  if (enteredCoach === null) return; // cancelled
+  await printCertificate({ swimmerName: enteredSwimmer.trim(), level, date, coachName: enteredCoach.trim() || undefined });
 }
 
 async function printCertificate({ swimmerName, level, date, coachName }) {
@@ -2277,16 +2279,22 @@ async function printCertificate({ swimmerName, level, date, coachName }) {
   // at whatever positions were set for it.
   if (template && template.imageDataUri) {
     const pos = (p, extra = "") => `position:absolute; left:${p.x}%; top:${p.y}%; transform:translate(-50%,-50%); text-align:center; ${extra}`;
+    // Migrated swimmers' certificates store level as "ProgramName — Level
+    // N" (see the certificate-awarding code), but the mascot uploads and
+    // the standard level order both use the bare "Level N" form — strip
+    // any program prefix before looking either up, or neither ever
+    // matches for these swimmers.
+    const bareLevel = level.includes(" — ") ? level.split(" — ").pop() : level;
     const levelLogos = await loadLevelLogos();
-    const levelLogo = levelLogos[level];
-    const nextLevel = nextLevelOf(level);
+    const levelLogo = levelLogos[bareLevel];
+    const nextLevel = nextLevelOf(bareLevel);
     // Matches a design where the level info reads as a sentence ("for
     // accomplishing Level 3 and entering Level 4") rather than a bare
     // label — falls back to just naming the level for whichever
     // swimmer is already at the top with no next level to enter.
     const accomplishmentText = nextLevel
-      ? `for accomplishing ${level} and entering ${nextLevel}`
-      : `for accomplishing ${level}`;
+      ? `for accomplishing ${bareLevel} and entering ${nextLevel}`
+      : `for accomplishing ${bareLevel}`;
     const mascotPos = template.positions?.mascot || { x: 50, y: 34 };
     const mascotSize = template.positions?.mascotSize ?? 13;
     const coachNamePos = template.positions?.coachName || { x: 16, y: 76 };
