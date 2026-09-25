@@ -14628,7 +14628,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   // day(s) (day/day2, respecting attendsOnlyWeekday if the swimmer only
   // attends one of their two days in a given month).
   const generateTrainingDatesFromStart = async (swimmer, startDate) => {
-    if (!startDate) return;
+    if (!startDate) { alert("DEBUG: no start date picked"); return; }
     const ms = getMonthlySchedule(swimmer, startDate.slice(0, 7)) || {};
     const day1 = ms.day ?? swimmer.day;
     const day2 = ms.day2 ?? swimmer.day2;
@@ -14645,7 +14645,10 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         if (only2 == null || only2 === i) weekdays.add(i);
       });
     }
-    if (weekdays.size === 0) return;
+    if (weekdays.size === 0) {
+      alert(`DEBUG: no matching weekdays found. day1="${day1}", day2="${day2}", only1=${only1}, only2=${only2}`);
+      return;
+    }
     const [y, m, startDay] = startDate.split("-").map(Number);
     const daysInMonth = new Date(y, m, 0).getDate();
     const generated = [];
@@ -14655,14 +14658,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         generated.push(`${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
       }
     }
-    if (generated.length === 0) return;
+    if (generated.length === 0) {
+      alert(`DEBUG: weekdays matched (${[...weekdays].join(",")}) but 0 dates generated from ${startDate} to end of month`);
+      return;
+    }
     try {
       const updated = await updateSwimmerById(swimmer.id, (s) => ({
         ...s,
         trainingDates: Array.from(new Set([...(s.trainingDates || []), ...generated])).sort(),
       }));
       setSwimmersPage((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+      alert(`DEBUG: success, added ${generated.length} dates: ${generated.join(", ")}`);
     } catch (e) {
+      alert(`DEBUG: error while saving — ${e.message}`);
       loadSwimmersPage({ offset: 0 });
     }
   };
