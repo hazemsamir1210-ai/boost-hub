@@ -4242,6 +4242,13 @@ function nextLevelSuggestionFor(swimmer) {
 function levelUpSwimmer(swimmer) {
   const suggestion = nextLevelSuggestionFor(swimmer);
   if (!suggestion) return swimmer; // already at the top, in whichever structure applies to them
+  // The coach(es) at the moment of leveling up — recorded on the
+  // certificate itself so credit for it stays with whoever actually
+  // coached them there, even if the swimmer moves to a different coach
+  // afterward.
+  const ms = getMonthlySchedule(swimmer, monthKey());
+  const coachId = ms?.coachId ?? swimmer.coachId ?? null;
+  const coachId2 = ms?.coachId2 ?? swimmer.coachId2 ?? null;
   if (suggestion.kind === "program") {
     // Promotes the NEW program level only — the old top-level `level`
     // field (which still drives pricing/capacity/etc. everywhere else
@@ -4258,7 +4265,7 @@ function levelUpSwimmer(swimmer) {
       // (and the existing Print Certificate button already reads from) —
       // labeled with the program name so it reads as what it is, not a
       // plain old-style level.
-      certificates: [...(swimmer.certificates || []), { level: `${programName} — ${completedProgramLevel}`, date: todayISO() }],
+      certificates: [...(swimmer.certificates || []), { level: `${programName} — ${completedProgramLevel}`, date: todayISO(), coachId, coachId2 }],
     };
   }
   const to = suggestion.value;
@@ -4269,7 +4276,7 @@ function levelUpSwimmer(swimmer) {
     levelHistory: [...(swimmer.levelHistory || []), { level: to, date: new Date().toISOString() }],
     // Kept so the parent portal (and anyone else) can look back at and
     // re-print any certificate earned, not just the one just generated.
-    certificates: [...(swimmer.certificates || []), { level: completedLevel, date: todayISO() }],
+    certificates: [...(swimmer.certificates || []), { level: completedLevel, date: todayISO(), coachId, coachId2 }],
   };
 }
 
@@ -5040,8 +5047,6 @@ function computeCoachPerformance(swimmers = [], coachId, feedback = []) {
   let masteredTotal = 0, skillsTotal = 0;
   let makeupCreditsOwed = 0;
   const thisMonthPrefix = monthKey();
-  let levelUpsThisMonth = 0;
-  const levelUpsList = [];
 
   mine.forEach((s) => {
     Object.values(s.attendance || {}).forEach((status) => {
@@ -5054,9 +5059,35 @@ function computeCoachPerformance(swimmers = [], coachId, feedback = []) {
       masteredTotal += levelSkills.filter((sk) => (getSkillRatingsForSwimmer(s)?.[sk] || 0) >= 5).length;
     }
     makeupCreditsOwed += Number(s.makeupCredits || 0);
-    const monthCerts = (s.certificates || []).filter((c) => (c.date || "").startsWith(thisMonthPrefix));
-    levelUpsThisMonth += monthCerts.length;
-    monthCerts.forEach((c) => levelUpsList.push({ name: s.name, level: c.level, date: c.date }));
+  });
+
+  // Level-ups are attributed by whichever coach the certificate itself
+  // names (recorded at the moment the swimmer was leveled up), not by
+  // whoever coaches them now — otherwise a swimmer reassigned afterward
+  // would wrongly credit their new coach. Certificates from before this
+  // field existed have no coachId on them, so those fall back to a
+  // lookup against that swimmer's own monthly-schedule history for the
+  // certificate's actual month (not just today's schedule) — the most
+  // accurate answer available for older records.
+  // Deduplicated per swimmer+level so an accidental duplicate award in
+  // the same month is only counted once.
+  const seenLevelUps = new Set();
+  let levelUpsThisMonth = 0;
+  const levelUpsList = [];
+  swimmers.forEach((s) => {
+    (s.certificates || []).forEach((c) => {
+      if (!(c.date || "").startsWith(thisMonthPrefix)) return;
+      const hasStoredCoach = c.coachId !== undefined;
+      const belongsToThisCoach = hasStoredCoach
+        ? c.coachId === coachId || c.coachId2 === coachId
+        : monthlyScheduleMatchesCoach(getMonthlySchedule(s, (c.date || "").slice(0, 7)), coachId);
+      if (!belongsToThisCoach) return;
+      const dedupeKey = `${s.id}::${c.level}`;
+      if (seenLevelUps.has(dedupeKey)) return;
+      seenLevelUps.add(dedupeKey);
+      levelUpsThisMonth++;
+      levelUpsList.push({ name: s.name, level: c.level, date: c.date });
+    });
   });
 
   const myFeedback = feedback.filter((f) => mineIds.has(String(f.swimmerId)));
