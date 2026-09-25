@@ -14621,6 +14621,50 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
   };
 
+  // Bulk version of addTrainingDate for entering a month's sessions at
+  // once from a paper attendance register, instead of adding each date
+  // by hand: from a chosen start date through the end of that same
+  // month, adds every date that falls on the swimmer's own scheduled
+  // day(s) (day/day2, respecting attendsOnlyWeekday if the swimmer only
+  // attends one of their two days in a given month).
+  const generateTrainingDatesFromStart = async (swimmer, startDate) => {
+    if (!startDate) return;
+    const ms = getMonthlySchedule(swimmer, startDate.slice(0, 7)) || {};
+    const day1 = ms.day ?? swimmer.day;
+    const day2 = ms.day2 ?? swimmer.day2;
+    const only1 = ms.attendsOnlyWeekday ?? swimmer.attendsOnlyWeekday;
+    const only2 = ms.attendsOnlyWeekday2 ?? swimmer.attendsOnlyWeekday2;
+    const weekdays = new Set();
+    if (day1) {
+      const i = WEEKDAY_NAMES.indexOf(day1);
+      if (i !== -1 && (only1 == null || only1 === i)) weekdays.add(i);
+    }
+    if (day2) {
+      const i = WEEKDAY_NAMES.indexOf(day2);
+      if (i !== -1 && (only2 == null || only2 === i)) weekdays.add(i);
+    }
+    if (weekdays.size === 0) return;
+    const [y, m, startDay] = startDate.split("-").map(Number);
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const generated = [];
+    for (let d = startDay; d <= daysInMonth && generated.length < 8; d++) {
+      const dt = new Date(y, m - 1, d);
+      if (weekdays.has(dt.getDay())) {
+        generated.push(`${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
+      }
+    }
+    if (generated.length === 0) return;
+    try {
+      const updated = await updateSwimmerById(swimmer.id, (s) => ({
+        ...s,
+        trainingDates: Array.from(new Set([...(s.trainingDates || []), ...generated])).sort(),
+      }));
+      setSwimmersPage((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+    } catch (e) {
+      loadSwimmersPage({ offset: 0 });
+    }
+  };
+
   const removeTrainingDate = async (swimmer, date) => {
     try {
       const updated = await updateSwimmerById(swimmer.id, (s) => {
@@ -16597,6 +16641,19 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                             className="px-2.5 py-1.5 rounded-lg bg-sky-950 text-white text-xs font-semibold hover:bg-sky-900"
                           >
                             Add
+                          </button>
+                          <button
+                            onClick={() => {
+                              const input = document.getElementById(`training-date-${s.id}`);
+                              if (input && input.value) {
+                                generateTrainingDatesFromStart(s, input.value);
+                                input.value = "";
+                              }
+                            }}
+                            title="Adds every date from here to the end of the month that falls on this swimmer's scheduled day(s)"
+                            className="px-2.5 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-xs font-semibold hover:bg-slate-200 whitespace-nowrap"
+                          >
+                            Fill month
                           </button>
                         </div>
                       )}
