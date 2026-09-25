@@ -14635,13 +14635,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     const only1 = ms.attendsOnlyWeekday ?? swimmer.attendsOnlyWeekday;
     const only2 = ms.attendsOnlyWeekday2 ?? swimmer.attendsOnlyWeekday2;
     const weekdays = new Set();
-    if (day1) {
-      const i = WEEKDAY_NAMES.indexOf(day1);
-      if (i !== -1 && (only1 == null || only1 === i)) weekdays.add(i);
+    if (day1 && DAY_GROUP_WEEKDAYS_LOOKUP[day1]) {
+      DAY_GROUP_WEEKDAYS_LOOKUP[day1].forEach((i) => {
+        if (only1 == null || only1 === i) weekdays.add(i);
+      });
     }
-    if (day2) {
-      const i = WEEKDAY_NAMES.indexOf(day2);
-      if (i !== -1 && (only2 == null || only2 === i)) weekdays.add(i);
+    if (day2 && DAY_GROUP_WEEKDAYS_LOOKUP[day2]) {
+      DAY_GROUP_WEEKDAYS_LOOKUP[day2].forEach((i) => {
+        if (only2 == null || only2 === i) weekdays.add(i);
+      });
     }
     if (weekdays.size === 0) return;
     const [y, m, startDay] = startDate.split("-").map(Number);
