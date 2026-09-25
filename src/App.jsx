@@ -5041,6 +5041,7 @@ function computeCoachPerformance(swimmers = [], coachId, feedback = []) {
   let makeupCreditsOwed = 0;
   const thisMonthPrefix = monthKey();
   let levelUpsThisMonth = 0;
+  const levelUpsList = [];
 
   mine.forEach((s) => {
     Object.values(s.attendance || {}).forEach((status) => {
@@ -5053,7 +5054,9 @@ function computeCoachPerformance(swimmers = [], coachId, feedback = []) {
       masteredTotal += levelSkills.filter((sk) => (getSkillRatingsForSwimmer(s)?.[sk] || 0) >= 5).length;
     }
     makeupCreditsOwed += Number(s.makeupCredits || 0);
-    levelUpsThisMonth += (s.certificates || []).filter((c) => (c.date || "").startsWith(thisMonthPrefix)).length;
+    const monthCerts = (s.certificates || []).filter((c) => (c.date || "").startsWith(thisMonthPrefix));
+    levelUpsThisMonth += monthCerts.length;
+    monthCerts.forEach((c) => levelUpsList.push({ name: s.name, level: c.level, date: c.date }));
   });
 
   const myFeedback = feedback.filter((f) => mineIds.has(String(f.swimmerId)));
@@ -5069,6 +5072,7 @@ function computeCoachPerformance(swimmers = [], coachId, feedback = []) {
     avgRating,
     ratingCount: myFeedback.length,
     levelUpsThisMonth,
+    levelUpsList,
   };
 }
 
@@ -17001,9 +17005,17 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                   {perf.levelUpsThisMonth > 0 && (
                     <>
                       <span className="text-slate-300">·</span>
-                      <span className="text-sky-700 font-medium">
+                      <button
+                        onClick={() =>
+                          alert(
+                            `Level-ups this month for ${c.name}:\n\n` +
+                              perf.levelUpsList.map((lu) => `${lu.name} — ${lu.level}`).join("\n")
+                          )
+                        }
+                        className="text-sky-700 font-medium underline decoration-dotted hover:text-sky-900"
+                      >
                         {perf.levelUpsThisMonth} level-up{perf.levelUpsThisMonth === 1 ? "" : "s"} this month
-                      </span>
+                      </button>
                     </>
                   )}
                   {perf.skillCompletionRate !== null && (
