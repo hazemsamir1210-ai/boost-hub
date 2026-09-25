@@ -2479,16 +2479,19 @@ ${fontImport}
 /* window.storage can occasionally hiccup with a transient error —
    retry once before giving up, and surface one clear message either way */
 async function storageSet(key, value, shared = true) {
+  let lastError = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const res = await window.storage.set(key, value, shared);
       if (res) return res;
     } catch (e) {
+      lastError = e;
       console.warn(`storage.set(${key}) attempt ${attempt + 1} failed`, e);
     }
     if (attempt === 0) await new Promise((r) => setTimeout(r, 400));
   }
-  throw new Error("Couldn't save — check your connection and try again");
+  const sizeKB = Math.round((value?.length || 0) / 1024);
+  throw new Error(`DEBUG SAVE FAIL: key="${key}" size=${sizeKB}KB error="${lastError?.message || lastError || "no error object, just no result"}"`);
 }
 
 // The admin password starts out as whatever CONFIG.adminPassword says
@@ -14617,6 +14620,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       }));
       setSwimmersPage((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
     } catch (e) {
+      alert(`DEBUG: ${e.message}`);
       loadSwimmersPage({ offset: 0 });
     }
   };
