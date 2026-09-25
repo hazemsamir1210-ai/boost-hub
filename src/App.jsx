@@ -2479,19 +2479,16 @@ ${fontImport}
 /* window.storage can occasionally hiccup with a transient error —
    retry once before giving up, and surface one clear message either way */
 async function storageSet(key, value, shared = true) {
-  let lastError = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const res = await window.storage.set(key, value, shared);
       if (res) return res;
     } catch (e) {
-      lastError = e;
       console.warn(`storage.set(${key}) attempt ${attempt + 1} failed`, e);
     }
     if (attempt === 0) await new Promise((r) => setTimeout(r, 400));
   }
-  const sizeKB = Math.round((value?.length || 0) / 1024);
-  throw new Error(`DEBUG SAVE FAIL: key="${key}" size=${sizeKB}KB error="${lastError?.message || lastError || "no error object, just no result"}"`);
+  throw new Error("Couldn't save — check your connection and try again");
 }
 
 // The admin password starts out as whatever CONFIG.adminPassword says
@@ -5042,6 +5039,8 @@ function computeCoachPerformance(swimmers = [], coachId, feedback = []) {
   let present = 0, absent = 0;
   let masteredTotal = 0, skillsTotal = 0;
   let makeupCreditsOwed = 0;
+  const thisMonthPrefix = monthKey();
+  let levelUpsThisMonth = 0;
 
   mine.forEach((s) => {
     Object.values(s.attendance || {}).forEach((status) => {
@@ -5054,6 +5053,7 @@ function computeCoachPerformance(swimmers = [], coachId, feedback = []) {
       masteredTotal += levelSkills.filter((sk) => (getSkillRatingsForSwimmer(s)?.[sk] || 0) >= 5).length;
     }
     makeupCreditsOwed += Number(s.makeupCredits || 0);
+    levelUpsThisMonth += (s.certificates || []).filter((c) => (c.date || "").startsWith(thisMonthPrefix)).length;
   });
 
   const myFeedback = feedback.filter((f) => mineIds.has(String(f.swimmerId)));
@@ -5068,6 +5068,7 @@ function computeCoachPerformance(swimmers = [], coachId, feedback = []) {
     makeupCreditsOwed,
     avgRating,
     ratingCount: myFeedback.length,
+    levelUpsThisMonth,
   };
 }
 
@@ -14612,16 +14613,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   // Calendar-based attendance: add/remove specific training dates, and mark present/absent
   const addTrainingDate = async (swimmer, date) => {
-    if (!date) { alert("DEBUG: date field was empty when Add was clicked"); return; }
+    if (!date) return;
     try {
       const updated = await updateSwimmerById(swimmer.id, (s) => ({
         ...s,
         trainingDates: Array.from(new Set([...(s.trainingDates || []), date])).sort(),
       }));
       setSwimmersPage((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
-      alert(`DEBUG: saved OK — this swimmer now has ${updated.trainingDates.length} training date(s): ${updated.trainingDates.join(", ")}`);
     } catch (e) {
-      alert(`DEBUG: ${e.message}`);
+      alert(e.message);
       loadSwimmersPage({ offset: 0 });
     }
   };
@@ -14631,9 +14631,11 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
   // by hand: from a chosen start date through the end of that same
   // month, adds every date that falls on the swimmer's own scheduled
   // day(s) (day/day2, respecting attendsOnlyWeekday if the swimmer only
-  // attends one of their two days in a given month).
+  // attends one of their two days in a given month). Capped at 8 —
+  // extra sessions beyond that get added one at a time with the
+  // regular Add button.
   const generateTrainingDatesFromStart = async (swimmer, startDate) => {
-    if (!startDate) { alert("DEBUG: no start date picked"); return; }
+    if (!startDate) return;
     const ms = getMonthlySchedule(swimmer, startDate.slice(0, 7)) || {};
     const day1 = ms.day ?? swimmer.day;
     const day2 = ms.day2 ?? swimmer.day2;
@@ -14650,10 +14652,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         if (only2 == null || only2 === i) weekdays.add(i);
       });
     }
-    if (weekdays.size === 0) {
-      alert(`DEBUG: no matching weekdays found. day1="${day1}", day2="${day2}", only1=${only1}, only2=${only2}`);
-      return;
-    }
+    if (weekdays.size === 0) return;
     const [y, m, startDay] = startDate.split("-").map(Number);
     const daysInMonth = new Date(y, m, 0).getDate();
     const generated = [];
@@ -14663,19 +14662,15 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         generated.push(`${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
       }
     }
-    if (generated.length === 0) {
-      alert(`DEBUG: weekdays matched (${[...weekdays].join(",")}) but 0 dates generated from ${startDate} to end of month`);
-      return;
-    }
+    if (generated.length === 0) return;
     try {
       const updated = await updateSwimmerById(swimmer.id, (s) => ({
         ...s,
         trainingDates: Array.from(new Set([...(s.trainingDates || []), ...generated])).sort(),
       }));
       setSwimmersPage((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
-      alert(`DEBUG: success, added ${generated.length} dates: ${generated.join(", ")}`);
     } catch (e) {
-      alert(`DEBUG: error while saving — ${e.message}`);
+      alert(e.message);
       loadSwimmersPage({ offset: 0 });
     }
   };
@@ -17000,6 +16995,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                       <span className="text-slate-300">·</span>
                       <span className={perf.attendanceRate >= 85 ? "text-green-600" : perf.attendanceRate >= 70 ? "text-amber-600" : "text-red-500"}>
                         {perf.attendanceRate}% attendance
+                      </span>
+                    </>
+                  )}
+                  {perf.levelUpsThisMonth > 0 && (
+                    <>
+                      <span className="text-slate-300">·</span>
+                      <span className="text-sky-700 font-medium">
+                        {perf.levelUpsThisMonth} level-up{perf.levelUpsThisMonth === 1 ? "" : "s"} this month
                       </span>
                     </>
                   )}
