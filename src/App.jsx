@@ -16658,6 +16658,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                               if (input && input.value) {
                                 generateTrainingDatesFromStart(s, input.value);
                                 input.value = "";
+                              } else {
+                                alert("Pick a start date in the field first, then tap Fill month.");
                               }
                             }}
                             title="Adds every date from here to the end of the month that falls on this swimmer's scheduled day(s)"
