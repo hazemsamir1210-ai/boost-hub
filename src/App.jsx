@@ -14612,13 +14612,14 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
   // Calendar-based attendance: add/remove specific training dates, and mark present/absent
   const addTrainingDate = async (swimmer, date) => {
-    if (!date) return;
+    if (!date) { alert("DEBUG: date field was empty when Add was clicked"); return; }
     try {
       const updated = await updateSwimmerById(swimmer.id, (s) => ({
         ...s,
         trainingDates: Array.from(new Set([...(s.trainingDates || []), date])).sort(),
       }));
       setSwimmersPage((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+      alert(`DEBUG: saved OK — this swimmer now has ${updated.trainingDates.length} training date(s): ${updated.trainingDates.join(", ")}`);
     } catch (e) {
       alert(`DEBUG: ${e.message}`);
       loadSwimmersPage({ offset: 0 });
