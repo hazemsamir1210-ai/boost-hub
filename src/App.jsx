@@ -4239,7 +4239,7 @@ function nextLevelSuggestionFor(swimmer) {
   return next ? { kind: "level", value: next } : null;
 }
 
-function levelUpSwimmer(swimmer) {
+function levelUpSwimmer(swimmer, isCorrection = false) {
   const suggestion = nextLevelSuggestionFor(swimmer);
   if (!suggestion) return swimmer; // already at the top, in whichever structure applies to them
   // The coach(es) at the moment of leveling up — recorded on the
@@ -4265,7 +4265,7 @@ function levelUpSwimmer(swimmer) {
       // (and the existing Print Certificate button already reads from) —
       // labeled with the program name so it reads as what it is, not a
       // plain old-style level.
-      certificates: [...(swimmer.certificates || []), { level: `${programName} — ${completedProgramLevel}`, date: todayISO(), coachId, coachId2 }],
+      certificates: [...(swimmer.certificates || []), { level: `${programName} — ${completedProgramLevel}`, date: todayISO(), coachId, coachId2, isCorrection }],
     };
   }
   const to = suggestion.value;
@@ -4276,7 +4276,7 @@ function levelUpSwimmer(swimmer) {
     levelHistory: [...(swimmer.levelHistory || []), { level: to, date: new Date().toISOString() }],
     // Kept so the parent portal (and anyone else) can look back at and
     // re-print any certificate earned, not just the one just generated.
-    certificates: [...(swimmer.certificates || []), { level: completedLevel, date: todayISO(), coachId, coachId2 }],
+    certificates: [...(swimmer.certificates || []), { level: completedLevel, date: todayISO(), coachId, coachId2, isCorrection }],
   };
 }
 
@@ -5076,6 +5076,7 @@ function computeCoachPerformance(swimmers = [], coachId, feedback = []) {
   const levelUpsList = [];
   swimmers.forEach((s) => {
     (s.certificates || []).forEach((c) => {
+      if (c.isCorrection) return;
       if (!(c.date || "").startsWith(thisMonthPrefix)) return;
       const hasStoredCoach = c.coachId !== undefined;
       const belongsToThisCoach = hasStoredCoach
@@ -13207,8 +13208,12 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
       const all = await fetchAllSwimmers();
       const mk = makeupDate.slice(0, 7);
       const dt = new Date(`${makeupDate}T12:00:00`);
-      const dayNames = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
-      const day = dayNames[dt.getDay()];
+      const weekday = dt.getDay();
+      // Swimmer schedules store day as a day-GROUP id (e.g. "fri-sat"),
+      // not a single weekday — resolve the chosen date's weekday to
+      // whichever group actually covers it, so this matches what
+      // getScheduleOccupancy/getAvailableMakeupSlots compare against.
+      const day = Object.keys(DAY_GROUP_WEEKDAYS_LOOKUP).find((g) => DAY_GROUP_WEEKDAYS_LOOKUP[g].includes(weekday));
       const available = getAvailableMakeupSlots(all, mk, makeupModal, day, makeupTime);
       if (!available.length) {
         return setMakeupError("No available class at this time. Choose another slot.");
@@ -27244,8 +27249,14 @@ function StaffView({ onExit, preAuthed = false, accountName, levelRestriction = 
     const suggestion = nextLevelSuggestionFor(swimmer);
     if (!suggestion) return; // already at the top, in whichever structure applies to them
     if (!window.confirm(`Move ${swimmer.name} up to ${suggestion.value}? This saves right away.`)) return;
+    // Distinguishes a genuine coaching achievement from a data correction
+    // (fixing a swimmer's level that was wrong in the system) — only the
+    // former should count toward a coach's performance numbers.
+    const isCorrection = !window.confirm(
+      "Is this a genuine level-up the swimmer just earned?\n\nOK = yes, counts toward the coach's performance.\nCancel = this is a data correction, don't count it."
+    );
     try {
-      const updated = await updateSwimmerById(swimmer.id, levelUpSwimmer);
+      const updated = await updateSwimmerById(swimmer.id, (s) => levelUpSwimmer(s, isCorrection));
       setSwimmers((prev) => prev.map((s) => (s.id === swimmer.id ? updated : s)));
     } catch (e) {
       loadSwimmers();
