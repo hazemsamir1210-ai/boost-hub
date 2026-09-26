@@ -18584,11 +18584,22 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
         // New registrations within the period
         const newSwimmers = swimmers.filter((s) => inRange((s.createdAt || "").slice(0, 10), startISO, endISO));
 
-        // KPI — level-ups within the period. levelHistory[0] is the level a
-        // swimmer started at when registered, so only entries after that are
-        // real promotions (not just "joined already at Level 2").
+        // KPI — level-ups within the period. Reads from certificates
+        // (covers both legacy-level and Programs-structure swimmers
+        // uniformly, and already excludes anything flagged as a data
+        // correction rather than a genuine level-up) rather than
+        // levelHistory alone, which only ever covered legacy swimmers.
         const levelUpRows = swimmers
-          .flatMap((s) => (s.levelHistory || []).slice(1).map((h) => ({ swimmer: s, ...h })))
+          .flatMap((s) =>
+            (s.certificates || [])
+              .filter((c) => !c.isCorrection)
+              .map((c) => ({
+                swimmer: s,
+                date: c.date,
+                level: c.level,
+                coachName: coaches.find((co) => co.id === c.coachId)?.name || coaches.find((co) => co.id === s.coachId)?.name || "",
+              }))
+          )
           .filter((h) => inRange((h.date || "").slice(0, 10), startISO, endISO))
           .sort((a, b) => new Date(b.date) - new Date(a.date));
         const levelUpRate = swimmers.length ? Math.round((levelUpRows.length / swimmers.length) * 100) : 0;
@@ -18812,7 +18823,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
           const levelUpTableRows = levelUpRows.length
             ? levelUpRows
-                .map((h) => `<tr><td>${escapeHtml((h.date || "").slice(0, 10))}</td><td>${escapeHtml(h.swimmer.name)}</td><td>${escapeHtml(h.level)}</td></tr>`)
+                .map((h) => `<tr><td>${escapeHtml((h.date || "").slice(0, 10))}</td><td>${escapeHtml(h.swimmer.name)}</td><td>${escapeHtml(h.level)}</td><td>${escapeHtml(h.coachName)}</td></tr>`)
                 .join("")
             : "";
 
@@ -18830,7 +18841,7 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
               <div class="card"><div class="num green">${revenueTarget > 0 ? `${incomeTotal.toLocaleString()} / ${revenueTarget.toLocaleString()}` : "—"}</div><div class="lbl">Revenue vs +20% target${revenueTarget > 0 ? ` (${revenueTargetPct}%)` : " (no prior period)"}</div></div>
               <div class="card"><div class="num">${signupsTarget > 0 ? `${newSwimmers.length} / ${signupsTarget}` : "—"}</div><div class="lbl">Signups vs +20% target${signupsTarget > 0 ? ` (${signupsTargetPct}%)` : " (no prior period)"}</div></div>
             </div>
-            ${levelUpRows.length ? `<table><thead><tr><th>Date</th><th>Swimmer</th><th>New level</th></tr></thead><tbody>${levelUpTableRows}</tbody></table>` : ""}
+            ${levelUpRows.length ? `<table><thead><tr><th>Date</th><th>Swimmer</th><th>New level</th><th>Coach</th></tr></thead><tbody>${levelUpTableRows}</tbody></table>` : ""}
             ${swimmersByProgram.length ? `<h3>Swimmers by program</h3><div class="cards">${swimmersByProgram.map((row) => `<div class="card"><div class="num">${row.count}</div><div class="lbl">${escapeHtml(row.program.name)}</div></div>`).join("")}</div>` : ""}
             <div class="cards">
               <div class="card"><div class="num green">${incomeTotal.toLocaleString()}</div><div class="lbl">Income (EGP)</div></div>
@@ -18884,8 +18895,8 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
 
           if (levelUpRows.length > 0) {
             const levelUpAoa = [
-              ["Date", "Swimmer", "New level"],
-              ...levelUpRows.map((h) => [(h.date || "").slice(0, 10), h.swimmer.name, h.level]),
+              ["Date", "Swimmer", "New level", "Coach"],
+              ...levelUpRows.map((h) => [(h.date || "").slice(0, 10), h.swimmer.name, h.level, h.coachName]),
             ];
             XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(levelUpAoa), "Level-ups");
           }
