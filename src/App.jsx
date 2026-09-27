@@ -588,6 +588,13 @@ function inferPlanId(swimmer) {
 
 function getMonthlySchedule(swimmer, key) {
   const monthly = swimmer?.monthlySchedules?.[key];
+  // An explicit "stopped as of this month" marker (written by the
+  // full-history import when a swimmer's sheet columns for their most
+  // recent month are genuinely blank) — takes precedence over the
+  // ongoing-schedule fallback below, unlike the empty-placeholder case
+  // right after it, which is a DIFFERENT, older situation that's meant
+  // to fall through instead.
+  if (monthly?.notScheduled) return null;
   // An entry that EXISTS but has no actual day/time (e.g. {day: "",
   // time: ""}) isn't a real schedule — it's leftover from a bug in an
   // earlier version of the Reconcile tool that could write an empty
@@ -4602,7 +4609,23 @@ function parseFullHistorySheet(sheet, coaches = [], XLSX) {
       // level recorded for a later month is trusted even if it's LOWER
       // than before (e.g. after a long absence) rather than assuming
       // levels can only go up.
-      if (!payRaw && !lvlRaw && !dayRaw && !timeRaw) return;
+      if (!payRaw && !lvlRaw && !dayRaw && !timeRaw) {
+        // For every month EXCEPT the sheet's own most recent one, a
+        // blank block is treated as "no info for this month" and simply
+        // skipped — the swimmer may have paused and have real data again
+        // in a later block, and getMonthlySchedule's ongoing-schedule
+        // fallback correctly carries their last real schedule forward
+        // through a gap like that.
+        // For the LATEST month specifically, though, blank means
+        // something different: this sheet IS this academy's current,
+        // complete roster for that month, so being blank here means the
+        // swimmer genuinely isn't continuing — recorded as an explicit
+        // stop rather than a skip, so the ongoing-schedule fallback
+        // stops resurrecting their old day/time for this month and
+        // every month after it.
+        if (bi === latestBlockIndex) monthlySchedules[monthKeyStr] = { notScheduled: true, scheduleMonth: monthKeyStr };
+        return;
+      }
 
       const lvlKey = lvlRaw.trim().toLowerCase();
       const level = IMPORT_LEVEL_MAP[lvlKey];
