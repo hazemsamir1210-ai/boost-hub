@@ -14863,6 +14863,18 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
             q = q.or(
               `data->monthlySchedules->${paymentMonthFilter}->>day.neq.,and(data->monthlySchedules->${paymentMonthFilter}->>day.is.null,data->>day.neq.,data->>time.neq.)`
             );
+            // An explicit "stopped as of this month" marker overrides the
+            // fallback clause above — without this, a swimmer recorded as
+            // notScheduled for this month (no day of their own, so the
+            // first clause doesn't match) still passed the second clause
+            // via their old top-level day/time, since that clause only
+            // checks monthlySchedules[month].day IS NULL — true for a
+            // {notScheduled: true} entry too, which has no "day" key at
+            // all — and had no way to know that absence meant "stopped"
+            // rather than "no info, fall back".
+            q = q.or(
+              `data->monthlySchedules->${paymentMonthFilter}->>notScheduled.is.null,data->monthlySchedules->${paymentMonthFilter}->>notScheduled.eq.false`
+            );
           }
           // A branch-restricted account always gets this filter, regardless
           // of whatever the branch dropdown shows — it's a hard boundary,
