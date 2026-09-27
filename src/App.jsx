@@ -14728,6 +14728,36 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
     }
   };
 
+  const removeCertificate = async (swimmer, certIndex) => {
+    const cert = (swimmer.certificates || [])[certIndex];
+    if (!cert) return;
+    const isMostRecent = certIndex === swimmer.certificates.length - 1;
+    const confirmMsg = isMostRecent
+      ? `Remove this level-up (${cert.level})? ${swimmer.name}'s current level will be reverted back to it.`
+      : `Remove this level-up record (${cert.level})? This is an older entry, so it'll only remove the record itself — ${swimmer.name}'s current level won't change.`;
+    if (!window.confirm(confirmMsg)) return;
+    try {
+      const updated = await updateSwimmerById(swimmer.id, (s) => {
+        const certificates = (s.certificates || []).filter((_, i) => i !== certIndex);
+        if (!isMostRecent) return { ...s, certificates };
+        const isProgramCert = cert.level.includes(" — ");
+        if (isProgramCert) {
+          const revertedLevel = cert.level.split(" — ").pop();
+          const programLevelHistory = [...(s.programLevelHistory || [])];
+          if (programLevelHistory[programLevelHistory.length - 1]?.level === s.programLevel) programLevelHistory.pop();
+          return { ...s, certificates, programLevel: revertedLevel, programLevelHistory };
+        }
+        const levelHistory = [...(s.levelHistory || [])];
+        if (levelHistory[levelHistory.length - 1]?.level === s.level) levelHistory.pop();
+        return { ...s, certificates, level: cert.level, levelHistory };
+      });
+      setSwimmersPage((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+    } catch (e) {
+      alert(e.message);
+      loadSwimmersPage({ offset: 0 });
+    }
+  };
+
   const markAttendance = async (swimmer, date, status) => {
     try {
       // Attendance gets marked one swimmer at a time down a whole class
@@ -16845,20 +16875,28 @@ function AdminView({ onExit, role = "admin", preAuthed = false, accountName, bra
                     <div className="mt-4 pt-4 border-t border-slate-100">
                       <div className="text-xs font-semibold text-slate-500 mb-1.5">Certificates</div>
                       <div className="space-y-1.5">
-                        {[...s.certificates].reverse().map((cert, i) => (
-                          <div key={i} className="flex items-center justify-between text-xs bg-slate-50 rounded-lg px-3 py-2">
-                            <div>
-                              <span className="font-medium text-slate-700">{cert.level}</span>
-                              <span className="text-slate-400"> · {new Date(cert.date).toLocaleDateString("en-GB")}</span>
+                        {[...s.certificates].reverse().map((cert, i) => {
+                          const originalIndex = s.certificates.length - 1 - i;
+                          return (
+                            <div key={i} className="flex items-center justify-between text-xs bg-slate-50 rounded-lg px-3 py-2">
+                              <div>
+                                <span className="font-medium text-slate-700">{cert.level}</span>
+                                <span className="text-slate-400"> · {new Date(cert.date).toLocaleDateString("en-GB")}</span>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <button
+                                  onClick={() => printCertificateWithNamePrompt({ swimmerName: s.name, level: cert.level, date: cert.date, coachName: coaches.find((c) => c.id === s.coachId)?.name })}
+                                  className="text-sky-900 hover:underline font-medium"
+                                >
+                                  Print
+                                </button>
+                                <button onClick={() => removeCertificate(s, originalIndex)} className="text-red-400 hover:text-red-600 hover:underline font-medium">
+                                  Delete
+                                </button>
+                              </div>
                             </div>
-                            <button
-                              onClick={() => printCertificateWithNamePrompt({ swimmerName: s.name, level: cert.level, date: cert.date, coachName: coaches.find((c) => c.id === s.coachId)?.name })}
-                              className="text-sky-900 hover:underline font-medium"
-                            >
-                              Print
-                            </button>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   )}
