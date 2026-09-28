@@ -7354,7 +7354,7 @@ function SwimmerForm({ initial, coaches, onSave, onCancel, requireSchedule = fal
           {coachId && (
             <div className={`text-xs mt-1 ${slotMismatch || slotFull ? "text-red-500" : "text-slate-400"}`}>
               {slotMismatch
-                ? `Busy with a ${sessionTypeInfo(slotType).label} session at this time — ${slotUsage.map((s) => s.name).join(", ")}`
+                ? `DEBUG: mySessionType="${sessionType}" existingRaw="${slotUsage[0]?.sessionType}" slotType="${slotType}" — Busy with a ${sessionTypeInfo(slotType).label} session at this time — ${slotUsage.map((s) => s.name).join(", ")}`
                 : slotUsage.length > 0
                 ? `${slotUsage.length}/${capacity} taken in this slot — ${slotUsage.map((s) => s.name).join(", ")}`
                 : "Free at this time"}
